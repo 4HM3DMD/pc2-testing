@@ -409,13 +409,17 @@
 
         this.root.innerHTML = ''
             + '<div class="enm-bpos-head">'
-                // Accent rounded box with ⚡ glyph — see phase-03 mock,
-                // .enm-bpos-head-icon variant for action-needed.
+                // 0.2.0-beta.3.6 — phase-03 mock spec for the BPoS card
+                // icon is ◆ diamond (signifies the BPoS supernode role,
+                // matches the mock's .bpos-icon { font-size: 18px } with
+                // the diamond glyph). Pre-beta.3.6 emitted a lightning
+                // bolt SVG that didn't match. Diamond is rotated square
+                // SVG so it scales clean at all DPRs (text glyph would
+                // depend on a font that may not be loaded yet).
                 + '<div class="enm-bpos-head-icon" aria-hidden="true">'
-                    + '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" '
-                        + 'stroke="currentColor" stroke-width="2" stroke-linecap="round" '
-                        + 'stroke-linejoin="round">'
-                        + '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>'
+                    + '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" '
+                        + 'stroke="currentColor" stroke-width="1.4" stroke-linejoin="round">'
+                        + '<polygon points="12 3 21 12 12 21 3 12"></polygon>'
                     + '</svg>'
                 + '</div>'
                 + '<div class="enm-bpos-head-body">'

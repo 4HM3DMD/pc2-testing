@@ -67,11 +67,26 @@
                     // follower technically, but ENM the product targets the two
                     // governance roles. (See feedback_enm_vocabulary memory entry.)
                     bpos_title: 'BPoS supernode',
-                    bpos_sub:   'Validate blocks, earn ELA',
+                    bpos_sub:   'Run as a producer and sign blocks for the DPoS consensus. Earns block rewards once your wallet is voted in by the community.',
                     bpos_meta:  '~17% APR*',
+                    // 0.2.0-beta.3.6 — phase-06 mock spec is a three-line
+                    // meta list (Requires / Wallet / Auto-installs) per
+                    // role-card. Pre-beta.3.6 only had bpos_meta = "APR";
+                    // these are the missing companions.
+                    bpos_requires_label:  'Requires',
+                    bpos_requires_value:  'producer keystore (signing key)',
+                    bpos_wallet_label:    'Wallet',
+                    bpos_wallet_value:    'paired in the next step',
+                    bpos_install_label:   'Auto-installs',
+                    bpos_install_value:   'ela mainchain + arbiter',
                     council_title:   'Council node',
-                    council_sub:     'CR governance role',
+                    council_sub:     'Run a Cyber Republic Council member’s node for proposal review and voting. Temporarily unavailable while the integration lands.',
                     council_meta:    'Coming soon',
+                    // 0.2.0-beta.3.6 — phase-06 mock compact variant text:
+                    // "Soon" (4 chars) fits the narrow chip on <480px.
+                    council_meta_compact: 'Soon',
+                    council_status_label: 'Status',
+                    council_status_value: 'not yet supported in this build',
                     council_disabled: true,
                     footer:     "* Rewards depend on votes from the community. We'll show you how after setup.\n"
                               + "Council node setup will land in a later release.",

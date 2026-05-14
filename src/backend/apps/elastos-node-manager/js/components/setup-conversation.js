@@ -300,20 +300,40 @@
                   + '<span class="enm-role-card-title">' + escapeHtml(t('friendly.setup.card_a.bpos_title')) + '</span>'
                 + '</div>'
                 + '<p class="enm-role-card-help">' + escapeHtml(t('friendly.setup.card_a.bpos_sub')) + '</p>'
+                // 0.2.0-beta.3.6 — phase-06 mock spec is a three-line
+                // meta list for the BPoS role-card: Requires / Wallet /
+                // Auto-installs. Pre-beta.3.6 rendered a single
+                // "APR ~17% · Stake 5,000 ELA" pair that didn't match
+                // any mock variant and conflated reward economics with
+                // setup requirements.
                 + '<div class="enm-role-card-meta">'
-                  + '<span><b>APR</b> ' + escapeHtml(t('friendly.setup.card_a.bpos_meta')) + '</span>'
-                  + '<span><b>Stake</b> 5,000 ELA in Essentials</span>'
+                  + '<span><b>' + escapeHtml(t('friendly.setup.card_a.bpos_requires_label')) + ':</b> '
+                    + escapeHtml(t('friendly.setup.card_a.bpos_requires_value')) + '</span>'
+                  + '<span><b>' + escapeHtml(t('friendly.setup.card_a.bpos_wallet_label')) + ':</b> '
+                    + escapeHtml(t('friendly.setup.card_a.bpos_wallet_value')) + '</span>'
+                  + '<span><b>' + escapeHtml(t('friendly.setup.card_a.bpos_install_label')) + ':</b> '
+                    + escapeHtml(t('friendly.setup.card_a.bpos_install_value')) + '</span>'
                 + '</div>'
               + '</button>'
               + '<button type="button" class="enm-role-card" data-goal="council" data-disabled="true" disabled aria-disabled="true" role="radio" aria-checked="false">'
-                + '<span class="enm-role-card-badge">' + escapeHtml(t('friendly.setup.card_a.council_meta')) + '</span>'
+                // 0.2.0-beta.3.6 — badge text is "Coming soon" on wide
+                // / narrow and "Soon" on compact (<480px). We emit both
+                // spans and CSS keys the right one off body[data-app-
+                // size="compact"]. Single-source-of-truth in strings.js.
+                + '<span class="enm-role-card-badge">'
+                  + '<span class="enm-role-card-badge-long">'
+                    + escapeHtml(t('friendly.setup.card_a.council_meta')) + '</span>'
+                  + '<span class="enm-role-card-badge-short">'
+                    + escapeHtml(t('friendly.setup.card_a.council_meta_compact')) + '</span>'
+                + '</span>'
                 + '<div class="enm-role-card-head">'
                   + '<span class="enm-role-card-radio" aria-hidden="true"></span>'
                   + '<span class="enm-role-card-title">' + escapeHtml(t('friendly.setup.card_a.council_title')) + '</span>'
                 + '</div>'
                 + '<p class="enm-role-card-help">' + escapeHtml(t('friendly.setup.card_a.council_sub')) + '</p>'
                 + '<div class="enm-role-card-meta">'
-                  + '<span>Council node setup lands in a future release.</span>'
+                  + '<span><b>' + escapeHtml(t('friendly.setup.card_a.council_status_label')) + ':</b> '
+                    + escapeHtml(t('friendly.setup.card_a.council_status_value')) + '</span>'
                 + '</div>'
               + '</button>'
             + '</div>';

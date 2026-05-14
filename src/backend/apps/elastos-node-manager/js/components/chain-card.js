@@ -341,12 +341,30 @@
         this._statsStrip = document.createElement('div');
         this._statsStrip.className = 'enm-stats';
         this._statFields = {};
+        this._statCells = {};
         ['peers', 'version', 'uptime'].forEach(function (k) {
             var cell = document.createElement('div');
             cell.className = 'enm-stat enm-stat-' + k;
             var label = document.createElement('span');
             label.className = 'enm-stat-label';
             label.textContent = t('chain_card.' + k);
+            // 0.2.0-beta.3.6 — phase-03 mock: the Peers stat shows a tiny
+            // "i" hint glyph after its label and a hover-popover
+            // (.enm-peer-pop) listing each connected peer's direction /
+            // address / height / ping. Wire the glyph + an empty
+            // popover container so _applyState can populate it as
+            // peerSummary lands.
+            if (k === 'peers') {
+                cell.classList.add('enm-stat-has-pop');
+                cell.style.position = 'relative';
+                cell.style.cursor = 'help';
+                var info = document.createElement('span');
+                info.className = 'enm-stat-info';
+                info.setAttribute('aria-hidden', 'true');
+                info.textContent = 'i';
+                label.appendChild(document.createTextNode(' '));
+                label.appendChild(info);
+            }
             cell.appendChild(label);
             var value = document.createElement('span');
             value.className = 'enm-stat-value';
@@ -354,7 +372,42 @@
             cell.appendChild(value);
             self._statsStrip.appendChild(cell);
             self._statFields[k] = value;
+            self._statCells[k] = cell;
         });
+        // Peer popover element (phase-03 .peer-pop). Mounted inside the
+        // peers stat-cell so CSS can position it absolutely under the
+        // label. Visibility flipped via [data-visible] on hover/focus.
+        this._peerPop = document.createElement('div');
+        this._peerPop.className = 'enm-peer-pop';
+        this._peerPop.setAttribute('role', 'tooltip');
+        this._peerPop.setAttribute('aria-hidden', 'true');
+        this._peerPop.dataset.visible = 'false';
+        if (this._statCells.peers) {
+            this._statCells.peers.appendChild(this._peerPop);
+            // Hover / focus reveal. Keep on document keyboard nav too.
+            var peerCell = this._statCells.peers;
+            var pop = this._peerPop;
+            peerCell.addEventListener('mouseenter', function () {
+                if (self._peerPopHasData) { pop.dataset.visible = 'true'; pop.setAttribute('aria-hidden', 'false'); }
+            });
+            peerCell.addEventListener('mouseleave', function () {
+                pop.dataset.visible = 'false';
+                pop.setAttribute('aria-hidden', 'true');
+            });
+            peerCell.addEventListener('focusin', function () {
+                if (self._peerPopHasData) { pop.dataset.visible = 'true'; pop.setAttribute('aria-hidden', 'false'); }
+            });
+            peerCell.addEventListener('focusout', function (ev) {
+                // Only hide if focus left the entire cell.
+                if (!peerCell.contains(ev.relatedTarget)) {
+                    pop.dataset.visible = 'false';
+                    pop.setAttribute('aria-hidden', 'true');
+                }
+            });
+            // Make label keyboard-focusable so screen reader users can
+            // surface the popover content via Tab + arrow keys.
+            peerCell.setAttribute('tabindex', '0');
+        }
         this.root.appendChild(this._statsStrip);
 
         // .enm-chain-actions — Configure (when unconfigured) / Start /
@@ -563,7 +616,11 @@
         var versionSuffix = version ? ' · ' + version : '';
         var chipText;
         if (producerState && (coarse === 'healthy' || coarse === 'syncing' || coarse === 'stalled')) {
-            chipText = producerState;
+            // 0.2.0-beta.3.6 — include the version suffix on producer-state
+            // chips too. Pre-beta.3.6 dropped it when producerState was set,
+            // leaving "Active" alone on the chip. Mock keeps the version
+            // for layout consistency: "Active · v0.9.7" / "Rank #42 · v0.9.7".
+            chipText = producerState + versionSuffix;
             this._stateChip.dataset.state = coarse + '-producer-' + String(producerState).toLowerCase();
         } else if (coarse === 'healthy') {
             chipText = chainNameLabel + versionSuffix;
@@ -616,30 +673,14 @@
             ? window.enmFormatNumber
             : function (n) { return (n == null || !isFinite(n)) ? '—' : String(n); };
         this._statFields.peers.textContent   = state && state.peers         != null ? fmtN(state.peers) : '—';
-        // 0.2.0-alpha.7 — peer quality hover (improvement #12). Backend
-        // populates `peerSummary` from getnodestate.neighbors; surface as
-        // a title on the peers cell so a hover shows the breakdown the
-        // operator cares about (latency / version distribution / clock
-        // skew) without taking more space in the resting card.
-        var peersCell = this._statFields.peers && this._statFields.peers.parentNode;
-        if (peersCell) {
-            var ps = state && state.peerSummary;
-            if (ps && (ps.latencyMsAvg != null || (ps.versions && ps.versions.length) || ps.timeOffsetMaxAbsMs != null)) {
-                var lines = [];
-                if (ps.latencyMsAvg != null) lines.push('Avg ping: ' + fmtN(ps.latencyMsAvg) + ' ms');
-                if (ps.versions && ps.versions.length) {
-                    lines.push('Versions: ' + ps.versions.map(function (v) {
-                        return v.version + ' ×' + fmtN(v.count);
-                    }).join(', '));
-                }
-                if (ps.timeOffsetMaxAbsMs != null) {
-                    lines.push('Max clock skew: ±' + fmtN(ps.timeOffsetMaxAbsMs) + ' ms');
-                }
-                peersCell.title = lines.join('\n');
-            } else {
-                peersCell.title = '';
-            }
-        }
+        // 0.2.0-beta.3.6 — peer popover (phase-03 .peer-pop). The pre-
+        // beta.3.6 impl only set a `title` attribute as a flat tooltip.
+        // The mock spec is a hover card with per-peer rows (direction,
+        // address, height, ping). Backend's getnodestate.neighbors gives
+        // us a richer summary in state.peerSummary; we render whatever
+        // shape it provides and degrade gracefully when fields are
+        // missing.
+        this._renderPeerPop(state && state.peerSummary, state && state.peers);
         this._statFields.version.textContent = state && state.binaryVersion ? state.binaryVersion : '—';
         // 0.2.0-alpha.5 — uptime gets a local 1-second tick instead of
         // riding the 5s refresh poll. We anchor _uptimeBaseMs to
@@ -999,6 +1040,123 @@
         if (!this._reconnectPill) return;
         this._reconnectPill.hidden = (sseState === 'open');
     };
+
+    /**
+     * 0.2.0-beta.3.6 — phase-03 peer popover. Populates
+     * `.enm-peer-pop` with whatever peerSummary fields the backend
+     * actually ships. The mock spec describes per-peer rows
+     * (direction / address / height / ping); when the backend only
+     * sends aggregates (latency avg, version distribution, max
+     * clock skew) we degrade to a compact summary block + version
+     * pills. Either way the popover stays informative.
+     *
+     * Renders nothing (and sets _peerPopHasData=false so the hover
+     * handler refuses to show the box) when ps is null/empty.
+     *
+     * @private
+     * @param {object|null} ps  peerSummary off /chains/:id.
+     * @param {number|null} peerCount  state.peers — total connections.
+     */
+    ChainCard.prototype._renderPeerPop = function (ps, peerCount) {
+        if (!this._peerPop) { return; }
+        var fmtN = (typeof window !== 'undefined' && window.enmFormatNumber)
+            ? window.enmFormatNumber
+            : function (n) { return (n == null || !isFinite(n)) ? '—' : String(n); };
+        // Detect whether we have ANY peer data worth showing.
+        var hasNeighbors = ps && Array.isArray(ps.neighbors) && ps.neighbors.length > 0;
+        var hasAggregate = ps && (
+            ps.latencyMsAvg != null
+            || (ps.versions && ps.versions.length)
+            || ps.timeOffsetMaxAbsMs != null
+            || ps.inbound != null
+            || ps.outbound != null
+        );
+        if (!hasNeighbors && !hasAggregate) {
+            this._peerPop.innerHTML = '';
+            this._peerPopHasData = false;
+            this._peerPop.dataset.visible = 'false';
+            this._peerPop.setAttribute('aria-hidden', 'true');
+            return;
+        }
+        this._peerPopHasData = true;
+
+        // Build the head: "PEERS" caption + count chip.
+        var html = ''
+            + '<div class="enm-peer-pop-head">'
+                + '<span class="enm-peer-pop-title">Peers</span>'
+                + '<span class="enm-peer-pop-count">'
+                    + (peerCount != null ? fmtN(peerCount) + ' connected' : '')
+                    + (ps && ps.inbound != null && ps.outbound != null
+                        ? ' · ' + fmtN(ps.inbound) + ' in / ' + fmtN(ps.outbound) + ' out'
+                        : '')
+                + '</span>'
+            + '</div>';
+
+        if (hasNeighbors) {
+            // Per-peer rows — mock's primary case.
+            // neighbor shape: { addr, direction:'in'|'out', height, pingMs }.
+            html += '<div class="enm-peer-pop-rows">';
+            ps.neighbors.slice(0, 20).forEach(function (n) {
+                var dir = (n && n.direction === 'in') ? 'in' : 'out';
+                var glyph = (dir === 'in') ? '↓' : '↑';
+                var addr = (n && n.addr) ? String(n.addr) : '—';
+                var height = (n && n.height != null) ? fmtN(n.height) : '';
+                var ping = (n && n.pingMs != null) ? fmtN(n.pingMs) + 'ms' : '';
+                html += ''
+                    + '<div class="enm-peer-row">'
+                        + '<span class="enm-peer-dir ' + dir + '" aria-hidden="true">' + glyph + '</span>'
+                        + '<span class="enm-peer-addr">' + escapeText(addr) + '</span>'
+                        + '<span class="enm-peer-h">' + escapeText(height) + '</span>'
+                        + '<span class="enm-peer-ping">' + escapeText(ping) + '</span>'
+                    + '</div>';
+            });
+            if (ps.neighbors.length > 20) {
+                html += '<div class="enm-peer-pop-more">+'
+                    + (ps.neighbors.length - 20) + ' more</div>';
+            }
+            html += '</div>';
+        } else {
+            // Aggregate-only fallback. Mock has no example of this
+            // shape, but the spirit is the same: surface what's
+            // actionable to the operator. Latency / version /
+            // skew are exactly what alpha.7 surfaced via title.
+            html += '<div class="enm-peer-pop-rows">';
+            if (ps.latencyMsAvg != null) {
+                html += '<div class="enm-peer-row enm-peer-row-agg">'
+                    + '<span class="enm-peer-agg-label">Avg ping</span>'
+                    + '<span class="enm-peer-agg-value">'
+                    + fmtN(ps.latencyMsAvg) + ' ms</span></div>';
+            }
+            if (ps.versions && ps.versions.length) {
+                ps.versions.forEach(function (v) {
+                    html += '<div class="enm-peer-row enm-peer-row-agg">'
+                        + '<span class="enm-peer-agg-label">'
+                        + escapeText(v.version || '?') + '</span>'
+                        + '<span class="enm-peer-agg-value">× '
+                        + fmtN(v.count != null ? v.count : 0) + '</span></div>';
+                });
+            }
+            if (ps.timeOffsetMaxAbsMs != null) {
+                html += '<div class="enm-peer-row enm-peer-row-agg">'
+                    + '<span class="enm-peer-agg-label">Max clock skew</span>'
+                    + '<span class="enm-peer-agg-value">±'
+                    + fmtN(ps.timeOffsetMaxAbsMs) + ' ms</span></div>';
+            }
+            html += '</div>';
+        }
+
+        this._peerPop.innerHTML = html;
+    };
+
+    // Local HTML escaper for the peer popover. Reuses standard pattern
+    // so the rest of chain-card doesn't need to import it.
+    function escapeText(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
 
     /**
      * @private

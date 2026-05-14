@@ -888,7 +888,16 @@
         var saveBtn = document.createElement('button');
         saveBtn.type = 'button';
         saveBtn.className = 'enm-btn enm-btn-primary';
-        saveBtn.textContent = 'Save';
+        // 0.2.0-beta.3.6 — phase-04 mock spec is section-specific labels
+        // ("Save Network" / "Save Advanced" / "Save General") rather
+        // than a generic "Save" so operators can re-confirm what scope
+        // they're committing to before clicking. Caller passes opts.id
+        // already; capitalise it for display.
+        var saveLabel = 'Save';
+        if (opts.id === 'network')        { saveLabel = 'Save Network'; }
+        else if (opts.id === 'advanced')  { saveLabel = 'Save Advanced'; }
+        else if (opts.id === 'general')   { saveLabel = 'Save General'; }
+        saveBtn.textContent = saveLabel;
         foot.appendChild(saveBtn);
 
         card.appendChild(foot);
