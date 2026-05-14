@@ -426,6 +426,28 @@ body {
 }
 .enm-pane[hidden] { display: none !important; }
 
+/* beta.3.16 — the Logs pane needs to be a column flex container so
+   the log-viewer's `flex: 1` actually fills the pane and its inner
+   log-scroller becomes the only scrollable area. Without this, the
+   WHOLE pane scrolled (toolbar / search input scroll off-screen
+   when the operator scrolls back through history). Mock phase-05
+   uses the same flex shape (`.pane { flex: 1; min-height: 0;
+   display: flex; flex-direction: column; }`). The Audit pane has
+   the same need — its internal scroller wants to scroll within a
+   fixed-height pane, with the filter chips sticky above. */
+#enm-pane-logs,
+#enm-pane-audit {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: var(--sp-5);
+    gap: var(--sp-4);
+}
+#enm-pane-logs > *,
+#enm-pane-audit > * {
+    min-height: 0;
+}
+
 /* 0.2.0-beta.3.2 hotfix — global [hidden] safeguard. The Beta 3 rebuild
    (B3.1 foundation) dropped this rule from alpha.27. Without it,
    `.enm-spinner { display: flex }` / `.enm-error { padding: ... }` /
@@ -807,6 +829,53 @@ body[data-app-size="compact"] .enm-app .enm-main { padding: var(--sp-2); }
     background: var(--success);
     box-shadow: 0 0 8px var(--success), 0 0 16px rgba(52, 211, 153, 0.3);
     animation: enm-hero-pulse 2s infinite ease-in-out;
+}
+
+/* beta.3.16 — "Tap to start" caption shown below the power icon
+   when the chain is stopped or errored. Tells the operator the
+   circle is interactive without making it look like a button
+   (we don't want a hard button rectangle around the hero icon —
+   the whole slot is the affordance). Hidden in alive states;
+   the hero icon visually changes color, which is signal enough. */
+.enm-hero-tap-caption {
+    position: absolute;
+    bottom: 12px;
+    left: 0;
+    right: 0;
+    z-index: 2;
+    text-align: center;
+    font-size: var(--fs-caption);
+    color: var(--text-secondary);
+    font-weight: var(--fw-semibold);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    pointer-events: none;
+}
+/* Lift the icon a bit so caption + icon center together inside the
+   slot rather than the caption overlapping the icon's lower edge. */
+.enm-hero-power[data-state="stopped"] .enm-hero-power-icon,
+.enm-hero-power[data-state="error"]   .enm-hero-power-icon {
+    transform: translateY(-8px);
+}
+/* Visible cursor affordance on tap-able states only. Alive states
+   keep the default cursor because tap pulses the row but doesn't
+   commit a destructive action — operator should reach for the
+   explicit Stop / Restart button instead. */
+.enm-hero-power[data-state="stopped"],
+.enm-hero-power[data-state="error"] { cursor: pointer; }
+/* Hover affordance: tighten the inner ring so the slot reads as
+   "clickable" instead of "decorative". Subtle — matches the alpha-
+   era hover treatment but only on tap-able states. */
+.enm-chain-hero-slot:hover .enm-hero-power[data-state="stopped"]::after,
+.enm-chain-hero-slot:hover .enm-hero-power[data-state="error"]::after,
+.enm-chain-hero-slot:focus-visible .enm-hero-power[data-state="stopped"]::after,
+.enm-chain-hero-slot:focus-visible .enm-hero-power[data-state="error"]::after {
+    border-color: var(--success-soft);
+    box-shadow: 0 0 32px var(--success-bg), inset 0 0 24px var(--success-bg);
+}
+.enm-chain-hero-slot:hover .enm-hero-tap-caption,
+.enm-chain-hero-slot:focus-visible .enm-hero-tap-caption {
+    color: var(--success);
 }
 @keyframes enm-hero-pulse {
     0%, 100% { opacity: 1; transform: scale(1); }
@@ -2205,6 +2274,93 @@ body[data-app-size="compact"] .enm-section-card-foot .enm-btn,
     color: var(--accent);
 }
 .enm-log-meta-matches[hidden] { display: none; }
+
+/* beta.3.16 — severity filter chip bar. Sits between .enm-log-meta
+   and .enm-log-scroller. Operator clicks to toggle a level (info /
+   warn / error / debug). DEBG defaults OFF since ela.log floods
+   that level under normal operation and buries the signal. Each
+   chip carries a running count + per-level color cue. */
+.enm-log-lvl-bar {
+    display: flex;
+    gap: var(--sp-2);
+    align-items: center;
+    flex-wrap: wrap;
+    padding: 2px 0;
+    flex: 0 0 auto;
+}
+.enm-log-lvl-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--r-pill);
+    color: var(--text-tertiary);
+    font-family: inherit;
+    font-size: var(--fs-caption);
+    font-weight: var(--fw-medium);
+    cursor: pointer;
+    min-height: 24px;
+    transition: background 0.1s, border-color 0.1s, color 0.1s;
+}
+.enm-log-lvl-chip:hover {
+    background: var(--bg-overlay);
+    color: var(--text-secondary);
+}
+.enm-log-lvl-chip:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px var(--accent-soft);
+    border-color: var(--accent);
+}
+/* aria-pressed=true = filter ACTIVE = lines of this level shown.
+   Each level uses its own accent so the chip-bar reads as a
+   legend even before the operator interacts. */
+.enm-log-lvl-chip[aria-pressed="true"][data-lvl="error"] {
+    background: var(--error-bg);
+    border-color: rgba(239, 80, 96, 0.35);
+    color: var(--error);
+}
+.enm-log-lvl-chip[aria-pressed="true"][data-lvl="warn"] {
+    background: var(--warning-bg);
+    border-color: rgba(251, 191, 36, 0.35);
+    color: var(--warning);
+}
+.enm-log-lvl-chip[aria-pressed="true"][data-lvl="info"] {
+    background: var(--accent-soft);
+    border-color: rgba(0, 212, 255, 0.3);
+    color: var(--accent);
+}
+.enm-log-lvl-chip[aria-pressed="true"][data-lvl="debug"] {
+    background: rgba(167, 139, 250, 0.10);
+    border-color: rgba(167, 139, 250, 0.30);
+    color: var(--purple);
+}
+.enm-log-lvl-chip-label {
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 10px;
+}
+.enm-log-lvl-chip-count {
+    font-variant-numeric: tabular-nums;
+    font-size: 10px;
+    padding: 1px 5px;
+    border-radius: var(--r-xs);
+    background: rgba(255, 255, 255, 0.06);
+    color: inherit;
+    min-width: 18px;
+    text-align: center;
+}
+.enm-log-lvl-chip[aria-pressed="false"] .enm-log-lvl-chip-count {
+    opacity: 0.6;
+}
+
+/* A log line whose level chip is OFF stays in the DOM (data-line,
+   match state, etc. preserved) but is removed from layout.  Using
+   the HTML `hidden` attribute is enough in evergreen browsers; the
+   rule below is a belt-and-suspenders against the rare cases where
+   author CSS has overridden `[hidden] { display: none }`. */
+.enm-log-line[hidden] { display: none !important; }
 
 .enm-log-scroller {
     flex: 1;

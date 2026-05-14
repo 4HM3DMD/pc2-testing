@@ -272,7 +272,36 @@
         // Head-trim accounting (sticky banner once it un-hides).
         this._droppedCount = 0;
 
+        // beta.3.16 — severity filter chips. Operator feedback was that
+        // ela.log floods the viewer with DEBG noise that buries what
+        // matters (warnings + errors). Default-hides DEBG; INFO/WARN/
+        // ERROR visible. _renderLine tags each <div.enm-log-line> with
+        // `data-lvl` and `hidden` per the current filter; toggling a
+        // chip flips _lvlFilters[lvl] then sweeps. Counts live on each
+        // chip's inline <span class="enm-log-lvl-count">.
+        this._lvlFilters = { error: true, warn: true, info: true, debug: false };
+        this._lvlChips = {};   // populated by _renderShell
+        this._lvlCounts = { error: 0, warn: 0, info: 0, debug: 0 };
+
         this._renderShell();
+    }
+
+    /**
+     * Detect the severity level of a raw log line.
+     * Matches the same vocabulary as LVL_REGEX but returns a single
+     * canonical key ('error' / 'warn' / 'info' / 'debug'). Empty or
+     * unknown lines classify as 'info' (the safe default — we'd
+     * rather show ambiguous content than hide it).
+     */
+    function detectLevel(raw) {
+        if (typeof raw !== 'string') { return 'info'; }
+        // Probe in order of severity — first hit wins. The chain emits
+        // INFO + [STAT] on the same line all the time; if we walked
+        // alphabetically we'd misclassify [WRN] [STAT] lines as info.
+        if (/\b(ERROR|ERR)\b/i.test(raw))         { return 'error'; }
+        if (/\b(WARN|WARNING|WRN)\b/i.test(raw))  { return 'warn'; }
+        if (/\b(DEBG|DEBUG|DBG)\b/i.test(raw))    { return 'debug'; }
+        return 'info';
     }
 
     LogViewer.prototype.mount = function (parent) {
@@ -446,6 +475,40 @@
         meta.appendChild(metaSource);
 
         this.root.appendChild(meta);
+
+        // ---- severity filter chips --------------------------------------
+        // beta.3.16 — operator-driven noise filter. DEBG defaults off; the
+        // other three default on. Each chip is a toggle (aria-pressed) and
+        // carries its own running count. Clicking a chip flips _lvlFilters
+        // and sweeps the DOM. Cheap (~5 ms on 5,000 lines via a single
+        // querySelectorAll + a hidden-attribute flip).
+        var lvlBar = document.createElement('div');
+        lvlBar.className = 'enm-log-lvl-bar';
+        lvlBar.setAttribute('role', 'toolbar');
+        lvlBar.setAttribute('aria-label', 'Filter log lines by severity');
+
+        var lvlOrder = ['error', 'warn', 'info', 'debug'];
+        var lvlLabel = { error: 'Errors', warn: 'Warnings', info: 'Info', debug: 'Debug' };
+        var self2 = this;
+        lvlOrder.forEach(function (lvl) {
+            var chip = document.createElement('button');
+            chip.type = 'button';
+            chip.className = 'enm-log-lvl-chip enm-log-lvl-chip-' + lvl;
+            chip.setAttribute('data-lvl', lvl);
+            chip.setAttribute('aria-pressed', String(!!self2._lvlFilters[lvl]));
+            var label = document.createElement('span');
+            label.className = 'enm-log-lvl-chip-label';
+            label.textContent = lvlLabel[lvl];
+            chip.appendChild(label);
+            var count = document.createElement('span');
+            count.className = 'enm-log-lvl-chip-count';
+            count.textContent = '0';
+            chip.appendChild(count);
+            chip.addEventListener('click', function () { self2._toggleLevel(lvl); });
+            self2._lvlChips[lvl] = chip;
+            lvlBar.appendChild(chip);
+        });
+        this.root.appendChild(lvlBar);
 
         // ---- scroller ----------------------------------------------------
         var scroller = document.createElement('div');
@@ -642,6 +705,51 @@
         this._refreshMeta();
     };
 
+    /**
+     * beta.3.16 — flip a severity-filter chip. Sweeps every existing
+     * `[data-lvl=X]` line and toggles its `hidden` attribute. The
+     * chip's aria-pressed state stays in sync for AT. New lines that
+     * arrive afterward pick up the current state via _renderLine.
+     * @private
+     */
+    LogViewer.prototype._toggleLevel = function (lvl) {
+        if (!Object.prototype.hasOwnProperty.call(this._lvlFilters, lvl)) { return; }
+        this._lvlFilters[lvl] = !this._lvlFilters[lvl];
+        var chip = this._lvlChips[lvl];
+        if (chip) {
+            chip.setAttribute('aria-pressed', String(this._lvlFilters[lvl]));
+        }
+        // Sweep: visible = filter true, hidden = filter false.
+        var on = this._lvlFilters[lvl];
+        var nodes = this._scroller.querySelectorAll('.enm-log-line[data-lvl="' + lvl + '"]');
+        for (var i = 0; i < nodes.length; i += 1) {
+            nodes[i].hidden = !on;
+        }
+        // If we just un-hid a class of lines and were following the
+        // tail, the operator probably wants to keep seeing live tail —
+        // scroll to the new bottom so the un-hidden lines flow into
+        // view. If we hid lines, the visible viewport shrinks; no
+        // scroll needed.
+        if (on && this._followTail) {
+            this._scrollToBottom();
+        }
+    };
+
+    /**
+     * beta.3.16 — push the running count for `lvl` to its chip.
+     * Cheap; called from _renderLine on every new line.
+     * @private
+     */
+    LogViewer.prototype._refreshLvlChipCount = function (lvl) {
+        var chip = this._lvlChips && this._lvlChips[lvl];
+        if (!chip) { return; }
+        var count = chip.querySelector('.enm-log-lvl-chip-count');
+        if (!count) { return; }
+        var n = this._lvlCounts[lvl] || 0;
+        // Compact format for big numbers (DEBG can hit thousands fast).
+        count.textContent = (n >= 1000) ? (Math.floor(n / 100) / 10).toFixed(1) + 'k' : String(n);
+    };
+
     /** @private */
     LogViewer.prototype._refreshMeta = function () {
         if (!this._metaCount) { return; }
@@ -685,13 +793,29 @@
             // in sync. Counted by reading the DOM head nodes' .match
             // class because the search-state is the source of truth.
             var trimmedMatches = 0;
+            // beta.3.16 — also decrement per-level counts so the chips
+            // stay honest after a head-trim. Walk the same node range
+            // once; check both match-class and data-lvl in one pass.
+            var trimmedLvls = { error: 0, warn: 0, info: 0, debug: 0 };
             var lineNodes = this._scroller.querySelectorAll('.enm-log-line');
             var trimEnd = Math.min(excess, lineNodes.length);
             for (var k = 0; k < trimEnd; k += 1) {
                 if (lineNodes[k].classList.contains('match')) {
                     trimmedMatches += 1;
                 }
+                var trimLvl = lineNodes[k].getAttribute('data-lvl') || 'info';
+                if (Object.prototype.hasOwnProperty.call(trimmedLvls, trimLvl)) {
+                    trimmedLvls[trimLvl] += 1;
+                }
             }
+            // Apply the decrements + refresh affected chips.
+            var self3 = this;
+            ['error', 'warn', 'info', 'debug'].forEach(function (lvl) {
+                if (trimmedLvls[lvl] > 0) {
+                    self3._lvlCounts[lvl] = Math.max(0, (self3._lvlCounts[lvl] || 0) - trimmedLvls[lvl]);
+                    self3._refreshLvlChipCount(lvl);
+                }
+            });
             this._lines.splice(0, excess);
 
             if (lineNodes.length > 0 && typeof document.createRange === 'function') {
@@ -741,6 +865,19 @@
         var raw = (entry && entry.line != null) ? String(entry.line) : '';
         raw = raw.replace(ANSI_REGEX, '');
         div.setAttribute('data-line', raw);
+
+        // beta.3.16 — severity classification. data-lvl drives the
+        // chip-filter sweep AND lets future CSS rules (e.g. a
+        // "highlight all errors" mode) target levels directly. The
+        // `hidden` attribute is what actually removes the line from
+        // the visual flow; CSS adds a `display: none` fallback for
+        // browsers that strip the attribute under DOM optimization.
+        var lvl = detectLevel(raw);
+        div.setAttribute('data-lvl', lvl);
+        if (!this._lvlFilters[lvl]) { div.hidden = true; }
+        // Bump the running tally + push to the chip label.
+        this._lvlCounts[lvl] = (this._lvlCounts[lvl] || 0) + 1;
+        this._refreshLvlChipCount(lvl);
 
         var d = safeDate(entry && entry.ts);
         var time = pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());

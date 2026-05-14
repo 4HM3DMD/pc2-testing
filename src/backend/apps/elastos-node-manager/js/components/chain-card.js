@@ -448,8 +448,16 @@
      * 'error' (red, designed but not rendered in the phase-03 mock).
      */
     ChainCard.prototype._renderHeroPower = function (state) {
+        var t = root.enmTOrFallback;
+        // beta.3.16 — rebuild even on same-state if we need to swap
+        // the caption (e.g. state transition keeps power mode but
+        // caption needs to appear/disappear). Cheap guard: still
+        // bail when state AND caption-visibility match.
+        var needCaption = (state === 'stopped' || state === 'error');
+        var hasCaption = !!this._heroSlot.querySelector('.enm-hero-tap-caption');
         if (this._heroMode === 'power' && this._heroSlot.firstChild
-            && this._heroSlot.firstChild.dataset.state === state) {
+            && this._heroSlot.firstChild.dataset.state === state
+            && needCaption === hasCaption) {
             return; // no-op if already in this state — avoid DOM churn
         }
         this._heroSlot.innerHTML = '';
@@ -469,8 +477,36 @@
         use.setAttribute('href', '#enm-power-icon');
         svg.appendChild(use);
         hero.appendChild(svg);
+        // beta.3.16 — visible "Tap to start" caption when the chain is
+        // stopped or errored. Hidden in alive states; redundant in the
+        // unconfigured state (the chip + the Configure CTA already
+        // tell that story).
+        if (needCaption) {
+            var caption = document.createElement('div');
+            caption.className = 'enm-hero-tap-caption';
+            caption.textContent = t('chain_card.tap_to_start_caption', { chainName: this.chainId }) || 'Tap to start';
+            // Caption is decorative — the aria-label on the slot already
+            // says "Start mainchain". aria-hidden prevents double-speak.
+            caption.setAttribute('aria-hidden', 'true');
+            hero.appendChild(caption);
+        }
         this._heroSlot.appendChild(hero);
         this._heroMode = 'power';
+
+        // beta.3.16 — dynamic aria-label per state. Tap-able states
+        // (stopped / error / unconfigured / disabled) announce the
+        // action they trigger; alive states announce status only.
+        var aria;
+        if (state === 'stopped' || state === 'error') {
+            aria = t('chain_card.tap_circle_aria_start', { chainName: this.chainId });
+        } else if (state === 'stopped' && this._lastCoarseState === 'unconfigured') {
+            aria = t('chain_card.tap_circle_aria_configure', { chainName: this.chainId });
+        } else if (state === 'running') {
+            aria = t('chain_card.tap_circle_aria_running', { chainName: this.chainId });
+        } else {
+            aria = t('chain_card.tap_circle_aria', { chainName: this.chainId });
+        }
+        this._heroSlot.setAttribute('aria-label', aria || 'Chain status');
     };
 
     /**
@@ -526,9 +562,25 @@
      */
     ChainCard.prototype._handleCircleTap = function () {
         var coarse = this._lastCoarseState || 'unconfigured';
-        if (coarse === 'unconfigured') {
+        // beta.3.16 — tap-to-start. Previously the tap only configured
+        // (when unconfigured) and pulsed the action row everywhere else,
+        // so tapping a stopped node looked broken. Operator feedback:
+        // tap should START a stopped node, but NEVER stop a running one
+        // (an accidental stop is destructive; we keep stop opt-in via
+        // the explicit Stop button).
+        if (coarse === 'unconfigured' || coarse === 'disabled') {
             return this._handleConfigure();
         }
+        if (coarse === 'stopped' || coarse === 'error') {
+            // Reuse the same path the Start button uses (handles
+            // 401-suppress, 409 host-conflict toasts, btn.disabled
+            // reset). The action row also pulses via _do().
+            this._pulseActionRow();
+            return this._handleStart();
+        }
+        // alive (healthy/syncing/starting/recovering/stalled) — no
+        // tap-to-stop. Just draw the eye to the action row so the
+        // operator can find Stop / Restart if that's what they want.
         return this._pulseActionRow();
     };
 

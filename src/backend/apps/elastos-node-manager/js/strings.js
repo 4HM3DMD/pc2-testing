@@ -309,6 +309,17 @@
             sparkline_aria:              'Block height, last hour',
             sse_reconnecting:            'Reconnecting…',
             tap_circle_aria:             'Status of {chainName}',
+            // beta.3.16 — dynamic aria-label per coarse state. Stopped
+            // / error make the circle a real start-button affordance;
+            // alive states just announce the role (Stop / Restart are
+            // separate, visible buttons).
+            tap_circle_aria_start:       'Start {chainName}',
+            tap_circle_aria_configure:   'Configure {chainName}',
+            tap_circle_aria_running:     '{chainName} status — currently running',
+            // Visible caption that appears below the power icon when
+            // the chain is stopped, telling the operator the circle
+            // is tappable. Hidden in other states.
+            tap_to_start_caption:        'Tap to start',
             // alpha.28.1 batch 45 — dropped bpos_* (5 keys) and sync_*
             // (8 keys). The chain-card never renders a "BPoS details"
             // sub-panel and the sync line uses inline copy with
