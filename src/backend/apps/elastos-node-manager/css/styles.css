@@ -1563,6 +1563,12 @@ body[data-app-size="compact"] .enm-sys-cell:last-child,
     gap: 2px;
 }
 .enm-seg-opt {
+    /* BP-E audit fix — WCAG 2.5.5 (24×24 touch target). Previous padding
+       (6px) only summed to 12px vertical, half the required minimum. The
+       explicit min-height: 24px brings the hit box to spec without
+       breaking the visual scale because the active background fills the
+       padding box, not the content box. */
+    min-height: 24px;
     padding: 6px 14px;
     font-size: var(--fs-caption);
     font-weight: var(--fw-medium);
@@ -1573,6 +1579,8 @@ body[data-app-size="compact"] .enm-sys-cell:last-child,
     background: transparent;
     border: none;
     font-family: inherit;
+    display: inline-flex;
+    align-items: center;
     transition: background var(--motion-fast) var(--ease-out),
                 color      var(--motion-fast) var(--ease-out);
 }
@@ -2816,6 +2824,16 @@ body[data-app-size="compact"] .enm-log-ts,
 .enm-toast-leaving {
     opacity: 0;
     transform: translateX(12px);
+}
+/* BP-E audit fix — respect OS-level prefers-reduced-motion. The other
+   ENM animations (.enm-spinner-dot / .enm-hero-power-live / .enm-state-
+   chip-dot / .enm-chain-reconnect / .enm-chain-actions-pulse) already
+   have this guard; toast slide-out was the lone holdout because it
+   shipped as part of the BP-D rewrite. Keep the opacity drop so the
+   element still exits but skip the translateX kinetic. */
+@media (prefers-reduced-motion: reduce) {
+    .enm-toast { transition: opacity 0.01ms; }
+    .enm-toast-leaving { transform: none; }
 }
 .enm-toast-head {
     display: flex;

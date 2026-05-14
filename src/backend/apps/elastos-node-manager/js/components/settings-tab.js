@@ -76,6 +76,14 @@
 
     SettingsTab.prototype.destroy = function () {
         this._destroyed = true;
+        // BP-E audit fix — tear down the chip-input's internal flash-
+        // invalid timer so a 900ms-late border-reset can't fire on a
+        // detached input after the pane unmounts (e.g. operator clicked
+        // Save then immediately switched tabs).
+        if (this._adv && this._adv.whiteIp
+            && typeof this._adv.whiteIp.destroy === 'function') {
+            try { this._adv.whiteIp.destroy(); } catch (_) { /* idempotent */ }
+        }
         if (this.root.parentNode) { this.root.parentNode.removeChild(this.root); }
     };
 
@@ -1185,6 +1193,13 @@
         newInput.spellcheck = false;
 
         var values = [];
+        // BP-E audit fix — track the flash-invalid border-reset timer on
+        // a closure-local variable so the returned destroy() can clear it.
+        // makeChipInput is a free function, not a method, so it has no
+        // access to a parent `self`; the SettingsTab calls our destroy()
+        // during its own destroy() flow.
+        var flashTimer = null;
+        var destroyed = false;
 
         function isLocked(v) { return lockedValues.indexOf(v) !== -1; }
 
@@ -1226,9 +1241,21 @@
         }
 
         function flashInvalid(reason) {
+            // BP-E audit fix — guard against destroy() racing the 900ms
+            // border-reset timer. The chip-input lives inside the settings
+            // pane; if the operator clicks Save or navigates away while a
+            // flash is in flight, the old timer would mutate the input's
+            // style after it's been detached. Stash the id on a closure-
+            // local so destroy() (added below) can clear it.
+            if (destroyed) { return; }
             var prev = newInput.style.borderColor;
             newInput.style.borderColor = 'var(--error, #ef5060)';
-            setTimeout(function () { newInput.style.borderColor = prev; }, 900);
+            if (flashTimer) { clearTimeout(flashTimer); }
+            flashTimer = setTimeout(function () {
+                flashTimer = null;
+                if (destroyed) { return; }
+                newInput.style.borderColor = prev;
+            }, 900);
             newInput.setAttribute('aria-invalid', 'true');
             var hint = reason
                 || (root.enmTOrFallback
@@ -1301,6 +1328,14 @@
                 }) : [];
                 ensureLockedPresent();
                 render();
+            },
+            // BP-E audit fix — parent SettingsTab.destroy() calls this
+            // during its own teardown so an in-flight flashInvalid timer
+            // can't mutate a detached input's style after the pane is
+            // unmounted.
+            destroy: function () {
+                destroyed = true;
+                if (flashTimer) { clearTimeout(flashTimer); flashTimer = null; }
             },
         };
     }

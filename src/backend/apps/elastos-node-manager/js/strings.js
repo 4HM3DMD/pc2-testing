@@ -621,39 +621,13 @@
             mismatch_detail:  'ENM holds node pubkey {ours} but the chain returned {theirs}. This is rare — open the audit log and contact support.',
         },
 
-        // alpha.28.1 batch 76 — technical-view Maintenance section moved
-        // out of inline English. Round-3 i18n coverage audit (aef9c321)
-        // listed the technical-view maintenance card as one of the four
-        // remaining hardcoded blocks. Strings cover title/sub, the three
-        // action rows (label + help), the disabled-reason strings the
-        // gate() helper renders, the "Run" button label, and the
-        // operator-facing toast titles emitted by _runMaintenance.
-        tech_maintenance: {
-            title:                 'Maintenance',
-            sub:                   'Mirrors the node.sh helpers operators used to run by hand. Each action runs on this server with the keystore + binaries we already manage; nothing leaves this PC2.',
-            run_btn:               'Run',
-            running_btn:           'Running…',
-            compact_label:         'Compact logs',
-            compact_help:          'Gzip + purge ela.log per the rotation policy. Same as the daily cron — exposed for "free space now".',
-            compact_ok_title:      'Logs compacted',
-            compact_fail_title:    'Compaction failed',
-            activate_label:        'Reactivate BPoS supernode',
-            activate_help:         'Sends a <code>producer activate</code> transaction so the chain flips your producer state from Inactive back to Active. Requires a keystore + funded deposit address.',
-            activate_confirm:      "This sends a 'producer activate' transaction on-chain using your keystore. Continue?",
-            activate_ok_title:     'Reactivation submitted — wait a block or two for chain confirmation',
-            activate_fail_title:   'Reactivation rejected',
-            rebootstrap_label:     'Re-bootstrap chain data',
-            rebootstrap_help:      'Wipes the local chain DB and re-downloads the official Elastos snapshot (~10 GB, ~15 min) so a stuck or corrupt sync can recover without reinstalling. The chain must be stopped first. Existing settings + keystore are kept.',
-            rebootstrap_prompt:    'Re-bootstrap wipes the local chain DB and downloads the official snapshot (~10 GB). The chain must already be stopped. Existing keystore + settings are kept.\n\nType BOOTSTRAP to confirm:',
-            rebootstrap_ok_title:  'Bootstrap started — Settings → Logs to watch progress',
-            rebootstrap_fail_title:'Bootstrap failed to start',
-            // Gate-reason strings (displayed inline on the row when the
-            // action is disabled). Each branch in _applyToolsGates.
-            disabled_chain_stopped:    'Chain must be running.',
-            disabled_not_registered:   'Not yet registered as a BPoS producer. See the Identity tab for the registration steps.',
-            disabled_already_active:   'Producer is already Active — nothing to do.',
-            disabled_chain_running:    'Stop the chain first (data dir in use).',
-        },
+        // BP-E — tech_maintenance.* string block retired with technical-
+        // view.js. The Maintenance section (compact logs / reactivate
+        // BPoS / re-bootstrap chain data) is dropped from Beta 3 entirely;
+        // BPoS reactivation now goes through .enm-bpos-card. Re-bootstrap
+        // + compact-logs may return as standalone Settings actions in a
+        // post-beta.3 release. If/when they do, ressurect this block from
+        // git history (was at this location pre-BP-E).
 
         // alpha.28.1 batch 81 — tools-update CARD strings (the resting
         // and update-available states). Modal-internal strings are

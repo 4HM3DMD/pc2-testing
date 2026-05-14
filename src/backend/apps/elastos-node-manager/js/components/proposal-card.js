@@ -102,7 +102,17 @@
         // point because the Confirm button is disabled during the cooldown.
         var firstFocusable = this._checkbox || this._card.querySelector('button, input, [tabindex]');
         if (firstFocusable && typeof firstFocusable.focus === 'function') {
-            setTimeout(function () { firstFocusable.focus(); }, 0);
+            // BP-E audit fix — guard against close() racing the deferred
+            // focus. Without this check, an Esc-during-mount (the modal
+            // pops, the operator dismisses immediately before the
+            // setTimeout(0) fires) would call .focus() on an element that
+            // close() has already detached, throwing in some browsers.
+            var self = this;
+            this._focusTimer = setTimeout(function () {
+                self._focusTimer = null;
+                if (self._closed) { return; }
+                firstFocusable.focus();
+            }, 0);
         }
         return this;
     };
@@ -110,6 +120,9 @@
     ProposalCard.prototype.close = function () {
         if (this._closed) { return; }
         this._closed = true;
+        // BP-E audit fix — clear the deferred-focus setTimeout so a fast
+        // Esc-during-mount doesn't fire .focus() on a detached element.
+        if (this._focusTimer) { clearTimeout(this._focusTimer); this._focusTimer = null; }
         if (this._cooldownTimer) { clearInterval(this._cooldownTimer); this._cooldownTimer = null; }
         if (this._escHandler) {
             document.removeEventListener('keydown', this._escHandler);

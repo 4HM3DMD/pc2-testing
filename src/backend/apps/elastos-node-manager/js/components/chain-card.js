@@ -497,14 +497,24 @@
         // operator click, compounding on multi-chain dashboards where
         // pulses can overlap.
         row.classList.remove('enm-chain-actions-pulse');
+        var self = this;
         if (typeof requestAnimationFrame === 'function') {
+            // BP-E audit fix — guard against destroy() detaching the row
+            // between the schedule and the RAF firing. Without this check,
+            // a fast unmount (e.g. operator switches chains mid-pulse on a
+            // multi-chain dashboard) mutates a detached DOM subtree, which
+            // is wasted work and trips on _destroyed-invariant CI checks.
             requestAnimationFrame(function () {
+                if (self._destroyed) { return; }
                 row.classList.add('enm-chain-actions-pulse');
             });
         } else {
             row.classList.add('enm-chain-actions-pulse');
         }
+        // BP-E audit fix — same _destroyed guard on the 700ms removal so a
+        // late-arriving "remove pulse" doesn't fire on a torn-down card.
         setTimeout(function () {
+            if (self._destroyed) { return; }
             row.classList.remove('enm-chain-actions-pulse');
         }, 700);
     };
