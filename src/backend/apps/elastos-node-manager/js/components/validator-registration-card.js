@@ -61,11 +61,16 @@
     var SHORT_POLL_MS    = 5_000;   // faster cadence while we're showing
                                     // and an imminent state flip is plausible
 
-    // Map producer.state strings into one of the two render branches.
-    // The mock supports two action-ready variants only; steady-state
-    // (Active / Inactive while registered + active) hides the card.
+    // Map producer.state strings into render branches.
+    // 0.2.0-beta.3.4 — phase-03 mock keeps the BPoS card PERSISTENT
+    // for Active producers (with a success header + an Essentials
+    // pointer note), instead of hiding it. STATE_ACTIVE is the new
+    // steady-state render. STATE_HIDE remains for the cases where
+    // the card legitimately shouldn't show (chain not healthy, or
+    // operator isn't a BPoS node at all).
     var STATE_NEEDS_REGISTRATION = 'needs_registration';
     var STATE_NEEDS_ACTIVATION   = 'needs_activation';
+    var STATE_ACTIVE             = 'active';
     var STATE_HIDE               = 'hide';
 
     function BposCard(opts) {
@@ -253,11 +258,13 @@
             return;
         }
 
-        // Already steady-state Active producer → nothing for this card
-        // to do. The Identity sub-tab + tools-gate Reactivate row
-        // handle inactive-rounds + slashing recovery.
+        // 0.2.0-beta.3.4 — Active producer keeps the card visible with
+        // a steady-state success-header render (per phase-03 mock).
+        // Previously the card vanished here; the mock keeps a small
+        // persistent footnote linking to Elastos Essentials for the
+        // rewards/voting flow.
         if (pState && String(pState).toLowerCase() === 'active') {
-            this._hideAndRest();
+            this._show(STATE_ACTIVE, pubkey);
             return;
         }
 
@@ -333,12 +340,64 @@
         // is written so the AT tree sees the relation immediately.
         this.root.setAttribute('aria-labelledby', this._titleId);
 
+        if (state === STATE_ACTIVE) {
+            this._renderActive();
+            return;
+        }
         if (state === STATE_NEEDS_ACTIVATION) {
             this._renderActivation();
             return;
         }
         // Default (and the most common dashboard surface): not-registered.
         this._renderRegistration();
+    };
+
+    /**
+     * 0.2.0-beta.3.4 — STATE_ACTIVE render. Operator's producer is on
+     * chain AND in Active state; the card stays visible with a success
+     * header + a footnote that points operators to Elastos Essentials
+     * for the rewards/voting flow (per phase-03 mock).
+     *
+     * Stats grid (rank / votes / deposit) is intentionally NOT in this
+     * pass — we don't yet expose those fields cleanly from /producer,
+     * and rendering placeholders would be worse than nothing. Future
+     * iteration can flesh it out when the data wiring lands.
+     *
+     * @private
+     */
+    BposCard.prototype._renderActive = function () {
+        var t = root.enmTOrFallback;
+        var titleId = this._titleId;
+        var chipId  = this._chipId;
+
+        this.root.innerHTML = ''
+            + '<div class="enm-bpos-head">'
+                + '<div class="enm-bpos-head-icon success" aria-hidden="true">'
+                    + '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" '
+                        + 'stroke="currentColor" stroke-width="2.4" stroke-linecap="round" '
+                        + 'stroke-linejoin="round">'
+                        + '<polyline points="20 6 9 17 4 12"></polyline>'
+                    + '</svg>'
+                + '</div>'
+                + '<div class="enm-bpos-head-body">'
+                    + '<div class="enm-bpos-head-title" id="' + escapeAttr(titleId) + '">'
+                        + 'BPoS supernode'
+                    + '</div>'
+                    + '<div class="enm-bpos-head-sub">'
+                        + 'On-chain producer record bound to this node’s signing key.'
+                    + '</div>'
+                + '</div>'
+                + '<span class="enm-bpos-head-chip" id="' + escapeAttr(chipId) + '" '
+                    + 'role="status" aria-live="polite">'
+                    + 'Active'
+                + '</span>'
+            + '</div>'
+            + '<div class="enm-bpos-note">'
+                + '<b>Rewards and voting are managed in Elastos Essentials.</b> '
+                + 'ENM tracks on-chain producer status here; claim, stake, '
+                + 'and update operations require a signed transaction from '
+                + 'your wallet.'
+            + '</div>';
     };
 
     /** @private */

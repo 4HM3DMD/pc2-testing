@@ -548,12 +548,34 @@
         // (syncing), .warn (stalled), .error (error), .muted (stopped),
         // default (healthy). The chain-chip-dot pulses; muted variant
         // mutes the pulse.
+        //
+        // 0.2.0-beta.3.4 — phase-03 mock pattern for chip TEXT is
+        // chain-name + state + version. Examples from the mock:
+        //   running fully synced: "Mainchain · v0.9.7"
+        //   syncing:               "Mainchain · syncing · v0.9.7"
+        //   stalled / error / stopped: just the state name (e.g. "Stopped")
+        // We render the producer state on top of that when applicable
+        // (the chain has both a system state AND a producer state).
         var producerState = state && state.producerState;
+        var chainNameLabel = (this.chainId === 'mainchain')
+            ? 'Mainchain' : String(this.chainId || 'Chain');
+        var version = (state && state.binaryVersion) ? state.binaryVersion : '';
+        var versionSuffix = version ? ' · ' + version : '';
         var chipText;
         if (producerState && (coarse === 'healthy' || coarse === 'syncing' || coarse === 'stalled')) {
             chipText = producerState;
             this._stateChip.dataset.state = coarse + '-producer-' + String(producerState).toLowerCase();
+        } else if (coarse === 'healthy') {
+            chipText = chainNameLabel + versionSuffix;
+            this._stateChip.dataset.state = coarse;
+        } else if (coarse === 'syncing' || coarse === 'recovering' || coarse === 'starting') {
+            chipText = chainNameLabel + ' · ' + t('chain_state.' + coarse).toLowerCase() + versionSuffix;
+            this._stateChip.dataset.state = coarse;
         } else {
+            // stopped / error / stalled / unconfigured / disabled — just
+            // the coarse-state name; the chain context is conveyed by the
+            // dashboard itself (operator already knows it's the mainchain
+            // pane).
             chipText = t('chain_state.' + coarse);
             this._stateChip.dataset.state = coarse;
         }

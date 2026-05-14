@@ -306,6 +306,13 @@
 
     /** @private — Manual IP row is gated on seg state. */
     SettingsTab.prototype._onNetworkModeChange = function (mode) {
+        // 0.2.0-beta.3.4 hotfix — belt-and-suspenders guard. makeSeg's
+        // initial paint no longer fires onChange (post-beta.3.4), but
+        // if a future refactor reintroduces the racy pattern this
+        // guard surfaces it as a no-op rather than letting the
+        // SettingsTab constructor throw mid-build and leave a blank
+        // pane.
+        if (!this._network || !this._network.manualRow) { return; }
         var disabled = (mode !== 'manual');
         this._network.manualRow.setAttribute('data-disabled', disabled ? 'true' : 'false');
     };
@@ -942,7 +949,16 @@
             optEls[o.value] = btn;
         });
 
-        function setValue(v) {
+        // 0.2.0-beta.3.4 hotfix — split paint() (visual only) from
+        // setValue() (paint + fire onChange). The initial-state setup
+        // must NOT fire onChange because the caller's onChange handler
+        // may reference DOM nodes (e.g. _network.manualRow) that aren't
+        // built yet during the segmented control's own construction.
+        // Pre-fix: SettingsTab constructor threw inside _onNetworkMode
+        // Change('auto') trying to setAttribute on an undefined
+        // manualRow, killing the whole tab render. Pattern now matches
+        // makeToggle / makeSelectWrap which also paint without firing.
+        function paint(v) {
             if (!optEls[v]) { return; }
             current = v;
             Object.keys(optEls).forEach(function (k) {
@@ -950,9 +966,13 @@
                 optEls[k].classList.toggle('active', active);
                 optEls[k].setAttribute('aria-checked', active ? 'true' : 'false');
             });
-            if (typeof opts.onChange === 'function') { opts.onChange(v); }
         }
-        setValue(current);
+        function setValue(v) {
+            if (!optEls[v]) { return; }
+            paint(v);
+            if (typeof opts.onChange === 'function') { opts.onChange(current); }
+        }
+        paint(current);
 
         return {
             el: el,

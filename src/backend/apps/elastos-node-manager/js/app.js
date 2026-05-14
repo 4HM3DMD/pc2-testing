@@ -882,15 +882,20 @@
         };
 
         this._dashboardMounts = [];
-        if (root.EnmSystemStatus) {
-            var sys = new root.EnmSystemStatus(common);
-            sys.mount(pane);
-            this._dashboardMounts.push(sys);
-        }
+        // 0.2.0-beta.3.4 — phase-03 mock puts the chain-card hero at
+        // the TOP of the dashboard pane (it's the primary affordance —
+        // the operator looks at the power button / sync ring first),
+        // with the system-status strip BELOW. The BP-E rewrite had
+        // these reversed.
         if (root.EnmChainCard) {
             var card = new root.EnmChainCard(common);
             card.mount(pane);
             this._dashboardMounts.push(card);
+        }
+        if (root.EnmSystemStatus) {
+            var sys = new root.EnmSystemStatus(common);
+            sys.mount(pane);
+            this._dashboardMounts.push(sys);
         }
         // BPoS card — hides itself when the operator is fully active
         // on chain (STATE_HIDE in validator-registration-card.js). The

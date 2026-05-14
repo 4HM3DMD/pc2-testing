@@ -52,22 +52,40 @@
     // log writers emit lowercase. The capture group preserves the
     // exact spelling for display so an "ERR" stays "ERR" and an
     // "ERROR" stays "ERROR".
-    var LVL_REGEX = /\b(INFO|DEBG|DEBUG|WARN|WARNING|ERROR|ERR)\b/gi;
+    // 0.2.0-beta.3.4 — ela emits 3-letter codes [INF]/[WRN]/[ERR]/[DBG]/[STAT]
+    // post-ANSI-strip (see ANSI_REGEX below). The old regex only handled
+    // the long forms (INFO/WARN/ERROR/DEBUG) so the operator's WRN lines
+    // never got coloured. Add the 3-letter forms.
+    var LVL_REGEX = /\b(INFO|INF|DEBG|DEBUG|DBG|WARN|WARNING|WRN|ERROR|ERR|STAT)\b/gi;
     var LVL_CLASS = {
         INFO: 'lvl-info',
+        INF:  'lvl-info',
+        STAT: 'lvl-info',
         DEBG: 'lvl-debug',
         DEBUG: 'lvl-debug',
+        DBG:  'lvl-debug',
         WARN: 'lvl-warn',
         WARNING: 'lvl-warn',
+        WRN:  'lvl-warn',
         ERROR: 'lvl-error',
-        ERR: 'lvl-error',
+        ERR:  'lvl-error',
     };
 
     var STREAM_LABEL = {
         stdout: 'OUT',
         stderr: 'ERR',
-        file:   'FILE',
+        // 0.2.0-beta.3.4 — was 'FILE' (4 chars), overflowed the 16px
+        // grid cell. Phase-05 mock spec uses 3-char labels: out / err /
+        // fil. CSS text-transform: uppercase visualizes as FIL.
+        file:   'FIL',
     };
+
+    // 0.2.0-beta.3.4 — ela writes its log file with ANSI colour escape
+    // codes (e.g. `\x1b[1;33m[WRN]\x1b[m`). The browser drops the ESC
+    // chars but renders the rest as visible noise (`[1;33m[WRN][m`).
+    // Strip the whole CSI sequence before escapeHtml so the lvl regex
+    // can match the bare `[WRN]` and the operator sees clean text.
+    var ANSI_REGEX = /\x1b\[[0-9;]*[A-Za-z]/g;
 
     // batch 71 carry-over — guards against malformed truthy `ts`
     // values (Invalid Date → NaN:NaN:NaN in the timestamp before this
@@ -716,8 +734,12 @@
         var stream = (entry && entry.stream) || 'log';
         div.setAttribute('data-stream', stream);
         // Stash the raw line text in a data-attr so _applySearch can
-        // re-decorate without needing the entry object again.
+        // re-decorate without needing the entry object again. ANSI
+        // colour sequences from ela.log are stripped first so the
+        // operator sees clean text + the lvl regex below can match
+        // bare keywords like [WRN] instead of [1;33m[WRN][m.
         var raw = (entry && entry.line != null) ? String(entry.line) : '';
+        raw = raw.replace(ANSI_REGEX, '');
         div.setAttribute('data-line', raw);
 
         var d = safeDate(entry && entry.ts);
