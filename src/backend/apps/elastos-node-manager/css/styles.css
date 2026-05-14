@@ -357,20 +357,20 @@ body[data-active-tab="identity"]::before {
    setting documentElement.dataset.fleetHealth. The token values flip;
    the gradient transition crossfades. */
 :root[data-fleet-health="healthy"] {
-    --wash-a: rgba(52, 199, 89, 0.10);
-    --wash-b: rgba(52, 199, 89, 0.00);
+    --wash-a: rgba(89, 196, 137, 0.10);
+    --wash-b: rgba(89, 196, 137, 0.00);
 }
 :root[data-fleet-health="syncing"] {
-    --wash-a: rgba(52, 199, 89, 0.05);
-    --wash-b: rgba(0, 122, 255, 0.06);
+    --wash-a: rgba(89, 196, 137, 0.05);
+    --wash-b: rgba(0, 212, 255, 0.06);
 }
 :root[data-fleet-health="warning"] {
-    --wash-a: rgba(255, 159, 10, 0.07);
-    --wash-b: rgba(255, 159, 10, 0.00);
+    --wash-a: rgba(245, 166, 35, 0.07);
+    --wash-b: rgba(245, 166, 35, 0.00);
 }
 :root[data-fleet-health="error"] {
-    --wash-a: rgba(255, 69, 58, 0.08);
-    --wash-b: rgba(255, 69, 58, 0.00);
+    --wash-a: rgba(239, 80, 96, 0.08);
+    --wash-b: rgba(239, 80, 96, 0.00);
 }
 :root[data-fleet-health="idle"] {
     --wash-a: rgba(60, 60, 67, 0.04);
@@ -826,15 +826,15 @@ body[data-active-tab="identity"]::before {
 
 .enm-sys-cell[data-health="ok"]::before {
     background: var(--state-healthy);
-    box-shadow: 0 0 0 4px rgba(52, 199, 89, 0.18);
+    box-shadow: 0 0 0 4px rgba(89, 196, 137, 0.18);
 }
 .enm-sys-cell[data-health="warning"]::before {
     background: var(--state-stalled);
-    box-shadow: 0 0 0 4px rgba(255, 159, 10, 0.18);
+    box-shadow: 0 0 0 4px rgba(245, 166, 35, 0.18);
 }
 .enm-sys-cell[data-health="critical"]::before {
     background: var(--state-error);
-    box-shadow: 0 0 0 4px rgba(255, 69, 58, 0.18);
+    box-shadow: 0 0 0 4px rgba(239, 80, 96, 0.18);
 }
 .enm-sys-cell[data-health="unknown"]::before {
     background: var(--text-muted);
@@ -1306,7 +1306,7 @@ body[data-active-tab="identity"]::before {
 }
 
 .enm-chain-rotation[data-state="onduty"] {
-    background: rgba(52, 199, 89, 0.12);
+    background: rgba(89, 196, 137, 0.12);
     color: var(--state-healthy);
 }
 
@@ -1327,7 +1327,7 @@ body[data-active-tab="identity"]::before {
 }
 
 .enm-chain-rotation[data-state="inslate"] {
-    background: rgba(0, 122, 255, 0.10);
+    background: rgba(0, 212, 255, 0.10);
     color: var(--state-syncing);
 }
 
@@ -1467,7 +1467,7 @@ body[data-active-tab="identity"]::before {
 
 .enm-pc-percent {
     font-size: var(--ring-percent-size);
-    font-weight: 600;
+    font-weight: var(--fw-semibold);
     letter-spacing: -0.02em;
     font-variant-numeric: tabular-nums;
     color: var(--state-syncing);
@@ -1552,12 +1552,16 @@ body[data-active-tab="identity"]::before {
 }
 
 @keyframes enm-pc-breathe {
+    /* Phase 8b — rgb migrated from legacy iOS-green (52,199,89) to v2
+       --success rgb (89,196,137) so the breath ping ring matches the
+       v2 success stroke colour exactly. Visual change is subtle; the
+       hue shift was previously off-by-a-shade against the v2 ring. */
     0%, 100% {
-        box-shadow: 0 0 0 0 rgba(52, 199, 89, 0.22);
+        box-shadow: 0 0 0 0 rgba(89, 196, 137, 0.22);
         transform: scale(1);
     }
     50% {
-        box-shadow: 0 0 0 18px rgba(52, 199, 89, 0);
+        box-shadow: 0 0 0 18px rgba(89, 196, 137, 0);
         transform: scale(1.012);
     }
 }
@@ -5417,7 +5421,7 @@ body[data-app-size="narrow"] .enm-settings-nav-item[data-accent="danger"] {
     color: var(--error);
 }
 body[data-app-size="narrow"] .enm-settings-nav-item[data-accent="danger"].active {
-    background: rgba(255, 69, 58, 0.12);
+    background: rgba(239, 80, 96, 0.12);
     border-color: var(--error);
     color: var(--error);
 }
