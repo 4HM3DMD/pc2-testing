@@ -1150,31 +1150,35 @@ body[data-active-tab="identity"]::before {
    floats below the buttons. The card itself is the visual container.
    Value first, small lowercase label below — same rhythm as
    system-status. */
+/* alpha.29 v2 brand reset · Phase 3c — stats row.
+   Reference: enm-design-mocks/v2/phase-03-status.html .stats / .stat.
+   The previous alpha.18 strip was 3 centered cells with value-on-top
+   "system-status rhythm". v2 reshapes it as a left-aligned 3-col grid
+   separated from the chain primary by a hairline border-top, with
+   label-on-top + 20px tabular-nums value below per stat. */
 .enm-chain-stats-strip {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: var(--spacing-md);
+    gap: var(--sp-3);
     width: 100%;
-    padding-top: var(--spacing-md);
-    margin-top: 0;
+    margin-top: var(--sp-5);
+    padding-top: var(--sp-5);
+    border-top: 1px solid var(--border-subtle);
 }
 
 .enm-chain-stats-cell {
     display: flex;
     flex-direction: column;
-    align-items: center;
-    text-align: center;
+    align-items: flex-start;       /* v2: left-aligned, not centered */
+    text-align: left;
     gap: 2px;
     min-width: 0;
 }
 
 .enm-chain-stats-value {
-    /* alpha.18 — 17 → 16px with a medium weight bump. The slight weight
-       contrast against the label below carries the hierarchy more
-       efficiently than raw size. Matches the spirit of the system-
-       status refresh (smaller, denser, more readable). */
-    font-size: 16px;
-    font-weight: var(--font-weight-medium);
+    order: 2;                       /* CSS flip: JS appends value first; v2 shows label first */
+    font-size: 20px;
+    font-weight: var(--fw-semibold);
     letter-spacing: -0.01em;
     color: var(--text-primary);
     font-variant-numeric: tabular-nums;
@@ -1186,23 +1190,24 @@ body[data-active-tab="identity"]::before {
 }
 
 .enm-chain-stats-label {
-    font-size: 11px;
-    font-weight: var(--font-weight-medium);
-    color: var(--text-secondary);
-    text-transform: lowercase;
-    letter-spacing: 0;
+    order: 1;
+    font-size: var(--fs-caption);
+    font-weight: var(--fw-medium);
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
 }
 
 @container (max-width: 320px) {
     .enm-chain-stats-strip {
-        grid-template-columns: 1fr;
-        gap: var(--spacing-sm);
+        grid-template-columns: 1fr;       /* v2-narrow: stack vertically */
+        gap: var(--sp-2);
     }
     .enm-chain-actions {
         flex-wrap: wrap;
     }
     .enm-chain-actions .enm-btn {
-        flex: 1 1 calc(50% - var(--spacing-sm));
+        flex: 1 1 calc(50% - var(--sp-2));
     }
 }
 
