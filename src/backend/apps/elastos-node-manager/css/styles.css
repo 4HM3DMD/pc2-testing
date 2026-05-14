@@ -430,7 +430,7 @@ body[data-active-tab="identity"]::before {
 :focus-visible {
     outline: none;
     box-shadow: var(--focus-ring);
-    border-radius: var(--radius-sm);
+    border-radius: var(--r-sm);
 }
 
 /* ============================================================
@@ -650,7 +650,7 @@ body[data-active-tab="identity"]::before {
     height: 100%;
     overflow: auto;
     overscroll-behavior: contain;
-    padding: var(--spacing-lg);
+    padding: var(--sp-4);
 }
 
 .enm-pane[hidden] {
@@ -658,9 +658,9 @@ body[data-active-tab="identity"]::before {
 }
 
 .enm-stub {
-    color: var(--text-muted);
+    color: var(--text-tertiary);
     font-size: 14px;
-    padding: var(--spacing-2xl) var(--spacing-lg);
+    padding: var(--sp-6) var(--sp-4);
     text-align: center;
 }
 
@@ -675,7 +675,7 @@ body[data-active-tab="identity"]::before {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: var(--spacing-md);
+    gap: var(--sp-3);
     background: var(--bg-page);
     z-index: 10;
 }
@@ -707,20 +707,20 @@ body[data-active-tab="identity"]::before {
 }
 
 .enm-error {
-    margin: var(--spacing-xl) auto;
+    margin: var(--sp-5) auto;
     max-width: 520px;
-    padding: var(--spacing-lg);
+    padding: var(--sp-4);
     background: var(--bg-surface);
-    border: 1px solid var(--border-color);
+    border: 1px solid var(--border-subtle);
     border-left: 4px solid var(--error);
-    border-radius: var(--radius-md);
+    border-radius: var(--r-md);
     color: var(--text-primary);
     box-shadow: var(--shadow-sm);
 }
 
 .enm-error-title {
     font-weight: 600;
-    margin-bottom: var(--spacing-sm);
+    margin-bottom: var(--sp-2);
     color: var(--error);
     font-size: 15px;
     letter-spacing: -0.01em;
@@ -739,8 +739,8 @@ body[data-active-tab="identity"]::before {
 .enm-error-actions {
     display: flex;
     flex-wrap: wrap;
-    gap: var(--spacing-sm);
-    margin-top: var(--spacing-md);
+    gap: var(--sp-2);
+    margin-top: var(--sp-3);
 }
 
 /* ============================================================
@@ -754,15 +754,15 @@ body[data-active-tab="identity"]::before {
 .enm-settings,
 .enm-audit {
     background: var(--bg-surface);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-lg);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-lg);
     /* alpha.8 — Apple-grade resting cards rely on border + bg contrast,
        not shadow. Hover/focus add a subtle lift on interactive cards
        (chain-card etc.) — see their own rules. .enm-error keeps its
        shadow because it's an alert, not a resting surface. */
 }
 
-.enm-card { padding: var(--spacing-lg); }
+.enm-card { padding: var(--sp-4); }
 
 /* ============================================================
    System status — top strip
@@ -779,8 +779,8 @@ body[data-active-tab="identity"]::before {
     align-items: stretch;
     gap: 0;
     padding: 14px 22px;
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-lg);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-lg);
     background: var(--bg-surface);
     margin-bottom: 36px;
     flex-wrap: wrap;
@@ -837,7 +837,7 @@ body[data-active-tab="identity"]::before {
     box-shadow: 0 0 0 4px rgba(239, 80, 96, 0.18);
 }
 .enm-sys-cell[data-health="unknown"]::before {
-    background: var(--text-muted);
+    background: var(--text-tertiary);
     box-shadow: 0 0 0 4px rgba(60, 60, 67, 0.06);
     opacity: 0.6;
 }
@@ -849,7 +849,7 @@ body[data-active-tab="identity"]::before {
     grid-row: 1;
     font-size: 10px;
     font-weight: var(--font-weight-semibold);
-    color: var(--text-muted);
+    color: var(--text-tertiary);
     text-transform: uppercase;
     letter-spacing: 0.08em;
 }
@@ -871,7 +871,7 @@ body[data-active-tab="identity"]::before {
    cell. Dim the colour + add a strikethrough so the operator can see
    the values are not live anymore (vs. just looking like normal data). */
 .enm-sys-value.enm-sys-stale {
-    color: var(--text-muted);
+    color: var(--text-tertiary);
     text-decoration: line-through;
     text-decoration-color: var(--border-strong);
 }
@@ -893,7 +893,7 @@ body[data-active-tab="identity"]::before {
        reasonable max but lets the card breathe. */
     grid-template-columns: repeat(auto-fit, minmax(360px, 720px));
     justify-content: center;
-    gap: var(--spacing-lg);
+    gap: var(--sp-4);
     margin: 0 auto;
 }
 
@@ -1287,7 +1287,7 @@ body[data-active-tab="identity"]::before {
     align-self: center;
     margin-top: 10px;
     padding: 4px 12px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--r-pill);
     background: rgba(60, 60, 67, 0.06);
     font-size: 12px;
     font-weight: var(--font-weight-medium);
@@ -1497,7 +1497,7 @@ body[data-active-tab="identity"]::before {
     opacity: 0.35;
 }
 .enm-power-circle[data-state="off"] .enm-pc-glyph {
-    color: var(--text-muted);
+    color: var(--text-tertiary);
     opacity: 0.7;
 }
 
@@ -1911,7 +1911,7 @@ body[data-active-tab="identity"]::before {
     font-weight: var(--font-weight-semibold);
     letter-spacing: -0.02em;
     color: var(--text-primary);
-    margin-bottom: var(--spacing-md);
+    margin-bottom: var(--sp-3);
 }
 
 /* alpha.29 v2 brand reset · Phase 4b — form-row + inputs + actions.
@@ -2307,14 +2307,14 @@ select.enm-settings-input {
 }
 
 .enm-danger-controls {
-    margin-top: var(--spacing-md);
-    padding: var(--spacing-md);
+    margin-top: var(--sp-3);
+    padding: var(--sp-3);
     border: 1px solid var(--danger, #c0392b);
-    border-radius: var(--radius-sm);
+    border-radius: var(--r-sm);
     background: rgba(192, 57, 43, 0.04);
     display: flex;
     flex-direction: column;
-    gap: var(--spacing-sm);
+    gap: var(--sp-2);
 }
 
 .enm-danger-section-h {
@@ -2323,15 +2323,15 @@ select.enm-settings-input {
     letter-spacing: 0.06em;
     text-transform: uppercase;
     color: var(--text-secondary);
-    margin-top: var(--spacing-sm);
+    margin-top: var(--sp-2);
 }
 
 .enm-danger-section-h-kept { color: var(--success, #27ae60); }
 .enm-danger-section-h-wiped { color: var(--danger, #c0392b); }
 
 .enm-danger-list {
-    margin: 0 0 var(--spacing-sm);
-    padding-left: var(--spacing-lg);
+    margin: 0 0 var(--sp-2);
+    padding-left: var(--sp-4);
     font-size: 13px;
     color: var(--text-primary);
     line-height: 1.6;
@@ -2341,11 +2341,11 @@ select.enm-settings-input {
 
 .enm-danger-code {
     display: inline-block;
-    margin: 4px 0 8px var(--spacing-md);
+    margin: 4px 0 8px var(--sp-3);
     padding: 4px 8px;
     background: var(--bg-surface);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-sm);
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 12px;
     color: var(--text-primary);
@@ -2354,9 +2354,9 @@ select.enm-settings-input {
 
 .enm-danger-confirm-row {
     display: flex;
-    gap: var(--spacing-sm);
+    gap: var(--sp-2);
     align-items: center;
-    margin-top: var(--spacing-sm);
+    margin-top: var(--sp-2);
 }
 
 .enm-danger-confirm-row .enm-settings-input {
@@ -2384,14 +2384,14 @@ select.enm-settings-input {
    copy chip on the right. */
 
 .enm-validator-card {
-    margin-top: var(--spacing-lg);
-    padding: var(--spacing-xl);
+    margin-top: var(--sp-4);
+    padding: var(--sp-5);
 }
 
 .enm-validator-card[hidden] { display: none; }
 
 .enm-validator-card-head {
-    margin-bottom: var(--spacing-lg);
+    margin-bottom: var(--sp-4);
 }
 
 /* alpha.17 — eyebrow tracking 0.1em → 0.08em (a touch less stretched)
@@ -2403,7 +2403,7 @@ select.enm-settings-input {
     text-transform: uppercase;
     letter-spacing: 0.08em;
     color: var(--primary);
-    margin-bottom: var(--spacing-xs);
+    margin-bottom: var(--sp-1);
 }
 
 .enm-validator-card-title {
@@ -2431,13 +2431,13 @@ select.enm-settings-input {
     margin: 0;
     display: flex;
     flex-direction: column;
-    gap: var(--spacing-lg);
+    gap: var(--sp-4);
 }
 
 .enm-validator-step {
     display: grid;
     grid-template-columns: 36px 1fr;
-    gap: var(--spacing-md);
+    gap: var(--sp-3);
     align-items: start;
 }
 
@@ -2470,7 +2470,7 @@ select.enm-settings-input {
     font-size: 13px;
     color: var(--text-secondary);
     line-height: 1.55;
-    margin: 0 0 var(--spacing-md);
+    margin: 0 0 var(--sp-3);
 }
 
 /* Pubkey + copy row ---------------------------------------------------- */
@@ -2478,7 +2478,7 @@ select.enm-settings-input {
 .enm-validator-pubkey-row {
     display: flex;
     align-items: center;
-    gap: var(--spacing-sm);
+    gap: var(--sp-2);
     margin-top: 4px;
 }
 
@@ -2488,9 +2488,9 @@ select.enm-settings-input {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 12px;
     color: var(--text-primary);
-    background: var(--bg-muted);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
+    background: var(--bg-input);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-sm);
     padding: 8px 10px;
     overflow-wrap: anywhere;
     line-height: 1.4;
@@ -2510,21 +2510,21 @@ select.enm-settings-input {
 /* Essentials sub-steps ------------------------------------------------- */
 
 .enm-validator-substeps {
-    margin: 0 0 var(--spacing-md);
-    padding-left: var(--spacing-lg);
+    margin: 0 0 var(--sp-3);
+    padding-left: var(--sp-4);
     font-size: 13px;
     color: var(--text-primary);
     line-height: 1.65;
 }
 
-.enm-validator-substeps > li { margin-bottom: var(--spacing-xs); }
+.enm-validator-substeps > li { margin-bottom: var(--sp-1); }
 
 .enm-validator-fields {
     list-style: none;
-    padding: var(--spacing-sm) var(--spacing-md);
-    margin: var(--spacing-sm) 0 var(--spacing-xs);
-    background: var(--bg-muted);
-    border-radius: var(--radius-md);
+    padding: var(--sp-2) var(--sp-3);
+    margin: var(--sp-2) 0 var(--sp-1);
+    background: var(--bg-input);
+    border-radius: var(--r-md);
     font-size: 13px;
     line-height: 1.6;
 }
@@ -2534,9 +2534,9 @@ select.enm-settings-input {
 
 .enm-validator-deposit-note {
     font-size: 12px;
-    color: var(--text-muted);
+    color: var(--text-tertiary);
     font-style: italic;
-    margin: var(--spacing-sm) 0 0;
+    margin: var(--sp-2) 0 0;
 }
 
 /* Activate row --------------------------------------------------------- */
@@ -2544,9 +2544,9 @@ select.enm-settings-input {
 .enm-validator-activate-row {
     display: flex;
     align-items: center;
-    gap: var(--spacing-md);
+    gap: var(--sp-3);
     flex-wrap: wrap;
-    margin-top: var(--spacing-xs);
+    margin-top: var(--sp-1);
 }
 
 .enm-validator-activate-status {
@@ -2555,8 +2555,8 @@ select.enm-settings-input {
 }
 
 @container (max-width: 480px) {
-    .enm-validator-card { padding: var(--spacing-lg); }
-    .enm-validator-step { grid-template-columns: 28px 1fr; gap: var(--spacing-sm); }
+    .enm-validator-card { padding: var(--sp-4); }
+    .enm-validator-step { grid-template-columns: 28px 1fr; gap: var(--sp-2); }
     .enm-validator-step-marker { width: 26px; height: 26px; font-size: 13px; }
     .enm-validator-pubkey-row { flex-wrap: wrap; }
     .enm-validator-pubkey { width: 100%; }
@@ -3398,31 +3398,31 @@ select.enm-settings-input {
 
 /* tablet-down */
 @media (max-width: 1024px) {
-    .enm-pane { padding: var(--spacing-md); }
+    .enm-pane { padding: var(--sp-3); }
 }
 
 /* small-tablet */
 @media (max-width: 768px) {
-    .enm-header-bar { padding: 0 var(--spacing-sm); gap: var(--spacing-sm); }
+    .enm-header-bar { padding: 0 var(--sp-2); gap: var(--sp-2); }
     /* min-height keeps the tab hit-area above the WCAG 2.5.5 AA-22 floor
        of 24×24 CSS pixels at the 768px breakpoint where typography
        shrinks. Without the floor, font-size:12px × line-height:1.45 + 12
        px vertical padding can compute to ~25px, which dips under the
        threshold in some inherited line-height contexts. */
     .enm-tab { padding: 6px 10px; font-size: 12px; min-height: 28px; }
-    .enm-settings-row { grid-template-columns: 1fr; gap: var(--spacing-xs); }
+    .enm-settings-row { grid-template-columns: 1fr; gap: var(--sp-1); }
 }
 
 /* phone */
 @media (max-width: 640px) {
-    .enm-pane { padding: var(--spacing-sm); }
-    .enm-chains-grid { gap: var(--spacing-md); }
+    .enm-pane { padding: var(--sp-2); }
+    .enm-chains-grid { gap: var(--sp-3); }
     /* 0.2.0-alpha.1 — collapse chain-card padding on narrow windows;
        sys-strip loses its inter-cell dividers and tightens. */
     .enm-chain-card { padding: 28px 22px 22px; border-radius: 24px; }
     .enm-system-status { padding: 10px 14px; margin-bottom: 24px; }
     .enm-sys-cell { border-right: 0; padding: 6px 10px; min-width: 120px; }
-    .enm-error { margin: var(--spacing-md); padding: var(--spacing-md); }
+    .enm-error { margin: var(--sp-3); padding: var(--sp-3); }
     /* 0.2.0-alpha.1 — drop the 220px ring to the fallback 180px so
        it fits inside a narrow card without forcing a horizontal
        scroll. The fallback is a token so the breath/glyph sizing
@@ -3453,10 +3453,10 @@ select.enm-settings-input {
     font-weight: 700;
     letter-spacing: 0.04em;
     text-transform: uppercase;
-    background: var(--bg-muted);
-    color: var(--text-muted);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-pill);
+    background: var(--bg-input);
+    color: var(--text-tertiary);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-pill);
     line-height: 1.4;
 }
 
@@ -3473,18 +3473,18 @@ select.enm-settings-input {
 
 .enm-evm-placeholder {
     max-width: 720px;
-    margin: var(--spacing-xl) auto;
-    padding: var(--spacing-xl);
+    margin: var(--sp-5) auto;
+    padding: var(--sp-5);
     display: flex;
     flex-direction: column;
-    gap: var(--spacing-md);
+    gap: var(--sp-3);
 }
 
 .enm-evm-head {
     display: flex;
     align-items: center;
-    gap: var(--spacing-md);
-    margin-bottom: var(--spacing-sm);
+    gap: var(--sp-3);
+    margin-bottom: var(--sp-2);
 }
 
 .enm-evm-version {
@@ -3497,7 +3497,7 @@ select.enm-settings-input {
     text-transform: uppercase;
     background: var(--primary-soft);
     color: var(--primary);
-    border-radius: var(--radius-pill);
+    border-radius: var(--r-pill);
 }
 
 .enm-evm-head h2 {
@@ -3522,18 +3522,18 @@ select.enm-settings-input {
 .enm-evm-features {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-    gap: var(--spacing-md);
-    margin-top: var(--spacing-md);
+    gap: var(--sp-3);
+    margin-top: var(--sp-3);
 }
 
 .enm-evm-feature {
-    padding: var(--spacing-md);
-    background: var(--bg-muted);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
+    padding: var(--sp-3);
+    background: var(--bg-input);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-md);
     display: flex;
     flex-direction: column;
-    gap: var(--spacing-xs);
+    gap: var(--sp-1);
 }
 
 .enm-evm-feature-title {
@@ -3544,7 +3544,7 @@ select.enm-settings-input {
 
 .enm-evm-feature-desc {
     font-size: 12px;
-    color: var(--text-muted);
+    color: var(--text-tertiary);
     line-height: 1.4;
 }
 
@@ -4115,7 +4115,7 @@ select.enm-settings-input {
     padding: 8px 12px;
     font: inherit;
     font-size: 13px;
-    color: var(--text-muted);
+    color: var(--text-tertiary);
     cursor: pointer;
     text-decoration: underline;
     text-underline-offset: 3px;
@@ -4125,21 +4125,21 @@ select.enm-settings-input {
 .enm-conv-textlink:focus-visible {
     outline: none;
     box-shadow: var(--focus-ring);
-    border-radius: var(--radius-sm);
+    border-radius: var(--r-sm);
 }
 
 .enm-conv-checkbox {
     display: flex;
     align-items: center;
-    gap: var(--spacing-sm);
-    padding: var(--spacing-sm) var(--spacing-md);
-    background: var(--bg-muted);
-    border-radius: var(--radius-md);
+    gap: var(--sp-2);
+    padding: var(--sp-2) var(--sp-3);
+    background: var(--bg-input);
+    border-radius: var(--r-md);
     font-size: 14px;
     color: var(--text-primary);
     cursor: pointer;
     user-select: none;
-    margin-top: var(--spacing-sm);
+    margin-top: var(--sp-2);
 }
 .enm-conv-checkbox input[type="checkbox"] {
     width: 18px;
@@ -4625,8 +4625,8 @@ select.enm-settings-input {
     overflow-y: auto;
     overflow-x: hidden;
     height: 100%;
-    padding-left: var(--spacing-lg);
-    padding-right: var(--spacing-lg);
+    padding-left: var(--sp-4);
+    padding-right: var(--sp-4);
 }
 
 /* ============================================================
@@ -4849,10 +4849,10 @@ select.enm-settings-input {
     width: 100%;
     max-width: 1080px;
     margin: 0 auto;
-    padding: var(--spacing-xl) var(--spacing-lg) var(--spacing-2xl);
+    padding: var(--sp-5) var(--sp-4) var(--sp-6);
     display: flex;
     flex-direction: column;
-    gap: var(--spacing-lg);
+    gap: var(--sp-4);
 }
 
 .enm-tech-header {
@@ -5254,7 +5254,7 @@ body[data-update-severity="major"] .enm-tech-tabs .enm-tab[data-tab="tools"]::be
 .enm-tech-pane {
     display: flex;
     flex-direction: column;
-    gap: var(--spacing-lg);
+    gap: var(--sp-4);
 }
 .enm-tech-pane[hidden] { display: none; }
 
@@ -5504,7 +5504,7 @@ body[data-app-size="narrow"] .enm-brand-env {
    The pills match the top tab bar's underline-on-active visual idiom. */
 body[data-app-size="narrow"] .enm-settings {
     display: block;
-    padding: var(--spacing-md);
+    padding: var(--sp-3);
     container-type: normal;
 }
 
@@ -5516,9 +5516,9 @@ body[data-app-size="narrow"] .enm-settings-nav {
     overflow-x: auto;
     scrollbar-width: none;
     gap: 6px;
-    padding: 0 0 var(--spacing-sm);
-    margin: 0 0 var(--spacing-md);
-    border-bottom: 1px solid var(--border-color);
+    padding: 0 0 var(--sp-2);
+    margin: 0 0 var(--sp-3);
+    border-bottom: 1px solid var(--border-subtle);
     position: sticky;
     top: 0;
     background: var(--bg-page);
@@ -5532,9 +5532,9 @@ body[data-app-size="narrow"] .enm-settings-nav-item {
     flex: 0 0 auto;
     padding: 6px 12px;
     margin: 0;
-    border: 1px solid var(--border-color);
-    border-left: 1px solid var(--border-color);  /* override wide-mode left accent */
-    border-radius: var(--radius-pill);
+    border: 1px solid var(--border-subtle);
+    border-left: 1px solid var(--border-subtle);  /* override wide-mode left accent */
+    border-radius: var(--r-pill);
     background: transparent;
     font-size: 12px;
     font-weight: 500;
@@ -5543,7 +5543,7 @@ body[data-app-size="narrow"] .enm-settings-nav-item {
     cursor: pointer;
 }
 body[data-app-size="narrow"] .enm-settings-nav-item:hover {
-    background: var(--bg-muted);
+    background: var(--bg-input);
 }
 body[data-app-size="narrow"] .enm-settings-nav-item.active {
     background: var(--primary-soft);
@@ -5568,13 +5568,13 @@ body[data-app-size="narrow"] .enm-settings-pane {
 /* Active pane content — looks like a card */
 body[data-app-size="narrow"] .enm-settings-section {
     margin: 0;
-    padding: var(--spacing-lg);
+    padding: var(--sp-4);
     background: var(--bg-surface);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-md);
 }
 body[data-app-size="narrow"] .enm-settings-section > h3 {
-    margin: 0 0 var(--spacing-md);
+    margin: 0 0 var(--sp-3);
     font-size: 16px;
     font-weight: 600;
 }
@@ -5582,7 +5582,7 @@ body[data-app-size="narrow"] .enm-settings-section > h3 {
 /* Form rows: labels above inputs at narrow */
 body[data-app-size="narrow"] .enm-settings-row {
     grid-template-columns: 1fr;
-    gap: var(--spacing-xs);
+    gap: var(--sp-1);
 }
 body[data-app-size="narrow"] .enm-settings-input,
 body[data-app-size="narrow"] .enm-settings select,
@@ -5595,7 +5595,7 @@ body[data-app-size="narrow"] .enm-settings input[type="number"] {
 body[data-app-size="narrow"] .enm-settings-actions {
     flex-direction: column;
     align-items: stretch;
-    gap: var(--spacing-sm);
+    gap: var(--sp-2);
 }
 body[data-app-size="narrow"] .enm-settings-actions .enm-btn {
     width: 100%;
@@ -5610,7 +5610,7 @@ body[data-app-size="narrow"] .enm-settings-row label {
 
 /* Wizard at narrow */
 body[data-app-size="narrow"] .enm-conversation {
-    padding: var(--spacing-md) var(--spacing-sm) var(--spacing-xl);
+    padding: var(--sp-3) var(--sp-2) var(--sp-5);
 }
 body[data-app-size="narrow"] .enm-conv-header,
 body[data-app-size="narrow"] .enm-conv-body {
@@ -5628,13 +5628,13 @@ body[data-app-size="narrow"] .enm-btn-hero {
 /* Pane padding shrinks at narrow */
 body[data-app-size="narrow"] .enm-pane,
 body[data-app-size="narrow"] .enm-tech-pane {
-    padding: var(--spacing-xs);
+    padding: var(--sp-1);
 }
 
 /* Chain-card stats stack + buttons full-width at narrow */
 body[data-app-size="narrow"] .enm-chain-stats-strip {
     grid-template-columns: 1fr;
-    gap: var(--spacing-sm);
+    gap: var(--sp-2);
 }
 body[data-app-size="narrow"] .enm-chain-actions {
     flex-direction: column;
@@ -5682,7 +5682,7 @@ body[data-app-size="narrow"] .enm-drawer {
 
 /* Medium tier: tab wrap + slight pane padding shrink */
 body[data-app-size="medium"] .enm-pane {
-    padding: var(--spacing-sm);
+    padding: var(--sp-2);
 }
 
 /* Wide tier (default): no overrides — keeps the side-by-side nav rail layout */
@@ -5701,14 +5701,14 @@ body[data-app-size="medium"] .enm-pane {
 body[data-app-size="narrow"] .enm-system-status {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: var(--spacing-xs);
-    padding: var(--spacing-sm);
-    border-radius: var(--radius-md);
+    gap: var(--sp-1);
+    padding: var(--sp-2);
+    border-radius: var(--r-md);
 }
 body[data-app-size="narrow"] .enm-sys-cell {
     min-width: 0;
     border-right: none;
-    padding: var(--spacing-xs);
+    padding: var(--sp-1);
 }
 body[data-app-size="narrow"] .enm-sys-label {
     font-size: 10px;
@@ -5719,13 +5719,13 @@ body[data-app-size="narrow"] .enm-sys-value {
 
 /* Chain-card: tighter padding, hero ring centered + smaller */
 body[data-app-size="narrow"] .enm-chain-card {
-    padding: var(--spacing-md);
-    border-radius: var(--radius-md);
+    padding: var(--sp-3);
+    border-radius: var(--r-md);
 }
 body[data-app-size="narrow"] .enm-chain-card-head {
     flex-direction: column;
     align-items: flex-start;
-    gap: var(--spacing-xs);
+    gap: var(--sp-1);
 }
 body[data-app-size="narrow"] .enm-chain-hero {
     width: clamp(140px, 50%, 200px);
@@ -5741,12 +5741,12 @@ body[data-app-size="narrow"] .enm-chain-primary-value {
 
 /* Validator registration card */
 body[data-app-size="narrow"] .enm-validator-card {
-    padding: var(--spacing-md);
-    border-radius: var(--radius-md);
+    padding: var(--sp-3);
+    border-radius: var(--r-md);
 }
 body[data-app-size="narrow"] .enm-validator-step {
     grid-template-columns: 28px 1fr;
-    gap: var(--spacing-sm);
+    gap: var(--sp-2);
 }
 body[data-app-size="narrow"] .enm-validator-step-marker {
     width: 28px;
@@ -5756,43 +5756,43 @@ body[data-app-size="narrow"] .enm-validator-step-marker {
 
 /* Tools update card */
 body[data-app-size="narrow"] .enm-tools-update-card {
-    padding: var(--spacing-md);
-    border-radius: var(--radius-md);
+    padding: var(--sp-3);
+    border-radius: var(--r-md);
 }
 
 /* Tech-view maintenance card */
 body[data-app-size="narrow"] .enm-tech-maintenance {
-    padding: var(--spacing-md);
-    border-radius: var(--radius-md);
+    padding: var(--sp-3);
+    border-radius: var(--r-md);
 }
 body[data-app-size="narrow"] .enm-tech-maintenance-row {
-    padding: var(--spacing-sm);
+    padding: var(--sp-2);
     flex-direction: column;
     align-items: stretch;
-    gap: var(--spacing-xs);
+    gap: var(--sp-1);
 }
 
 /* --- Identity pane --- */
 body[data-app-size="narrow"] .enm-producer-binding {
-    padding: var(--spacing-md);
-    border-radius: var(--radius-md);
+    padding: var(--sp-3);
+    border-radius: var(--r-md);
 }
 body[data-app-size="narrow"] .enm-producer-binding-heading {
     font-size: 14px;
 }
 body[data-app-size="narrow"] .enm-producer-field {
-    padding: var(--spacing-sm);
+    padding: var(--sp-2);
 }
 
 /* --- Logs pane --- */
 body[data-app-size="narrow"] .enm-log-viewer {
-    padding: var(--spacing-sm);
-    border-radius: var(--radius-md);
+    padding: var(--sp-2);
+    border-radius: var(--r-md);
 }
 body[data-app-size="narrow"] .enm-log-head {
     flex-direction: column;
     align-items: stretch;
-    gap: var(--spacing-xs);
+    gap: var(--sp-1);
 }
 body[data-app-size="narrow"] .enm-log-title {
     font-size: 14px;
@@ -5809,7 +5809,7 @@ body[data-app-size="narrow"] .enm-log-text {
 
 /* --- Audit pane --- */
 body[data-app-size="narrow"] .enm-audit {
-    padding: var(--spacing-sm);
+    padding: var(--sp-2);
 }
 body[data-app-size="narrow"] .enm-audit-head h3 {
     font-size: 16px;
@@ -5817,7 +5817,7 @@ body[data-app-size="narrow"] .enm-audit-head h3 {
 body[data-app-size="narrow"] .enm-audit-filters {
     display: grid;
     grid-template-columns: 1fr;
-    gap: var(--spacing-xs);
+    gap: var(--sp-1);
 }
 body[data-app-size="narrow"] .enm-audit-input {
     width: 100%;
@@ -5838,7 +5838,7 @@ body[data-app-size="narrow"] .enm-audit-table td {
 body[data-app-size="narrow"] .enm-audit-foot {
     flex-direction: column;
     align-items: stretch;
-    gap: var(--spacing-xs);
+    gap: var(--sp-1);
 }
 body[data-app-size="narrow"] .enm-audit-count {
     font-size: 11px;
@@ -5847,25 +5847,25 @@ body[data-app-size="narrow"] .enm-audit-count {
 
 /* --- Generic cards everywhere: consistent narrow-mode chrome --- */
 body[data-app-size="narrow"] .enm-card {
-    padding: var(--spacing-md);
-    border-radius: var(--radius-md);
+    padding: var(--sp-3);
+    border-radius: var(--r-md);
 }
 
 /* --- Section-title spacing consistent across panes --- */
 body[data-app-size="narrow"] h3 {
     font-size: 15px;
-    margin: 0 0 var(--spacing-sm);
+    margin: 0 0 var(--sp-2);
 }
 body[data-app-size="narrow"] h4 {
     font-size: 13px;
-    margin: 0 0 var(--spacing-xs);
+    margin: 0 0 var(--sp-1);
 }
 
 /* --- Action button rows across all panes: vertical stack, full-width --- */
 body[data-app-size="narrow"] .enm-conv-actions {
     flex-direction: column;
     align-items: stretch;
-    gap: var(--spacing-sm);
+    gap: var(--sp-2);
 }
 body[data-app-size="narrow"] .enm-conv-actions .enm-btn {
     width: 100%;
@@ -5912,20 +5912,20 @@ body[data-app-size="narrow"] .enm-conv-actions .enm-btn {
 .enm-skip-link {
     position: absolute;
     top: -40px;
-    left: var(--spacing-sm);
+    left: var(--sp-2);
     z-index: var(--z-skip-link);
-    padding: var(--spacing-sm) var(--spacing-md);
+    padding: var(--sp-2) var(--sp-3);
     background: var(--bg-elevated);
     color: var(--text-primary);
     border: 1px solid var(--border-strong);
-    border-radius: var(--radius-sm);
+    border-radius: var(--r-sm);
     font-weight: var(--font-weight-semibold);
     text-decoration: none;
     transition: top 150ms var(--ease-out);
 }
 .enm-skip-link:focus,
 .enm-skip-link:focus-visible {
-    top: var(--spacing-sm);
+    top: var(--sp-2);
     outline: none;
     box-shadow: var(--focus-ring);
 }
