@@ -10,30 +10,20 @@
     <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
     <meta name="referrer" content="no-referrer">
     <title>Elastos Node Manager</title>
-    <link rel="stylesheet" href="css/styles.css?ts=20260513c">
+    <link rel="stylesheet" href="css/styles.css?ts=20260514b">
     <script>
-        // Apply theme BEFORE first paint to avoid a flash.
-        //   - mode='manual' → use the operator's last manual choice
-        //     stored in 'elacity-theme'
-        //   - mode='auto' (default) → fall back to the last broadcast
-        //     value cached in 'elacity-theme' (set by services/theme.js
-        //     when PC2's themeChanged broadcast arrives), or to the OS
-        //     prefers-color-scheme as a last resort
-        // Either way, services/theme.js will replace this with PC2's
-        // current value as soon as the broadcast arrives.
+        // alpha.29 v2 brand reset — dark only. The :root in styles.css
+        // now carries the v2 dark-canvas + cyan-accent token set, and
+        // the [data-theme="dark"] selectors throughout the stylesheet
+        // (15 of them, Phase 1c will drop the prefix) keep matching
+        // because we hard-set data-theme=dark on documentElement at
+        // pre-paint. The prior light/dark detection logic + the
+        // services/theme.js broadcast handler are now no-ops; the
+        // theme toggle button is being removed in Phase 1e.
         (function () {
             try {
-                var mode = localStorage.getItem('enm-theme-mode') || 'auto';
-                var saved = localStorage.getItem('elacity-theme');
-                var prefersDark = window.matchMedia
-                    && window.matchMedia('(prefers-color-scheme: dark)').matches;
-                var dark = (mode === 'manual')
-                    ? (saved === 'dark')
-                    : (saved === 'dark' || (!saved && prefersDark));
-                if (dark) {
-                    document.documentElement.setAttribute('data-theme', 'dark');
-                }
-            } catch (e) { /* localStorage may be blocked; ignore */ }
+                document.documentElement.setAttribute('data-theme', 'dark');
+            } catch (e) { /* fail open — :root dark values still apply */ }
         })();
 
         // alpha.25 — set initial body[data-app-size] before first paint so CSS

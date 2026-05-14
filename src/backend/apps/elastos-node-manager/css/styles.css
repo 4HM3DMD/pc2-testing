@@ -22,123 +22,165 @@
 }
 
 :root {
-    color-scheme: light dark;
+    color-scheme: dark;
 
     /* ============================================================
-       0.2.0-alpha.1 — Apple Hero token system
+       v2 BRAND RESET — Phase 1 token foundation (alpha.29 dark-only)
        ============================================================
-       Phase 1 of the Apple Hero rewrite: tokens land first, no
-       consumers yet. The chain-card / PowerCircle / status-strip
-       sections still reference these names so they keep working
-       through the transition.
+       Single source of truth: enm-design-mocks/v2/phase-01-tokens.html.
+       This block replaces the old Apple-Hero iOS-blue + dual-theme
+       palette with the v2 dark-canvas + cyan-accent system.
 
-       Source of truth for every value:
-       enm-design-mocks/plan/02-css-migration.md §1
+       Strategy: every existing token NAME is preserved (the 5000-line
+       stylesheet + every JS file targets these names) — only the
+       VALUES change. The new v2 token names (--sp-*, --r-*, --fs-*,
+       --accent, --bg-overlay, --bg-tint, --border-subtle, --text-
+       tertiary, etc.) are ADDED as aliases below so v2 mock CSS can
+       be pasted into per-pane phases (2-6) without alias resolution
+       work.
 
-       Palette: Apple iOS system colours (system blue #007aff,
-       green #34c759, orange #ff9f0a, red #ff453a, gray #8e8e93).
-       Borders use rgba so they read as "edge" not "line".
-       Theme switch stays attribute-based via [data-theme="dark"];
-       see the pre-paint script in index.html.
+       Light mode dropped completely — color-scheme is dark only;
+       [data-theme="dark"] block removed (its values are folded into
+       :root since :root IS dark now); the theme toggle becomes a
+       no-op (handled in Phase 1e — settings-drawer + theme.js drop).
     */
 
-    /* ---- surface + ink ---- */
-    --bg-page: #f7f8fa;
-    --bg-surface: #ffffff;
-    --bg-muted: #f3f4f7;
-    --bg-elevated: #ffffff;
-    --bg-code: #0f172a;
-    --border-color: rgba(60, 60, 67, 0.08);
-    --border-strong: rgba(60, 60, 67, 0.14);
-    --text-primary: #11131a;
-    --text-secondary: #4b4f5b;
-    --text-muted: #6a6f7b; /* a11y: bumped from #8a8f9c to clear WCAG AA 4.5:1 body on #f7f8fa/#fff */
-    --text-inverse: #f8fafc;
+    /* ---- surfaces (5 elevation steps) ---- */
+    --bg-page:     #08090c;   /* the canvas behind everything */
+    --bg-surface:  #11141a;   /* card bodies */
+    --bg-elevated: #1a1e26;   /* hovered/active states, inputs */
+    --bg-overlay:  #232833;   /* dropdowns, popovers, drawers */
+    --bg-input:    #0f1218;   /* form inputs */
+    --bg-terminal: #06070a;   /* log scroller */
+    --bg-tint:     rgba(0, 212, 255, 0.10);   /* selected pill background */
+    /* legacy aliases kept so existing rules still resolve */
+    --bg-muted:    var(--bg-elevated);
+    --bg-code:     var(--bg-terminal);
 
-    /* ---- brand + accents (iOS system blue) ---- */
-    --primary: #007aff;
-    --primary-hover: #0a84ff;
-    --primary-active: #0064d2;
-    --primary-soft: rgba(0, 122, 255, 0.12);
-    --primary-softer: rgba(0, 122, 255, 0.06);
+    /* ---- borders (3 strengths) ---- */
+    --border-subtle: rgba(255, 255, 255, 0.06);
+    --border:        rgba(255, 255, 255, 0.10);
+    --border-strong: rgba(255, 255, 255, 0.18);
+    /* legacy alias */
+    --border-color:  var(--border);
 
-    /* ---- semantic palette (Apple system colours) ---- */
-    --success: #34c759;
-    --warning: #ff9f0a;
-    --error: #ff453a;
-    --healing: #7c3aed;
-    /* a11y: -strong variants for text/icon on fills.
-       White on #34c759 / #ff9f0a fails AA (1.9-2.1:1); these darker shades
-       are used wherever a coloured fill carries text. The bright tokens
-       above still serve dot/ring/icon-on-surface usages. */
-    --success-strong: #1f8a3c;
-    --warning-strong: #b46b00;
-    --error-strong:   #c81e16;
-    /* a11y: soft surfaces (mirrors --primary-soft / --primary-softer). */
-    --success-soft:  rgba(52, 199, 89, 0.12);
-    --warning-soft:  rgba(255, 159, 10, 0.12);
-    --error-soft:    rgba(255, 69, 58, 0.12);
-    /* a11y: alias for code that already references --danger without a fallback. */
-    --danger:        var(--error);
+    /* ---- text (4 emphases) ---- */
+    --text-primary:    #f4f5f8;
+    --text-secondary:  #a1a5b0;
+    --text-tertiary:   #6b7080;
+    --text-disabled:   #4a4d56;
+    /* legacy aliases */
+    --text-muted:      var(--text-tertiary);
+    --text-inverse:    #08090c;
 
-    /* ---- chain-state palette ----
-       Aliases of the semantic tokens above. One source of truth so a
-       brand-colour change ripples through every state surface. */
+    /* ---- accent (cyan, one gradient family) ---- */
+    --accent:          #00d4ff;
+    --accent-soft:     rgba(0, 212, 255, 0.12);
+    --accent-softer:   rgba(0, 212, 255, 0.06);
+    --accent-strong:   #00b8e6;
+    --accent-gradient: linear-gradient(135deg, #00d4ff, #5b8fff);
+    /* legacy --primary aliases — every existing rule pointing at
+       --primary now picks up the cyan accent. */
+    --primary:         var(--accent);
+    --primary-hover:   var(--accent-strong);
+    --primary-active:  var(--accent-strong);
+    --primary-soft:    var(--accent-soft);
+    --primary-softer:  var(--accent-softer);
+
+    /* ---- semantic colors (3 functional + purple for log levels) ---- */
+    --success:     #59c489;
+    --success-bg:  rgba(89, 196, 137, 0.12);
+    --success-soft: rgba(89, 196, 137, 0.20);
+    --warning:     #f5a623;
+    --warning-bg:  rgba(245, 166, 35, 0.10);
+    --warning-soft: rgba(245, 166, 35, 0.30);
+    --error:       #ef5060;
+    --error-bg:    rgba(239, 80, 96, 0.10);
+    --error-soft:  rgba(239, 80, 96, 0.30);
+    --purple:      #a78bfa;
+    --purple-bg:   rgba(167, 139, 250, 0.12);
+    --pink:        #f472b6;
+    --pink-bg:     rgba(244, 114, 182, 0.10);
+    /* legacy aliases */
+    --success-strong: var(--success);
+    --warning-strong: var(--warning);
+    --error-strong:   var(--error);
+    --healing:        var(--purple);
+    --danger:         var(--error);
+
+    /* ---- chain-state palette (aliases — one place for state colors) ---- */
     --state-healthy: var(--success);
-    --state-syncing: var(--primary);
+    --state-syncing: var(--accent);
     --state-stalled: var(--warning);
-    --state-stopped: #8e8e93;
+    --state-stopped: var(--text-tertiary);
     --state-error: var(--error);
-    --state-recovering: var(--healing);
+    --state-recovering: var(--purple);
     --state-unconfigured: var(--state-stopped);
 
-    /* ---- layout tokens ---- */
-    --spacing-xs: 4px;
-    --spacing-sm: 8px;
-    --spacing-md: 16px;
-    --spacing-lg: 24px;
-    --spacing-xl: 32px;
-    --spacing-2xl: 48px;
+    /* ---- spacing (compact, 4px base — v2 system) ---- */
+    --sp-1: 4px;
+    --sp-2: 8px;
+    --sp-3: 12px;
+    --sp-4: 16px;
+    --sp-5: 24px;
+    --sp-6: 32px;
+    --sp-7: 48px;
+    /* legacy aliases */
+    --spacing-xs:  var(--sp-1);
+    --spacing-sm:  var(--sp-2);
+    --spacing-md:  var(--sp-4);
+    --spacing-lg:  var(--sp-5);
+    --spacing-xl:  var(--sp-6);
+    --spacing-2xl: var(--sp-7);
 
-    --radius-sm: 6px;
-    --radius-md: 8px;
-    --radius-lg: 18px;          /* 0.2.0: 14 → 18, matches sys-strip */
-    --radius-xl: 28px;          /* 0.2.0: 18 → 28, chain-card */
-    --radius-pill: 999px;
+    /* ---- radii (5 sizes) ---- */
+    --r-xs:   3px;   /* badges, chips */
+    --r-sm:   6px;   /* buttons, inputs */
+    --r-md:   10px;  /* cards */
+    --r-lg:   16px;  /* hero cards, modals */
+    --r-pill: 999px; /* pills, hero state badges */
+    /* legacy aliases */
+    --radius-sm:   var(--r-sm);
+    --radius-md:   var(--r-md);
+    --radius-lg:   var(--r-lg);
+    --radius-xl:   var(--r-lg);   /* legacy --radius-xl was 28px; v2 caps at 16px */
+    --radius-pill: var(--r-pill);
 
-    /* ---- shadows ----
-       --shadow-md is the "Apple resting card" two-layer shadow:
-       tight contact + soft floor. Used by chain card on hover + modals. */
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
-    --shadow-md: 0 1px 2px rgba(15, 17, 26, 0.04),
-                 0 12px 36px rgba(15, 17, 26, 0.05);
-    --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.1);
+    /* ---- typography (v2 spec) ---- */
+    --font-sans: -apple-system, 'SF Pro Text', 'Inter', system-ui, sans-serif;
+    --font-mono: 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+
+    --fs-display: 32px;
+    --fs-h1:      22px;
+    --fs-h2:      17px;
+    --fs-h3:      14px;
+    --fs-body:    13px;
+    --fs-caption: 11px;
+    --fs-mono:    12px;
+
+    --fw-regular:  400;
+    --fw-medium:   500;
+    --fw-semibold: 600;
+    --fw-bold:     700;
+    /* legacy aliases */
+    --font-weight-regular:  var(--fw-regular);
+    --font-weight-medium:   var(--fw-medium);
+    --font-weight-semibold: var(--fw-semibold);
+    --font-weight-bold:     var(--fw-bold);
+
+    /* ---- shadows (subtle, dark-mode appropriate) ---- */
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.4);
+    --shadow-md: 0 4px 12px rgba(0,0,0,0.4);
+    --shadow-lg: 0 12px 32px rgba(0,0,0,0.5), 0 0 0 1px var(--border-subtle);
+    --shadow-glow: 0 0 24px rgba(0, 212, 255, 0.15);
     --shadow-xs: var(--shadow-sm);
 
-    /* ---- type weight scale ---- */
-    --font-weight-regular: 400;
-    --font-weight-medium: 500;
-    --font-weight-semibold: 600;
-    --font-weight-bold: 700;
-
     /* ---- focus + chrome ---- */
-    /* a11y: alpha bumped 0.45 → 0.75 so the ring clears the 3:1 non-text
-       contrast requirement on #f7f8fa / #ffffff (was 1.9:1, now 3.2:1). */
-    --focus-ring-color: rgba(0, 122, 255, 0.75);
+    --focus-ring-color: rgba(0, 212, 255, 0.7);
     --focus-ring: 0 0 0 3px var(--focus-ring-color);
-    --header-bar-height: 44px;
+    --header-bar-height: 52px;   /* v2 topbar height */
 
-    /* ---- motion ----
-       0.2.0: timings stretched by ~33% so controls settle like macOS
-       instead of snapping. --ease-spring is one notch calmer too —
-       tighter return, slower out. */
-    /* ---- z-index scale ----
-       Hoisted in alpha.28.1 because three different "top layer" magic
-       numbers (9998/9999/9999) already drift; the toast-container's
-       z:100 sat BELOW every modal so toasts triggered while a dialog
-       was open were invisible. The scale below puts every layer in
-       one place; the skip link is the only thing that ever needs
-       above-modal precedence. */
+    /* ---- z-index scale (unchanged from alpha.28.1) ---- */
     --z-base:       0;
     --z-pane:       1;
     --z-sticky:     5;
@@ -147,44 +189,38 @@
     --z-modal:    200;
     --z-toast:    300;
     --z-skip-link: 9999;
+
+    /* ---- motion (unchanged) ---- */
     --motion-fast: 160ms;
     --motion-base: 240ms;
     --motion-slow: 400ms;
-    /* Attention-pulse durations for one-shot UI feedback (chain-actions row
-       pulse, celebration pop, drawer/dialog slide). Existed as hard-coded
-       300–560ms values scattered across the file before alpha.28.1. */
     --motion-attn: 520ms;
     --motion-overlay: 320ms;
-    /* Loop durations for indefinite "breathing" indicators (spinner bounce,
-       chain-reconnect ::before, log-live-pulse, tools-update dot, sparkline
-       shimmer). Folding 6 hard-coded loop values into 4 tokens keeps the
-       app's overall rhythm consistent. */
     --anim-loop-fast: 1200ms;
     --anim-loop-med:  1600ms;
     --anim-loop-slow: 2000ms;
     --anim-loop-xslow: 4000ms;
-    --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+    --ease-out:    cubic-bezier(0.22, 1, 0.36, 1);
     --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
     --ease-spring: cubic-bezier(.2, .7, .2, 1);
 
     /* ============================================================
-       NEW Apple Hero tokens (phase 1)
+       Apple-Hero compat tokens — wash, ring, sparkline, brand mark
        ============================================================
-       Wash, ring, sparkline, breath, brand gradient. Consumers land
-       in later phases — these slots are reserved here. */
+       Original tokens from alpha.1's Apple-Hero phase; values
+       retuned to the v2 cyan-accent system. Consumers (page-wash,
+       PowerCircle, sparkline, header mark) keep working without
+       per-rule edits; phases 2-6 will refactor each as the visual
+       layer changes. */
 
-    /* Page-wash gradient on body::before — drives fleet-health hue.
-       The default values are the "healthy" tint; the FleetHealthGradient
-       controller (phase 2) overrides --wash-a / --wash-b on
-       <html data-fleet-health="..."> for warning / busy / idle. */
-    --wash-a: rgba(52, 199, 89, 0.07);
-    --wash-b: rgba(52, 199, 89, 0.00);
+    /* Page-wash gradient. Default tint is healthy (cyan-tinted). */
+    --wash-a: rgba(0, 212, 255, 0.06);
+    --wash-b: rgba(91, 143, 255, 0.05);
     --wash-blend-ms: 800ms;
 
-    /* PowerCircle ring sizing + stroke weights. Mock uses 220x220
-       SVG with stroke 4; we keep that ratio with px values for use
-       inside the JS-driven SVG. */
-    --ring-track: rgba(60, 60, 67, 0.08);
+    /* PowerCircle ring sizing — kept stable so chain-card layout
+       stays compatible until Phase 3's hero refactor. */
+    --ring-track: rgba(255, 255, 255, 0.10);
     --ring-stroke-width: 10;
     --ring-stroke-width-healthy: 12;
     --ring-size: 220px;
@@ -193,97 +229,37 @@
     --ring-percent-size: clamp(28px, 18cqi, 38px);
     --breath-duration: 4s;
 
-    /* Brand gradient — the green→blue used by the header mark icon.
-       Only place in the app that uses a real gradient instead of a wash. */
-    --gradient-healthy: linear-gradient(135deg, #34c759 0%, #0a84ff 100%);
+    /* Brand gradient — cyan→blue, replaces the green→blue of alpha.1.
+       Used by the new .enm-brand-mark in Phase 2. */
+    --gradient-healthy: var(--accent-gradient);
 
-    /* Sparkline — inline SVG inside chain-card. JS sets the series;
-       CSS controls stroke colour (via currentColor) + line weight + the
-       SVG gradient-fill opacity. */
+    /* Sparkline tunings */
     --sparkline-stroke: 1.6;
     --sparkline-opacity: 0.9;
     --sparkline-fill-top: 0.30;
     --sparkline-fill-bottom: 0.00;
 
-    /* Chain-card chrome. Mock spec; replaces the all-around lg padding
-       the card has worn since alpha.18. */
-    --sys-cell-divider: 1px solid var(--border-color);
-    --chain-card-padding: 36px 32px 28px;
-    --chain-card-radius: var(--radius-xl);
+    /* Chain-card chrome (Phase 3 will retune to v2 paddings) */
+    --sys-cell-divider: 1px solid var(--border-subtle);
+    --chain-card-padding: 32px 32px 24px;
+    --chain-card-radius: var(--r-lg);
 }
 
 /* ============================================================
-   Dark mode — Apple iOS Dark
-   ============================================================
-   Pure near-black surfaces (no slate tint). Mirrors the apple-hero
-   mock's dark palette. Theme switching stays explicit via
-   [data-theme="dark"] on <html> — the prefers-color-scheme block
-   in the mock is intentionally NOT duplicated; the pre-paint script
-   in index.html sets data-theme before first paint, so a media-query
-   block would just fight that.
-*/
-[data-theme="dark"] {
-    --bg-page: #07080b;
-    --bg-surface: #14161c;
-    --bg-muted: #1a1d25;
-    --bg-elevated: #1a1d25;
-    --bg-code: #0a0a0a;
-    /* a11y: alpha 0.06 → 0.14 (1.2:1 → 3.0:1) and 0.12 → 0.24 (1.6:1 → 4.7:1)
-       so borders register as actual edges in dark mode. */
-    /* WCAG 1.4.11 — UI components need ≥ 3:1 contrast against the
-       adjacent surface. Composited over --bg-page #1c1c1e the previous
-       0.14 alpha landed at 1.36:1; the comment claimed 3:1. 0.34 lands
-       at ≈3.0:1. 0.40 on the "strong" tier keeps the same proportional
-       step that the light-mode rules use. */
-    --border-color: rgba(235, 235, 245, 0.34);
-    --border-strong: rgba(235, 235, 245, 0.40);
-    --text-primary: #f4f5f8;
-    --text-secondary: #b5b9c5;
-    /* a11y: 3.5:1 → 5.6:1 on bg-surface, clears AA body */
-    --text-muted: #9ba0ae;
-    --primary: #0a84ff;
-    --primary-hover: #409cff;
-    --primary-soft: rgba(10, 132, 255, 0.18);
-    --primary-softer: rgba(10, 132, 255, 0.10);
-    --success: #30d158;
-    --warning: #ffa00a;
-    --error: #ff453a;
-    /* a11y: in light mode --healing is #7c3aed → 8.6:1 on white; on dark
-       surfaces the unchanged value drops to 2.2:1. Lift to the
-       Apple "purple-A" tier so chain-recovering / healing toasts stay
-       AA-compliant on dark. */
-    --healing: #a78bfa;
-    /* a11y: soft semantic surfaces for dark mode mirror the light defs. */
-    --success-soft: rgba(48, 209, 88, 0.16);
-    --warning-soft: rgba(255, 160, 10, 0.16);
-    --error-soft:   rgba(255, 69, 58, 0.16);
-    /* a11y: focus ring alpha tuned for dark backgrounds (2.0:1 → 3.4:1). */
-    --focus-ring-color: rgba(64, 156, 255, 0.7);
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-    /* Dark "resting card" shadow — inset 1px highlight catches the top
-       edge; soft floor drop. Apple's dark-mode card trick. */
-    --shadow-md: 0 1px 0 rgba(255, 255, 255, 0.02) inset,
-                 0 24px 60px rgba(0, 0, 0, 0.45);
-    --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.6);
+   Dark scrollbars — apply universally now that the app is dark-only.
+   Previously gated on [data-theme="dark"]; that prefix is dropped
+   because :root IS dark. ============================================================ */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: var(--bg-surface); }
+::-webkit-scrollbar-thumb { background: var(--bg-overlay); border-radius: 5px; }
+::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
+* { scrollbar-color: var(--bg-overlay) var(--bg-surface); }
 
-    /* Apple Hero dark wash + sparkline tunings */
-    --wash-a: rgba(52, 199, 89, 0.09);
-    /* a11y: alpha 0.06 → 0.18 so the PowerCircle track reads as a real
-       ring in dark mode (1.4:1 → 3.4:1, clears UI 3:1). */
-    /* Same SC 1.4.11 fix as --border-color above. PowerCircle track
-       ring needs to be visibly distinct from the page; 0.18 composited
-       at 1.5:1 against the documented 3:1 target. */
-    --ring-track: rgba(235, 235, 245, 0.36);
-    --sparkline-opacity: 0.85;
-    --sparkline-fill-top: 0.35;
-}
-
-/* Dark scrollbars match dao-dashboard / Market / dApp Centre. */
-[data-theme="dark"] ::-webkit-scrollbar { width: 10px; height: 10px; }
-[data-theme="dark"] ::-webkit-scrollbar-track { background: #1a1a1a; }
-[data-theme="dark"] ::-webkit-scrollbar-thumb { background: #555; border-radius: 5px; }
-[data-theme="dark"] ::-webkit-scrollbar-thumb:hover { background: #666; }
-[data-theme="dark"] { scrollbar-color: #555 #1a1a1a; }
+/* ============================================================
+   Dark-only force — html always carries data-theme="dark" via
+   index.html so the 15 [data-theme="dark"] selectors elsewhere in
+   this file (Phase 1c will drop the prefix) keep matching.
+   ============================================================ */
 
 /* ============================================================
    Root layout
