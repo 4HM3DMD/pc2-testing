@@ -342,8 +342,8 @@ body::before {
     pointer-events: none;
     z-index: 0;
     opacity: 1;
-    transition: background var(--wash-blend-ms) ease,
-                opacity   var(--wash-blend-ms) ease;
+    transition: background var(--wash-blend-ms) var(--ease-out),
+                opacity   var(--wash-blend-ms) var(--ease-out);
 }
 
 /* Hide the wash on every tab that isn't Status. Dense forms / logs /
@@ -1553,7 +1553,7 @@ body[data-active-tab="identity"]::before {
     inset: -6px;
     border-radius: 50%;
     pointer-events: none;
-    animation: enm-pc-breathe var(--breath-duration) ease-in-out infinite;
+    animation: enm-pc-breathe var(--breath-duration) var(--ease-in-out) infinite;
 }
 
 @keyframes enm-pc-breathe {
