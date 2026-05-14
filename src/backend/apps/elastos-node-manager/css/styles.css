@@ -2696,52 +2696,59 @@ select.enm-settings-input {
    Log viewer (terminal)
    ============================================================ */
 
+/* alpha.29 v2 brand reset · Phase 5a — log viewer chrome.
+   Reference: enm-design-mocks/v2/phase-05-logs-audit.html .log-toolbar,
+   .log-title, .log-live-btn, .log-scroller, .log-line. */
 .enm-log-viewer {
     display: flex;
     flex-direction: column;
-    height: 100%;
+    flex: 1;
     min-height: 280px;
     overflow: hidden;
+    padding: var(--sp-5);
+    gap: var(--sp-4);
+    background: transparent;
+    border: none;
 }
 
 .enm-log-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: var(--spacing-sm);
-    padding: var(--spacing-md);
-    border-bottom: 1px solid var(--border-color);
+    gap: var(--sp-3);
     flex-shrink: 0;
-    /* Wrap the Download + buffer pill onto a second row when the header
-       gets cramped, instead of overflowing horizontally. */
+    /* Wrap the toolbar onto a second row when the header gets
+       cramped, instead of overflowing horizontally. */
     flex-wrap: wrap;
+    padding: 0;
+    border-bottom: none;
 }
 
-/* alpha.28.1 — Download text button + buffer-drop pill in the log head.
-   Download mirrors the audit-tab JSON export pattern; the pill appears
-   the moment the rolling buffer first drops a head line so the operator
-   isn't surprised when scrolling up hits an invisible wall. */
+/* alpha.28.1 batch 50 — Download text button + buffer-drop pill in
+   the log head. Both retuned to v2 chrome below. */
 .enm-log-download {
-    min-height: 28px;
-    padding: 4px 10px;
+    min-height: 0;
+    padding: 5px 10px;
+    font-size: var(--fs-caption);
 }
 .enm-log-buffer-pill {
     display: inline-flex;
     align-items: center;
+    gap: 6px;
     padding: 2px 8px;
-    border-radius: 999px;
-    border: 1px solid var(--border-strong);
-    background: var(--warning-soft, var(--bg-surface));
-    color: var(--warning-strong, var(--text-secondary));
-    font-size: 11px;
+    border-radius: var(--r-pill);
+    border: 1px solid rgba(245, 166, 35, 0.3);
+    background: var(--warning-bg);
+    color: var(--warning);
+    font-size: var(--fs-caption);
     line-height: 1.4;
-    font-weight: 500;
+    font-weight: var(--fw-medium);
     white-space: nowrap;
 }
 
 .enm-log-title {
-    font-size: 14px;
-    font-weight: 600;
+    font-size: var(--fs-h2);
+    font-weight: var(--fw-semibold);
     letter-spacing: -0.01em;
     color: var(--text-primary);
     overflow: hidden;
@@ -2749,71 +2756,68 @@ select.enm-settings-input {
     white-space: nowrap;
 }
 
-/* Log "Live" / "Paused" toggle — alpha.9: bigger touch target, leading
-   status dot that pulses when the SSE connection is healthy and turns
-   amber when reconnecting. The pill becomes the operator's at-a-glance
-   for "is the log feed live?". */
+/* Log "Live" / "Paused" toggle — v2 .log-live-btn: green pill with
+   pulsing dot when SSE healthy, neutral pill when paused, amber
+   pill when reconnecting. The pill becomes the operator's at-a-
+   glance "is the feed live?". */
 .enm-log-tail-toggle {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    min-height: 32px;
-    padding: 4px 12px 4px 10px;
-    background: var(--bg-muted);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-pill);
+    padding: 6px 12px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
     font: inherit;
-    font-size: 12px;
-    font-weight: var(--font-weight-medium);
+    font-size: var(--fs-caption);
+    font-weight: var(--fw-semibold);
     color: var(--text-secondary);
     cursor: pointer;
-    transition: background var(--motion-fast) var(--ease-spring),
-                border-color var(--motion-fast) var(--ease-spring),
-                color var(--motion-fast) var(--ease-spring);
+    transition: background 0.12s, border-color 0.12s, color 0.12s;
     flex-shrink: 0;
 }
 
 .enm-log-tail-toggle::before {
     content: '';
-    width: 6px;
-    height: 6px;
+    width: 7px;
+    height: 7px;
     border-radius: 50%;
-    background: var(--text-muted);
+    background: var(--text-tertiary);
     flex-shrink: 0;
-    transition: background var(--motion-base) var(--ease-spring);
+    transition: background var(--motion-base) var(--ease-spring),
+                box-shadow var(--motion-base) var(--ease-spring);
 }
 
-.enm-log-tail-toggle:hover { background: var(--bg-surface); }
+.enm-log-tail-toggle:hover { background: var(--bg-overlay); }
 
-/* Live + tailing — green dot pulses gently to communicate "feed is
-   flowing". */
+/* Live + tailing — v2: success-bg fill, success text, success dot
+   with a 1.6s pulse animation. */
 .enm-log-tail-toggle.enm-log-following {
-    background: var(--primary-soft);
-    border-color: rgba(22, 163, 74, 0.25);
+    background: var(--success-bg);
+    border-color: rgba(89, 196, 137, 0.3);
     color: var(--success);
 }
 
 .enm-log-tail-toggle.enm-log-following::before {
-    background: var(--state-healthy);
-    animation: enm-log-live-pulse 2s var(--ease-spring) infinite;
-    box-shadow: 0 0 0 0 var(--state-healthy);
+    background: var(--success);
+    box-shadow: 0 0 8px var(--success);
+    animation: enm-log-live-pulse var(--anim-loop-med) var(--ease-in-out) infinite;
 }
 
 @keyframes enm-log-live-pulse {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.45); }
-    50%      { box-shadow: 0 0 0 4px rgba(34, 197, 94, 0); }
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.55; }
 }
 
-/* Reconnecting — amber dot, no pulse. The .enm-log-reconnecting class
-   is set by log-viewer.js when the SSE connection drops. */
+/* Reconnecting — v2: warning-bg fill, warning text, warning dot, no pulse. */
 .enm-log-tail-toggle.enm-log-reconnecting {
-    background: rgba(249, 115, 22, 0.10);
-    border-color: rgba(249, 115, 22, 0.28);
-    color: var(--state-stalled);
+    background: var(--warning-bg);
+    border-color: rgba(245, 166, 35, 0.3);
+    color: var(--warning);
 }
 
 .enm-log-tail-toggle.enm-log-reconnecting::before {
-    background: var(--state-stalled);
+    background: var(--warning);
     animation: none;
     box-shadow: none;
 }
@@ -2824,43 +2828,53 @@ select.enm-settings-input {
     }
 }
 
+/* Terminal scroller — v2 bg-terminal #06070a (deeper than bg-page).
+   Lines use SF Mono. The 3-col grid for ts / stream / text lands in
+   Phase 5b along with the level-color rules. */
 .enm-log-scroller {
     flex: 1;
-    overflow: auto;
-    padding: var(--spacing-md);
-    background: var(--bg-code);
-    color: #e2e8f0;
-    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
-    font-size: 12px;
+    min-height: 0;
+    overflow-y: auto;
+    padding: var(--sp-3) 0;
+    background: var(--bg-terminal);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-md);
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono);
     line-height: 1.55;
-    border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+    position: relative;
 }
 
 .enm-log-line {
     display: flex;
-    gap: var(--spacing-sm);
+    gap: var(--sp-2);
+    padding: 1px var(--sp-4);
     white-space: pre-wrap;
     word-break: break-word;
 }
 
-.enm-log-line-stderr { color: #fca5a5; }
-.enm-log-line-stdout { color: #e2e8f0; }
-
-.enm-log-ts {
-    /* WCAG 1.4.3 — #64748b on the dark #0a0a0a code background composes
-       at 4.16:1, just below the 4.5:1 AA floor for normal text. Lift
-       ~10% L (~#7d8898) to land at ≈5.0:1 while staying visually
-       subordinate to the log content. */
-    color: #7d8898;
-    flex-shrink: 0;
+.enm-log-line:hover {
+    background: rgba(255, 255, 255, 0.02);
 }
 
-.enm-log-text { flex: 1; }
+.enm-log-line-stderr { color: #ff8a96; }
+.enm-log-line-stdout { color: var(--text-primary); }
+
+.enm-log-ts {
+    color: var(--text-tertiary);
+    flex-shrink: 0;
+    font-size: 11px;
+}
+
+.enm-log-text { flex: 1; word-break: break-word; }
 
 .enm-log-empty {
-    color: #94a3b8;
+    color: var(--text-tertiary);
     text-align: center;
-    padding: var(--spacing-2xl) var(--spacing-lg);
+    padding: var(--sp-7) var(--sp-5);
+    font-family: var(--font-sans);
+    font-size: var(--fs-body);
 }
 
 /* ============================================================
