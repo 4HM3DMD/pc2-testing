@@ -192,6 +192,12 @@
     --shadow-lg: 0 12px 32px rgba(0,0,0,0.5), 0 0 0 1px var(--border-subtle);
     --shadow-glow: 0 0 24px rgba(0, 212, 255, 0.15);
     --shadow-xs: var(--shadow-sm);
+    /* v2 atmospheric modal + toast shadows (Phase 6b/6c/7a).
+       --shadow-toast: used by .enm-toast (Phase 6c)
+       --shadow-modal: used by .enm-proposal-card (Phase 6b) and
+                       .enm-tools-update-modal-card (Phase 7a) */
+    --shadow-toast: 0 12px 32px rgba(0, 0, 0, 0.4);
+    --shadow-modal: 0 24px 64px rgba(0, 0, 0, 0.6);
 
     /* ---- focus + chrome ---- */
     --focus-ring-color: rgba(0, 212, 255, 0.7);
@@ -3087,7 +3093,7 @@ select.enm-settings-input {
     display: grid;
     gap: var(--sp-2);
     /* v2 mock shadow: deeper, more atmospheric. */
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+    box-shadow: var(--shadow-toast);
     transform: translateX(0);
     opacity: 1;
     transition: transform var(--motion-base) var(--ease-out),
@@ -3242,7 +3248,7 @@ select.enm-settings-input {
     border: 1px solid var(--border-strong);
     border-radius: var(--r-lg);
     /* v2 mock shadow: tighter, deeper, more atmospheric. */
-    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
+    box-shadow: var(--shadow-modal);
     padding: var(--sp-5);
     /* v2 mock uses min(520px, calc(100% - 32px)) for sizing — we
        expand to 540px because the proposal-card layout has the
@@ -5159,7 +5165,7 @@ body[data-update-severity="major"] .enm-tech-tabs .enm-tab[data-tab="tools"]::be
     background: var(--bg-surface);
     border: 1px solid var(--border-strong);
     border-radius: var(--r-lg);
-    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
+    box-shadow: var(--shadow-modal);
     padding: var(--sp-5);
     position: relative;
 }
