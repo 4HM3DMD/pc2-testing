@@ -82,6 +82,24 @@
         } else {
             document.body.dataset.appSize = initial;
         }
+        // 0.2.0-beta.3.5 — re-measure after a paint tick. Inside Puter's
+        // window-launch flow the iframe's initial width can be 0 or
+        // mis-reported (the desktop sizes the iframe a frame or two AFTER
+        // the script runs), which would lock the layout into a wrong size
+        // bucket until the operator manually resizes. requestAnimation
+        // Frame + a 50ms safety net gives the desktop time to settle
+        // before we read the final width. ResizeObserver picks up
+        // anything after that.
+        function reapply() {
+            var w2 = window.innerWidth || document.documentElement.clientWidth || 0;
+            if (w2 > 0) { apply(w2); }
+        }
+        if (typeof requestAnimationFrame === 'function') {
+            requestAnimationFrame(function () {
+                requestAnimationFrame(reapply);
+            });
+        }
+        setTimeout(reapply, 50);
         // Dynamic updates: ResizeObserver on documentElement reports the iframe
         // interior width. This is the ONLY reliable size signal in PC2 — neither
         // @media nor postMessage from PC2 gives us iframe width.

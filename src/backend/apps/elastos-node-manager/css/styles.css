@@ -714,7 +714,15 @@ body[data-app-size="compact"] .enm-app .enm-main { padding: var(--sp-2); }
     border-radius: var(--r-lg);
     padding: var(--sp-6);
     position: relative;
-    overflow: hidden;
+    /* 0.2.0-beta.3.5 — overflow:hidden removed. It originally existed to
+       trim the ::before radial gradient glow at the rounded corners, but
+       it ALSO clipped .enm-stats + .enm-chain-actions when the iframe's
+       initial width was mis-reported by the embedding desktop and the
+       grid layout briefly produced an oversized chain-card-content row
+       that pushed siblings into the clip zone. The gradient is on a
+       pseudo-element anchored to inset:0, so a tiny halo bleed past the
+       radius is cosmetic at worst. Vanishing Start/Restart/Stop buttons
+       on initial render is the worse failure mode. */
 }
 
 .enm-chain-card-content {
@@ -723,7 +731,12 @@ body[data-app-size="compact"] .enm-app .enm-main { padding: var(--sp-2); }
     display: grid;
     grid-template-columns: auto 1fr;
     gap: var(--sp-6);
-    align-items: center;
+    /* 0.2.0-beta.3.5 — align-items: start instead of center so the row
+       sizes to the taller of hero/meta but doesn't pull an oversized
+       row height when one of them is briefly mis-measured during
+       iframe first-paint. align-items: center was a polish touch but
+       layout-predictable beats polish when buttons are vanishing. */
+    align-items: start;
 }
 
 /* Hero slot — wraps either .enm-hero-power or .enm-hero-sync. The
