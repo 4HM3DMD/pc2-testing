@@ -2017,7 +2017,7 @@ body[data-active-tab="identity"]::before {
 .enm-settings-input[type="text"][inputmode="numeric"],
 .enm-settings-input[type="text"][data-mono] {
     font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: var(--fs-mono);
 }
 
 /* Native <select> styled to match .input. Chevron handled by the
@@ -2333,7 +2333,7 @@ select.enm-settings-input {
     padding: var(--sp-3);
     border: 1px solid var(--danger);
     border-radius: var(--r-sm);
-    background: rgba(192, 57, 43, 0.04);
+    background: rgba(239, 80, 96, 0.04);
     display: flex;
     flex-direction: column;
     gap: var(--sp-2);
@@ -2369,7 +2369,7 @@ select.enm-settings-input {
     border: 1px solid var(--border-subtle);
     border-radius: var(--r-sm);
     font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: var(--fs-mono);
     color: var(--text-primary);
     overflow-wrap: anywhere;
 }
@@ -2508,7 +2508,7 @@ select.enm-settings-input {
     flex: 1 1 auto;
     min-width: 0;
     font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: var(--fs-mono);
     color: var(--text-primary);
     background: var(--bg-input);
     border: 1px solid var(--border-subtle);
