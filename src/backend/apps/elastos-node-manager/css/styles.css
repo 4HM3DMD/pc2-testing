@@ -1722,77 +1722,91 @@ body[data-active-tab="identity"]::before {
    container-type lives on .enm-settings so the layout responds to the
    Puter window width regardless of viewport size. */
 
+/* alpha.29 v2 brand reset · Phase 4a — settings shell + nav + section-card.
+   Reference: enm-design-mocks/v2/phase-04-settings.html .settings-wrap /
+   .settings-nav / .settings-nav-item / .section-card.
+
+   Layout strategy:
+     - .enm-settings becomes the OUTER container, transparent (no
+       card chrome). The shared bg-surface/border rule at line 741
+       is overridden below.
+     - .enm-settings-nav stays as the left rail (200px, sticky).
+     - Each .enm-settings-section becomes a v2 .section-card —
+       bg-surface, border-subtle, r-lg radius, overflow hidden. The
+       <h3> inside acts as the section-card-head; form rows below
+       become the body. */
 .enm-settings {
     container-type: inline-size;
-    padding: var(--spacing-lg);
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    padding: var(--sp-5);
     display: grid;
     grid-template-columns: 200px 1fr;
-    gap: var(--spacing-xl);
+    gap: var(--sp-5);
+    align-items: start;
     min-height: 100%;
 }
 
 @container (max-width: 640px) {
     .enm-settings {
         grid-template-columns: 1fr;
-        gap: var(--spacing-md);
+        gap: var(--sp-4);
+        padding: var(--sp-4);
     }
 }
 
 .enm-settings-nav {
-    display: flex;
-    flex-direction: column;
+    display: grid;
     gap: 2px;
-    padding: 0;
+    align-content: start;
     position: sticky;
-    top: 0;
-    align-self: start;
+    top: var(--sp-5);
 }
 
 @container (max-width: 640px) {
     .enm-settings-nav {
+        display: flex;
         flex-direction: row;
         flex-wrap: wrap;
-        gap: var(--spacing-xs);
-        padding-bottom: var(--spacing-sm);
-        border-bottom: 1px solid var(--border-color);
+        gap: var(--sp-1);
+        padding-bottom: var(--sp-3);
+        border-bottom: 1px solid var(--border-subtle);
         position: static;
     }
 }
 
-/* alpha.17 — macOS System Settings pattern: the active sub-tab gets a
-   color shift + a 2px leading accent bar instead of a filled pill.
-   The filled --primary-soft background read as "selected button"
-   instead of "current section." Border-left accent communicates
-   navigation context without painting the whole row. */
+/* alpha.29 v2 — nav items now use a v2 accent-soft "active pill"
+   instead of the alpha.17 left-border-accent. Mock pattern: hovered
+   item lifts to bg-elevated, active item gets bg-tint background +
+   accent text + semibold weight. The previous border-left style
+   read as "list with selected row"; v2 reads as "current pane". */
 .enm-settings-nav-item {
     appearance: none;
     -webkit-appearance: none;
     background: transparent;
-    border: none;
-    border-left: 2px solid transparent;
-    padding: 8px 12px;
+    border: 1px solid transparent;
+    padding: 8px var(--sp-3);
     font: inherit;
-    font-size: 13px;
-    font-weight: var(--font-weight-medium);
+    font-size: var(--fs-body);
+    font-weight: var(--fw-medium);
     color: var(--text-secondary);
     cursor: pointer;
     text-align: left;
-    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-    transition: background var(--motion-fast) var(--ease-spring),
-                color var(--motion-fast) var(--ease-spring),
-                border-color var(--motion-fast) var(--ease-spring);
+    border-radius: var(--r-sm);
+    transition: background 0.12s, color 0.12s, border-color 0.12s;
 }
 
 .enm-settings-nav-item:hover {
     color: var(--text-primary);
-    background: var(--bg-muted);
+    background: var(--bg-elevated);
 }
 
 .enm-settings-nav-item.active {
-    color: var(--primary);
-    background: transparent;
-    border-left-color: var(--primary);
-    font-weight: var(--font-weight-semibold);
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-color: var(--accent-soft);
+    font-weight: var(--fw-semibold);
 }
 
 .enm-settings-nav-item:focus-visible {
@@ -1800,38 +1814,32 @@ body[data-active-tab="identity"]::before {
     box-shadow: var(--focus-ring);
 }
 
-/* Danger sub-tab keeps a red accent in the nav rail so the operator
-   sees it's structurally separate even when not active. */
+/* Danger sub-tab keeps an error accent so the operator sees the
+   structural separation even when not selected. */
 .enm-settings-nav-item[data-accent="danger"] { color: var(--error); }
-.enm-settings-nav-item[data-accent="danger"]:hover { background: rgba(239, 68, 68, 0.08); }
+.enm-settings-nav-item[data-accent="danger"]:hover {
+    background: var(--error-bg);
+    color: var(--error);
+}
 .enm-settings-nav-item[data-accent="danger"].active {
     color: var(--error);
-    background: transparent;
-    border-left-color: var(--error);
+    background: var(--error-bg);
+    border-color: rgba(239, 80, 96, 0.3);
 }
 
-/* Horizontal collapsed layout (<640px container width) — the left-
-   border accent doesn't make sense as a "tab on top" row. Fall back
-   to the filled pill for the pill bar, but keep the borderless rest
-   treatment. */
+/* Horizontal collapsed layout — kept compatible with v2 narrow
+   pattern (settings-pills). The pills already use the active-bg
+   treatment so no extra rule needed. */
 @container (max-width: 640px) {
     .enm-settings-nav-item {
-        border-left: none;
-        border-radius: var(--radius-sm);
-    }
-    .enm-settings-nav-item.active {
-        background: var(--primary-soft);
-        border-left: none;
-    }
-    .enm-settings-nav-item[data-accent="danger"].active {
-        background: rgba(239, 68, 68, 0.12);
+        flex: 0 0 auto;
     }
 }
 
 .enm-settings-content {
     min-width: 0;
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    gap: var(--sp-4);
 }
 
 .enm-settings-pane {
@@ -1839,12 +1847,46 @@ body[data-active-tab="identity"]::before {
        display:none from the universal rule near the top. */
 }
 
-/* Each section becomes a pane — drop the old "stack with border-tops"
-   pattern. Now there's only one section visible at a time, so it gets
-   the full vertical rhythm without competing siblings. */
+/* alpha.29 v2 brand reset · Phase 4a — settings section becomes a
+   v2 .section-card. The JS-emitted .enm-settings-section <div> + its
+   first-child <h3> map to v2 .section-card + .section-card-head.
+   Form rows below the h3 are the .section-card-body content. */
 .enm-settings-section {
-    padding-top: 0;
-    border-top: none;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-lg);
+    overflow: hidden;
+    padding: 0;        /* the h3 below gets its own head padding */
+    border-top: none;  /* override alpha.18 stack-with-border-tops */
+}
+
+/* The first <h3> inside a section is the section-card-head — v2 spec:
+   padding sp-4 sp-5, border-bottom hairline, fs-h2 semibold. */
+.enm-settings-section > h3 {
+    margin: 0;
+    padding: var(--sp-4) var(--sp-5);
+    border-bottom: 1px solid var(--border-subtle);
+    font-size: var(--fs-h2);
+    font-weight: var(--fw-semibold);
+    color: var(--text-primary);
+    letter-spacing: -0.01em;
+}
+
+/* Body padding for the form rows that follow the heading. v2 spec
+   pads the body sp-2 sp-5 (less top/bottom than head, so rows
+   breathe via their own border-bottoms). */
+.enm-settings-section > :not(h3) {
+    /* Rows + buttons + status get horizontal padding only; the
+       row-level borders manage vertical rhythm. */
+}
+.enm-settings-section > .enm-settings-row,
+.enm-settings-section > .enm-settings-actions,
+.enm-settings-section > .enm-settings-status,
+.enm-settings-section > .enm-rpc-section,
+.enm-settings-section > p,
+.enm-settings-section > div:not(.enm-settings-pane-foot) {
+    padding-left: var(--sp-5);
+    padding-right: var(--sp-5);
 }
 
 .enm-settings-section h3 {
