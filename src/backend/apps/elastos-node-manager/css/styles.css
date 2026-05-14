@@ -5983,11 +5983,11 @@ body[data-app-size="narrow"] .enm-conv-actions .enm-btn {
     align-items: center;
     justify-content: center;
     gap: var(--sp-3);
-    padding: 10px 16px;
+    padding: 10px var(--sp-4);
     background: var(--warning-bg, #fff3cd);
     color: var(--warning-fg, #856404);
     border-bottom: 1px solid var(--warning-border, #ffeeba);
-    font-size: 14px;
+    font-size: var(--fs-h3);
     /* alpha.29 batch 113 (Round-37 finding #2, MED) — token scale
        (lines 142-149): drawer=100, modal=200, toast=300. The banner
        sits ABOVE the app shell + tab strip but BELOW all overlays:
