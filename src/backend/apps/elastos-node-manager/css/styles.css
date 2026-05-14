@@ -4755,14 +4755,16 @@ body[data-update-severity="major"] .enm-tech-tabs .enm-tab[data-tab="tools"]::be
     }
 }
 
-/* 0.2.0-alpha.8 — Binary Update card (Tools tab, top). Read-only:
-   shows installed vs latest version, severity chip, release notes,
-   and the manual deploy command. Apply-in-place lands in alpha.9. */
+/* 0.2.0-alpha.8 — Binary Update card (Tools tab, top), Phase 7a v2.
+   The root has `className = 'enm-card enm-tools-update-card'` so it
+   inherits the v2 .enm-card surface (Phase 3 chrome). The modifier
+   here just tightens padding + adds the severity-coloured left
+   border. */
 .enm-tools-update-card {
-    padding: var(--spacing-lg);
-    margin-bottom: var(--spacing-md);
-    border-radius: var(--radius-lg);
-    transition: border-color var(--motion-base) var(--ease-spring);
+    padding: var(--sp-4);
+    margin-bottom: var(--sp-3);
+    border-radius: var(--r-md);
+    transition: border-color var(--motion-base) var(--ease-out);
 }
 
 .enm-tools-update-card[data-severity="none"] {
@@ -4771,54 +4773,57 @@ body[data-update-severity="major"] .enm-tech-tabs .enm-tab[data-tab="tools"]::be
 
 .enm-tools-update-card[data-severity="patch"],
 .enm-tools-update-card[data-severity="minor"] {
-    border-left: 3px solid var(--state-syncing);
+    border-left: 3px solid var(--accent);
 }
 
 .enm-tools-update-card[data-severity="major"] {
-    border-left: 3px solid var(--state-stalled);
+    border-left: 3px solid var(--warning);
 }
 
 .enm-tools-update-head {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: var(--sp-1);
 }
 
 .enm-tools-update-head-row {
     display: flex;
     align-items: center;
-    gap: var(--spacing-sm);
+    gap: var(--sp-2);
     justify-content: space-between;
     flex-wrap: wrap;
 }
 
 .enm-tools-update-head h3 {
-    font-size: 16px;
-    font-weight: var(--font-weight-semibold);
+    font-size: var(--fs-h3);
+    font-weight: var(--fw-semibold);
     color: var(--text-primary);
     margin: 0;
     line-height: 1.3;
+    letter-spacing: -0.01em;
 }
 
 .enm-tools-update-chip {
     display: inline-flex;
     align-items: center;
-    padding: 3px 10px;
-    border-radius: var(--radius-pill);
-    font-size: 11px;
-    font-weight: var(--font-weight-semibold);
-    letter-spacing: 0.05em;
-    background: rgba(60, 60, 67, 0.08);
+    padding: 2px 8px;
+    border-radius: var(--r-xs);
+    font-size: 10px;
+    font-weight: var(--fw-semibold);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    font-family: var(--font-mono);
+    background: var(--bg-tint);
     color: var(--text-secondary);
 }
 .enm-tools-update-chip-patch,
 .enm-tools-update-chip-minor {
-    background: rgba(0, 122, 255, 0.12);
-    color: var(--state-syncing);
+    background: var(--accent-soft);
+    color: var(--accent);
 }
 .enm-tools-update-chip-major {
-    background: rgba(255, 159, 10, 0.14);
-    color: var(--state-stalled);
+    background: var(--warning-bg);
+    color: var(--warning);
 }
 
 /* 0.2.0-alpha.9 — offline / stale source badge in the card heading.
@@ -4826,78 +4831,67 @@ body[data-update-severity="major"] .enm-tech-tabs .enm-tab[data-tab="tools"]::be
    fresh GitHub probe." Tooltips on the element explain why. */
 .enm-tools-update-badge {
     display: inline-block;
-    margin-left: 8px;
+    margin-left: var(--sp-2);
     padding: 2px 8px;
-    border-radius: var(--radius-pill);
-    background: rgba(60, 60, 67, 0.10);
-    color: var(--text-secondary);
+    border-radius: var(--r-xs);
+    background: var(--bg-tint);
+    color: var(--text-tertiary);
     font-size: 10px;
-    font-weight: var(--font-weight-semibold);
+    font-weight: var(--fw-semibold);
     text-transform: uppercase;
-    letter-spacing: 0.06em;
+    letter-spacing: 0.04em;
     vertical-align: middle;
     cursor: help;
 }
 .enm-tools-update-badge-stale {
-    background: rgba(255, 159, 10, 0.10);
-    color: var(--state-stalled);
+    background: var(--warning-bg);
+    color: var(--warning);
 }
 
 .enm-tools-update-versions {
-    font-size: 13px;
+    font-size: var(--fs-caption);
     color: var(--text-secondary);
     margin: 0;
     line-height: 1.5;
 }
 
 .enm-tools-update-versions code {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    background: var(--bg-muted);
-    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+    background: var(--bg-input);
+    border-radius: var(--r-xs);
     padding: 2px 6px;
     color: var(--text-primary);
-    font-size: 12px;
+    font-size: 11px;
 }
 
 .enm-tools-update-when {
-    color: var(--text-muted);
-    font-size: 12px;
+    color: var(--text-tertiary);
+    font-size: var(--fs-caption);
 }
 
 .enm-tools-update-notes {
-    margin-top: var(--spacing-md);
+    margin-top: var(--sp-3);
 }
 
 .enm-tools-update-notes summary {
     cursor: pointer;
-    font-size: 13px;
+    font-size: var(--fs-caption);
     color: var(--text-secondary);
     user-select: none;
 }
 
 .enm-tools-update-notes pre {
-    margin-top: var(--spacing-sm);
+    margin-top: var(--sp-2);
     max-height: 280px;
     overflow: auto;
-    padding: var(--spacing-md);
-    background: var(--bg-muted);
-    border-radius: var(--radius-md);
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 12px;
+    padding: var(--sp-3);
+    background: var(--bg-terminal);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-sm);
+    font-family: var(--font-mono);
+    font-size: var(--fs-caption);
     line-height: 1.5;
     white-space: pre-wrap;
-    color: var(--text-secondary);
-}
-
-.enm-tools-update-action {
-    margin-top: var(--spacing-md);
-    padding-top: var(--spacing-md);
-    border-top: 1px solid var(--border-color);
-}
-
-.enm-tools-update-action p {
-    margin: 0 0 var(--spacing-sm);
-    font-size: 13px;
     color: var(--text-secondary);
 }
 
@@ -4909,13 +4903,19 @@ body[data-update-severity="major"] .enm-tech-tabs .enm-tab[data-tab="tools"]::be
    live inline on the card; clicking the button opens the modal which
    carries the actual command + copy button. */
 .enm-tools-update-action {
-    margin-top: var(--spacing-md);
-    padding-top: var(--spacing-md);
-    border-top: 1px solid var(--border-color);
+    margin-top: var(--sp-3);
+    padding-top: var(--sp-3);
+    border-top: 1px solid var(--border-subtle);
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    gap: 8px;
+    gap: var(--sp-2);
+}
+
+.enm-tools-update-action p {
+    margin: 0 0 var(--sp-2);
+    font-size: var(--fs-caption);
+    color: var(--text-secondary);
 }
 
 .enm-tools-update-btn {
@@ -4924,13 +4924,14 @@ body[data-update-severity="major"] .enm-tech-tabs .enm-tab[data-tab="tools"]::be
 
 .enm-tools-update-action-help {
     margin: 0;
-    font-size: 12px;
-    color: var(--text-muted);
+    font-size: var(--fs-caption);
+    color: var(--text-tertiary);
 }
 
 /* Modal — fullscreen scrim + centred card. Closes on Esc, scrim
-   click, or the × button. Focus-trap is overkill for an alpha;
-   the operator usually closes with Esc anyway. */
+   click, or the × button. Phase 7a v2: matches the proposal modal-card
+   chrome from Phase 6b (scrim 0.65 + 4px blur, card bg-surface +
+   border-strong + r-lg + 0 24px 64px shadow). */
 .enm-tools-update-modal {
     position: fixed;
     inset: 0;
@@ -4943,9 +4944,10 @@ body[data-update-severity="major"] .enm-tech-tabs .enm-tab[data-tab="tools"]::be
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: var(--spacing-md);
-    background: rgba(15, 17, 26, 0.55);
+    padding: var(--sp-4);
+    background: rgba(0, 0, 0, 0.65);
     backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
     animation: enm-modal-fade-in 180ms var(--ease-out);
 }
 
@@ -4959,63 +4961,74 @@ body[data-update-severity="major"] .enm-tech-tabs .enm-tab[data-tab="tools"]::be
     max-width: 560px;
     /* alpha.24: % of iframe (modal parent is position: fixed inset: 0
        inside iframe), not vh of outer browser viewport. */
-    max-height: 80%;
+    max-height: calc(100% - 40px);
     overflow-y: auto;
     background: var(--bg-surface);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-md);
-    padding: var(--spacing-lg);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-lg);
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
+    padding: var(--sp-5);
     position: relative;
 }
 
 .enm-tools-update-modal-card h2 {
-    margin: 0 0 var(--spacing-sm);
-    font-size: 18px;
+    margin: 0 0 var(--sp-2);
+    font-size: var(--fs-h2);
     color: var(--text-primary);
-    font-weight: var(--font-weight-semibold);
+    font-weight: var(--fw-semibold);
     letter-spacing: -0.01em;
 }
 .enm-tools-update-modal-card h2 code {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    background: var(--bg-muted);
-    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+    background: var(--bg-input);
+    border-radius: var(--r-xs);
     padding: 2px 6px;
-    font-size: 15px;
-    color: var(--state-syncing);
+    font-size: 14px;
+    color: var(--accent);
 }
 
 .enm-tools-update-modal-card p {
-    margin: 0 0 var(--spacing-sm);
-    font-size: 13px;
+    margin: 0 0 var(--sp-2);
+    font-size: var(--fs-caption);
     color: var(--text-secondary);
-    line-height: 1.5;
+    line-height: 1.55;
 }
 
 .enm-tools-update-modal-close {
     position: absolute;
     top: 12px;
     right: 12px;
+    /* WCAG 2.5.5 AA — 32×32 was the alpha.10 value and remains compliant
+       (above 24×24). v2 mock uses smaller dismiss but we keep this size
+       because the modal is rarely-opened and benefits from a larger hit
+       target. */
     width: 32px;
     height: 32px;
     border: none;
     background: transparent;
-    color: var(--text-muted);
-    font-size: 20px;
+    color: var(--text-tertiary);
+    font-size: 18px;
     cursor: pointer;
-    border-radius: var(--radius-sm);
+    border-radius: var(--r-xs);
     line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 }
-.enm-tools-update-modal-close:hover { color: var(--text-primary); background: var(--bg-muted); }
+.enm-tools-update-modal-close:hover {
+    color: var(--text-primary);
+    background: var(--bg-elevated);
+}
 
 .enm-tools-update-modal-cmd {
-    margin: 0 0 var(--spacing-md);
-    padding: var(--spacing-sm) var(--spacing-md);
-    background: var(--bg-code);
-    color: #f8fafc;
-    border-radius: var(--radius-md);
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 12px;
+    margin: 0 0 var(--sp-3);
+    padding: var(--sp-2) var(--sp-3);
+    background: var(--bg-terminal);
+    color: var(--text-primary);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-sm);
+    font-family: var(--font-mono);
+    font-size: var(--fs-caption);
     line-height: 1.6;
     overflow-x: auto;
     white-space: pre-wrap;
@@ -5024,38 +5037,38 @@ body[data-update-severity="major"] .enm-tech-tabs .enm-tab[data-tab="tools"]::be
 
 .enm-tools-update-modal-actions {
     display: flex;
-    gap: var(--spacing-sm);
+    gap: var(--sp-2);
     flex-wrap: wrap;
-    margin-bottom: var(--spacing-md);
+    margin-bottom: var(--sp-3);
 }
 
 .enm-tools-update-modal-notes {
-    font-size: 12px;
-    color: var(--text-muted);
-    border-top: 1px solid var(--border-color);
-    padding-top: var(--spacing-md);
+    font-size: var(--fs-caption);
+    color: var(--text-tertiary);
+    border-top: 1px solid var(--border-subtle);
+    padding-top: var(--sp-3);
 }
 .enm-tools-update-modal-notes summary {
     cursor: pointer;
     color: var(--text-secondary);
-    font-weight: var(--font-weight-medium);
-    margin-bottom: var(--spacing-sm);
+    font-weight: var(--fw-medium);
+    margin-bottom: var(--sp-2);
 }
 .enm-tools-update-modal-notes ul {
-    margin: 0 0 var(--spacing-sm);
-    padding-left: var(--spacing-lg);
+    margin: 0 0 var(--sp-2);
+    padding-left: var(--sp-4);
     line-height: 1.6;
 }
 .enm-tools-update-modal-notes code {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    background: var(--bg-muted);
-    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+    background: var(--bg-input);
+    border-radius: var(--r-xs);
     padding: 1px 5px;
     font-size: 11px;
     color: var(--text-primary);
 }
 .enm-tools-update-modal-notes a {
-    color: var(--state-syncing);
+    color: var(--accent);
     word-break: break-all;
 }
 
