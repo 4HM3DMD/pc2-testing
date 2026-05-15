@@ -374,82 +374,63 @@
      * @private
      */
     BposCard.prototype._renderActive = function () {
+        var t = root.enmTOrFallback;
         var titleId = this._titleId;
         var chipId  = this._chipId;
 
+        // beta.3.40 — aligned to enm-design-mocks/v2/phase-03-status.html
+        // variant C: head + 2-cell grid + note. The pre-3.40 6-cell stats
+        // grid (rank/votes/dposv2/inactive/deposit/rewards/vote-threshold)
+        // duplicated information already shown in the chip (rank) and
+        // surfaced data the mock explicitly delegates to Essentials
+        // (deposit/rewards/voting). The mock keeps the dashboard card
+        // intentionally minimal.
         this.root.innerHTML = ''
             + '<div class="enm-bpos-head">'
-                + '<div class="enm-bpos-head-icon success" aria-hidden="true">'
-                    + '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" '
-                        + 'stroke="currentColor" stroke-width="2.4" stroke-linecap="round" '
-                        + 'stroke-linejoin="round">'
-                        + '<polyline points="20 6 9 17 4 12"></polyline>'
+                + '<div class="enm-bpos-head-icon" aria-hidden="true">'
+                    + '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" '
+                        + 'stroke="currentColor" stroke-width="1.4" stroke-linejoin="round">'
+                        + '<polygon points="12 3 21 12 12 21 3 12"></polygon>'
                     + '</svg>'
                 + '</div>'
                 + '<div class="enm-bpos-head-body">'
                     + '<div class="enm-bpos-head-title" id="' + escapeAttr(titleId) + '">'
-                        + 'BPoS supernode'
+                        + escapeHtml(t('bpos_card.head_title_active'))
                     + '</div>'
                     + '<div class="enm-bpos-head-sub">'
-                        + 'On-chain producer record derived from this node’s signing key.'
+                        + escapeHtml(t('bpos_card.head_sub_active'))
                     + '</div>'
                 + '</div>'
-                // 0.2.0-beta.3.7 — chip text now shows rank when known
-                // ("Active · Rank #42" per phase-03 mock variant C).
-                // _fillActiveStats below replaces the inner text every
-                // poll so rank stays current.
+                // Chip text gets replaced every poll by _fillActiveStats
+                // so rank stays current. Initial label is "Active".
                 + '<span class="enm-bpos-head-chip" id="' + escapeAttr(chipId) + '" '
                     + 'role="status" aria-live="polite">'
-                    + 'Active'
+                    + escapeHtml(t('bpos_card.chip_active'))
                 + '</span>'
             + '</div>'
-            // 0.2.0-beta.3.7 + .8 — phase-03 mock variant C: .bpos-grid
-            // showing the most-actionable producer stats. /producer
-            // exposes rank, votes, dposv2votes, inactiveRounds, AND
-            // (since beta.3.8) depositLockedEla + recentRewardsEla.
-            // The cells gracefully show "—" when a field is null —
-            // pre-beta.3.8 chains, or older ela RPC versions, may not
-            // expose deposit/rewards. CSS keeps 2 cols on wide and
-            // collapses to 1 col on narrow.
+            // Mock variant C grid: two stats with metadata sub-labels.
+            //   Votes        — total community votes (Current snapshot)
+            //   Inactive rounds — N / 1440 + slashing-risk meta
             + '<div class="enm-bpos-grid">'
-                + '<div class="enm-bpos-stat" data-stat="rank">'
-                    + '<div class="enm-bpos-stat-label">Rank</div>'
-                    + '<div class="enm-bpos-stat-value" data-fill="rank">—</div>'
-                + '</div>'
                 + '<div class="enm-bpos-stat" data-stat="votes">'
-                    + '<div class="enm-bpos-stat-label">Votes</div>'
+                    + '<div class="enm-bpos-stat-label">' + escapeHtml(t('bpos_card.stat_votes')) + '</div>'
                     + '<div class="enm-bpos-stat-value" data-fill="votes">—</div>'
-                + '</div>'
-                + '<div class="enm-bpos-stat" data-stat="dposv2votes">'
-                    + '<div class="enm-bpos-stat-label">DPoSv2 votes</div>'
-                    + '<div class="enm-bpos-stat-value" data-fill="dposv2votes">—</div>'
+                    + '<div class="enm-bpos-stat-meta">' + escapeHtml(t('bpos_card.stat_votes_meta')) + '</div>'
                 + '</div>'
                 + '<div class="enm-bpos-stat" data-stat="inactiveRounds">'
-                    + '<div class="enm-bpos-stat-label">Inactive rounds</div>'
-                    + '<div class="enm-bpos-stat-value" data-fill="inactiveRounds">—</div>'
-                + '</div>'
-                + '<div class="enm-bpos-stat" data-stat="deposit">'
-                    + '<div class="enm-bpos-stat-label">Deposit</div>'
-                    + '<div class="enm-bpos-stat-value" data-fill="deposit">—</div>'
-                + '</div>'
-                + '<div class="enm-bpos-stat" data-stat="rewards">'
-                    + '<div class="enm-bpos-stat-label">Recent rewards</div>'
-                    + '<div class="enm-bpos-stat-value" data-fill="rewards">—</div>'
+                    + '<div class="enm-bpos-stat-label">' + escapeHtml(t('bpos_card.stat_inactive_rounds')) + '</div>'
+                    + '<div class="enm-bpos-stat-value"><span data-fill="inactiveRounds">—</span><span class="enm-bpos-stat-value-suffix"> / 1440</span></div>'
+                    + '<div class="enm-bpos-stat-meta" data-fill="inactiveRoundsMeta">' + escapeHtml(t('bpos_card.stat_inactive_rounds_meta_safe')) + '</div>'
                 + '</div>'
             + '</div>'
-            // 0.2.0-beta.3.12 — vote-threshold notice. Elastos consensus
-            // requires ≥ 80,000 votes for a producer to enter the arbiter
-            // set; below that, no rotation slot is possible regardless of
-            // rank. Pre-beta.3.12 operators registered with low votes
-            // wondered why they never went on-duty. _fillActiveStats
-            // populates this <div> conditionally — `hidden` by default so
-            // the dashboard is clean for ≥ 80K producers.
-            + '<div class="enm-bpos-vote-threshold" data-fill="voteThreshold" hidden></div>'
+            // beta.3.40 — dropped the .enm-bpos-vote-threshold sub-notice.
+            // The mock keeps variant C minimal (votes + inactive rounds +
+            // note); the "below 80K votes can't go on-duty" hint will
+            // live in the Essentials guide instead of cluttering the
+            // dashboard card. _fillActiveStats no longer touches a
+            // voteThreshold slot.
             + '<div class="enm-bpos-note">'
-                + '<b>Rewards and voting are managed in Elastos Essentials.</b> '
-                + 'ENM tracks on-chain producer status here; claim, stake, '
-                + 'and update operations require a signed transaction from '
-                + 'your wallet.'
+                + escapeHtml(t('bpos_card.note_active'))
             + '</div>';
 
         // First fill from the cached producer record. Subsequent polls
@@ -467,15 +448,16 @@
      */
     BposCard.prototype._fillActiveStats = function (producer) {
         if (!producer) { return; }
+        var t = root.enmTOrFallback;
         var chip = this.root.querySelector('#' + this._chipId);
         if (chip) {
             // Chip text: "Active · Rank #N" if rank known, else "Active".
             // Mock variant C shows "Active · Rank #42".
-            var chipText = 'Active';
             if (producer.rank != null && producer.rank > 0) {
-                chipText += ' · Rank #' + producer.rank;
+                chip.textContent = t('bpos_card.chip_active_rank', { rank: producer.rank });
+            } else {
+                chip.textContent = t('bpos_card.chip_active');
             }
-            chip.textContent = chipText;
         }
         function fmt(n) {
             if (n == null || !isFinite(n)) { return '—'; }
@@ -484,44 +466,31 @@
             }
             return String(n);
         }
-        // 0.2.0-beta.3.8 — ELA-amount formatter. Backend ships deposit/
-        // rewards as decimal-string ELA (avoids float precision loss
-        // on big stakes); we trim trailing zeros + suffix the unit
-        // for the chip-sized cell. "5000.00000000" → "5,000 ELA",
-        // "0.0123" → "0.0123 ELA", null/empty → "—".
-        function fmtEla(s) {
-            if (s == null) { return '—'; }
-            var n = (typeof s === 'string') ? parseFloat(s) : Number(s);
-            if (!isFinite(n) || isNaN(n)) { return '—'; }
-            // Whole numbers: show as integer with thousands separator.
-            // Fractions: keep up to 4 decimals, strip trailing zeros.
-            var formatted;
-            if (Math.abs(n - Math.round(n)) < 1e-9) {
-                formatted = fmt(Math.round(n));
-            } else {
-                formatted = n.toFixed(4).replace(/\.?0+$/, '');
-            }
-            return formatted + ' ELA';
-        }
+        // beta.3.40 — mock variant C uses BPoS votes total (post-fork).
+        // Pre-3.40 we showed split DPoSv1/v2 — operator told us DPoS v1 is
+        // noise on the BPoS-only dashboard. Sum both buckets into one
+        // "Votes" cell so the operator sees the total relevant to
+        // arbiter-set eligibility (≥80K).
+        var v1 = (typeof producer.votes === 'number') ? producer.votes : 0;
+        var v2 = (typeof producer.dposv2votes === 'number') ? producer.dposv2votes : 0;
+        var totalVotes = v1 + v2;
+        var inactive = (producer.inactiveRounds != null) ? producer.inactiveRounds : 0;
+        // Slashing risk band — mock variant C says "No slashing risk"
+        // when inactive rounds are well below 1440. Above ~720 (half-way)
+        // we warn so the operator can investigate before slashing fires.
+        var WARN_AT = 720;
+        var inactiveMetaKey = (inactive >= WARN_AT)
+            ? 'bpos_card.stat_inactive_rounds_meta_warn'
+            : 'bpos_card.stat_inactive_rounds_meta_safe';
+
         var fillers = {
-            rank:           (producer.rank != null && producer.rank > 0) ? '#' + producer.rank : '—',
-            votes:          fmt(producer.votes),
-            dposv2votes:    fmt(producer.dposv2votes),
-            inactiveRounds: (producer.inactiveRounds != null) ? fmt(producer.inactiveRounds) : '0',
-            deposit:        fmtEla(producer.depositLockedEla),
-            rewards:        fmtEla(producer.recentRewardsEla),
+            votes:               fmt(totalVotes),
+            inactiveRounds:      fmt(inactive),
+            inactiveRoundsMeta:  t(inactiveMetaKey),
         };
         var nodes = this.root.querySelectorAll('[data-fill]');
         for (var i = 0; i < nodes.length; i += 1) {
             var key = nodes[i].getAttribute('data-fill');
-            // 0.2.0-beta.3.12 — vote threshold needs richer HTML (icon +
-            // two-line message) so we handle it separately instead of a
-            // plain textContent fill. The other stats stay textContent-
-            // only since they're scalar values.
-            if (key === 'voteThreshold') {
-                this._renderVoteThreshold(nodes[i], producer);
-                continue;
-            }
             if (fillers[key] !== undefined) {
                 nodes[i].textContent = fillers[key];
             }
@@ -598,16 +567,15 @@
 
         this.root.innerHTML = ''
             + '<div class="enm-bpos-head">'
-                // 0.2.0-beta.3.6 — phase-03 mock spec for the BPoS card
-                // icon is ◆ diamond (signifies the BPoS supernode role,
-                // matches the mock's .bpos-icon { font-size: 18px } with
-                // the diamond glyph). Pre-beta.3.6 emitted a lightning
-                // bolt SVG that didn't match. Diamond is rotated square
-                // SVG so it scales clean at all DPRs (text glyph would
-                // depend on a font that may not be loaded yet).
-                + '<div class="enm-bpos-head-icon" aria-hidden="true">'
-                    + '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" '
-                        + 'stroke="currentColor" stroke-width="1.4" stroke-linejoin="round">'
+                // beta.3.40 — mock variant D uses a HOLLOW ◇ diamond with
+                // warning palette (var(--warning-bg) + var(--warning))
+                // rather than the solid accent ◆ used for variant C. The
+                // CSS modifier .enm-bpos-head-icon-warn flips both
+                // background and color tokens; the inner SVG sets
+                // fill="none" so only the stroke is visible.
+                + '<div class="enm-bpos-head-icon enm-bpos-head-icon-warn" aria-hidden="true">'
+                    + '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" '
+                        + 'stroke="currentColor" stroke-width="1.6" stroke-linejoin="round">'
                         + '<polygon points="12 3 21 12 12 21 3 12"></polygon>'
                     + '</svg>'
                 + '</div>'
@@ -619,42 +587,45 @@
                         + escapeHtml(t('bpos_card.head_sub_register'))
                     + '</div>'
                 + '</div>'
-                // aria-live=polite — when the chip text changes (A → B),
-                // screen readers announce the transition without
-                // interrupting the operator. Stays polite (not assertive)
-                // because the change is a confirmation, not an emergency.
                 + '<span class="enm-bpos-head-chip warn" id="' + escapeAttr(chipId) + '" '
                     + 'role="status" aria-live="polite">'
                     + escapeHtml(t('bpos_card.chip_action_required'))
                 + '</span>'
             + '</div>'
 
+            // beta.3.40 — mock variant D structure: a single
+            // .enm-bpos-cta-card with the prompt + two buttons (Primary
+            // "View registration guide", secondary "Copy node public
+            // key"). The pubkey moves INTO the .enm-bpos-note as a
+            // labelled code block. Pre-3.40 we had three separate
+            // elements (cta-row, signing-key block, note); the mock
+            // collapses them into two for a cleaner visual hierarchy.
             + '<div class="enm-bpos-cta-card">'
                 + '<p class="enm-bpos-cta-help">'
                     + escapeHtml(t('bpos_card.cta_help_register'))
                 + '</p>'
                 + '<div class="enm-bpos-cta-row">'
-                    // Copy-pubkey button — replaced post-render with the
-                    // enmCopyButton factory so we inherit the aria-hidden
-                    // visible-span pattern + clipboard fallback.
-                    + '<span class="enm-bpos-copy-slot"></span>'
                     + '<button type="button" '
-                        + 'class="enm-btn enm-bpos-open-essentials">'
-                        + escapeHtml(t('bpos_card.open_essentials_btn'))
+                        + 'class="enm-btn enm-btn-primary enm-bpos-open-essentials">'
+                        + escapeHtml(t('bpos_card.view_guide_btn'))
                     + '</button>'
-                + '</div>'
-                + '<div class="enm-bpos-signing-key">'
-                    + '<div class="enm-bpos-signing-key-label">'
-                        + escapeHtml(t('bpos_card.signing_key_label'))
-                    + '</div>'
-                    + '<pre class="enm-bpos-signing-key-value" id="enm-bpos-pubkey">'
-                        + escapeHtml(t('common.loading'))
-                    + '</pre>'
+                    // Copy-pubkey button replaced post-render with the
+                    // enmCopyButton factory (aria-hidden visible-span
+                    // pattern + clipboard fallback).
+                    + '<span class="enm-bpos-copy-slot"></span>'
                 + '</div>'
             + '</div>'
 
-            + '<div class="enm-bpos-note">'
-                + escapeHtml(t('bpos_card.note_after_confirm'))
+            + '<div class="enm-bpos-note enm-bpos-note-pubkey">'
+                + '<div class="enm-bpos-note-label">'
+                    + escapeHtml(t('bpos_card.signing_key_label'))
+                + '</div>'
+                + '<pre class="enm-bpos-signing-key-value" id="enm-bpos-pubkey">'
+                    + escapeHtml(t('common.loading'))
+                + '</pre>'
+                + '<div class="enm-bpos-note-body">'
+                    + escapeHtml(t('bpos_card.note_after_confirm'))
+                + '</div>'
             + '</div>';
 
         // Replace the copy slot with the enmCopyButton factory. The
@@ -679,14 +650,17 @@
                 failTitle:    root.enmTOrFallback('bpos_card.copy_fail_title'),
                 failBody:     root.enmTOrFallback('bpos_card.copy_fail_body'),
                 getDisplayEl: function () { return pubkeyEl; },
-                className:    'enm-btn-primary enm-bpos-copy-pubkey',
+                // beta.3.40 — secondary button (not primary). Mock D's
+                // primary action is "View registration guide"; the copy
+                // is a follow-up tool, not the headline CTA.
+                className:    'enm-bpos-copy-pubkey',
             });
         } else {
             // Defensive — utils.js failed to load. Provide a minimal
             // button so the card is still functional.
             copyBtn = document.createElement('button');
             copyBtn.type = 'button';
-            copyBtn.className = 'enm-btn enm-btn-primary enm-bpos-copy-pubkey';
+            copyBtn.className = 'enm-btn enm-bpos-copy-pubkey';
             copyBtn.textContent = root.enmTOrFallback('bpos_card.copy_pubkey_btn');
             copyBtn.addEventListener('click', function () {
                 var value = self._lastPubkey || (pubkeyEl && pubkeyEl.textContent) || '';

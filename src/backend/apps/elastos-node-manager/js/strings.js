@@ -776,6 +776,62 @@
             danger_nuke_queued:             '✓ Nuclear wipe queued. ENM and all its data will be removed shortly.',
         },
 
+        // beta.3.40 — Dashboard BPoS supernode card. Two visual variants
+        // matching enm-design-mocks/v2/phase-03-status.html C (active,
+        // "bound to this node's signing key") and D (not registered, "no
+        // on-chain producer record matches this node's signing key").
+        // Pre-3.40 these keys didn't exist in strings.js and validator-
+        // registration-card.js was rendering bracketed placeholders.
+        bpos_card: {
+            // Variant D (not registered).
+            head_title_register:        'BPoS supernode: not yet registered',
+            head_sub_register:          'No on-chain producer record matches this node’s signing key.',
+            chip_action_required:       'Action needed',
+            cta_help_register:          'To start producing blocks and earn rewards, register your validator from your Elastos Essentials wallet. ENM will detect the on-chain record once confirmed and start tracking state automatically.',
+            view_guide_btn:             'View registration guide',
+            copy_pubkey_btn:            'Copy node public key',
+            copy_aria:                  'Copy node public key',
+            copied:                     'Copied!',
+            copy_fail_title:            'Copy unavailable',
+            copy_fail_body:             'Browser blocked clipboard access. The key is selected — press Ctrl-C (or ⌘-C on Mac) to copy.',
+            signing_key_label:          'This node’s signing key',
+            note_after_confirm:         'Paste this into the Producer Registration form in Essentials.',
+            open_essentials_btn:        'View registration guide',
+
+            // Variant C (active).
+            head_title_active:          'BPoS supernode',
+            head_sub_active:            'On-chain producer record bound to this node’s signing key.',
+            head_sub_active_narrow:     'Bound to your wallet',
+            chip_active:                'Active',
+            chip_active_rank:           'Active · Rank #{rank}',
+            stat_votes:                 'Votes',
+            stat_votes_meta:            'Current snapshot',
+            stat_inactive_rounds:       'Inactive rounds',
+            stat_inactive_rounds_meta_safe: 'No slashing risk',
+            stat_inactive_rounds_meta_warn: 'Near slashing threshold',
+            note_active:                'Rewards and voting are managed in Elastos Essentials. ENM tracks on-chain producer status; claim, stake, and update operations require a signed transaction from your wallet.',
+
+            // Variant B (needs activation). The render path uses
+            // head_title_activation / head_sub_activation as key names;
+            // duplicated under needs_activation_* aliases for clarity.
+            head_title_activation:      'BPoS supernode: ready to activate',
+            head_sub_activation:        'On-chain producer record found. Activate to start signing blocks.',
+            head_title_needs_activation:'BPoS supernode: ready to activate',
+            head_sub_needs_activation:  'On-chain producer record found. Activate to start signing blocks.',
+            chip_ready_to_activate:     'Ready to activate',
+            activate_btn:               'Activate supernode',
+            activate_btn_running:       'Activating…',
+            activate_ok_title:          'Activation submitted',
+            activate_ok_body:           'Wait a block or two for chain confirmation.',
+
+            // Deep-link guide modal copy (variant D's "View registration
+            // guide" button). Until the Essentials deep-link integration
+            // lands, the button surfaces a notifications.info with
+            // step-by-step instructions.
+            essentials_guide_title:     'Register your supernode in Elastos Essentials',
+            essentials_guide_body:      'Open Elastos Essentials → Wallet → Voting → BPoS supernodes → "Register as new supernode". Paste this node’s public key into the Node Public Key field, sign with the wallet that holds the 2,000 ELA deposit, then wait ~6 blocks (about 12 minutes) for chain confirmation.',
+        },
+
         validator_card: {
             eyebrow:    'Next step',
             title:      'Register as a BPoS validator',

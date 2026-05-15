@@ -4148,6 +4148,14 @@ body[data-app-size="compact"] .enm-role-card-badge-short,
     background: var(--success-bg);
     color: var(--success);
 }
+/* beta.3.40 — warning variant of the BPoS head icon. Used by Variant D
+ * (not-yet-registered) per the mock: hollow ◇ glyph (SVG sets fill:none),
+ * --warning palette so the operator's eye lands on it as an
+ * action-needed surface. */
+.enm-bpos-head-icon-warn {
+    background: var(--warning-bg);
+    color: var(--warning);
+}
 .enm-bpos-head-body {
     flex: 1;
     min-width: 0;
@@ -4237,6 +4245,57 @@ body[data-app-size="compact"] .enm-role-card-badge-short,
     background: var(--bg-elevated);
     padding: var(--sp-2) var(--sp-3);
     border-radius: 0 var(--r-sm) var(--r-sm) 0;
+}
+
+/* beta.3.40 — variant D's pubkey-bearing note. Carries a label, a
+ * monospace pre with the signing key, and a one-line body
+ * underneath. Slightly taller padding than the default .enm-bpos-note
+ * so the three sub-elements breathe. */
+.enm-bpos-note-pubkey {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+    padding: var(--sp-3) var(--sp-4);
+}
+.enm-bpos-note-pubkey .enm-bpos-note-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: var(--fw-semibold);
+    color: var(--text-tertiary);
+}
+.enm-bpos-note-pubkey .enm-bpos-signing-key-value {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-primary);
+    word-break: break-all;
+    white-space: pre-wrap;
+    margin: 0;
+    line-height: 1.55;
+    padding: var(--sp-2);
+    background: var(--bg-terminal);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-xs);
+}
+.enm-bpos-note-pubkey .enm-bpos-note-body {
+    font-size: var(--fs-caption);
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+
+/* beta.3.40 — variant C's stats grid uses meta sub-labels under the
+ * value (e.g. "Current snapshot" / "No slashing risk"). Stack inside
+ * each stat cell. */
+.enm-bpos-stat-meta {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    line-height: 1.4;
+    margin-top: 2px;
+}
+.enm-bpos-stat-value-suffix {
+    font-size: var(--fs-caption);
+    color: var(--text-tertiary);
+    font-weight: var(--fw-medium);
 }
 
 /* 0.2.0-beta.3.12 — BPoS vote-threshold notice. Elastos consensus
