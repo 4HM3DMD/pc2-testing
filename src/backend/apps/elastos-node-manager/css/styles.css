@@ -4813,6 +4813,122 @@ body[data-app-size="compact"] .enm-bpos-head-chip,
 }
 
 /* ============================================================================
+ * Setup wizard — Card C keystore password reveal (beta.3.38)
+ *
+ * Pre-beta.3.38 the password reveal used raw <code> + a Copy button with no
+ * styling at all — looked unfinished and the password got visually truncated
+ * because <code> defaults to inline rendering. Replaced with a structured
+ * card-style block + a prominent warning callout above it so the operator
+ * can't miss "this is shown once".
+ * ============================================================================ */
+
+.enm-password-warning {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--sp-3);
+    padding: var(--sp-3) var(--sp-4);
+    background: var(--warning-bg);
+    border: 1px solid var(--warning-soft);
+    border-left: 4px solid var(--warning);
+    border-radius: var(--r-md);
+    color: var(--text-primary);
+    font-size: var(--fs-body);
+    line-height: 1.5;
+}
+.enm-password-warning-icon {
+    flex: 0 0 auto;
+    font-size: 18px;
+    line-height: 1.2;
+    color: var(--warning);
+}
+.enm-password-warning-body {
+    flex: 1;
+    min-width: 0;
+}
+
+.enm-password-reveal {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-md);
+    padding: var(--sp-4);
+}
+.enm-password-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-tertiary);
+    font-weight: var(--fw-medium);
+}
+.enm-password-value {
+    display: block;
+    width: 100%;
+    font-family: var(--font-mono);
+    font-size: var(--fs-body);
+    color: var(--text-primary);
+    background: var(--bg-input);
+    border: 1px solid var(--border-color);
+    border-radius: var(--r-sm);
+    padding: var(--sp-3);
+    word-break: break-all;
+    line-height: 1.45;
+    user-select: all;  /* one-click to select the whole password */
+}
+.enm-password-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--sp-2);
+    flex-wrap: wrap;
+}
+.enm-password-copy {
+    padding: 6px 14px;
+    border-radius: var(--r-sm);
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    font-family: inherit;
+    font-size: var(--fs-caption);
+    font-weight: var(--fw-medium);
+    cursor: pointer;
+    transition: background 120ms ease, border-color 120ms ease;
+}
+.enm-password-copy:hover {
+    background: var(--bg-overlay);
+    border-color: var(--border-strong);
+}
+.enm-password-copy:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+/* Acknowledgement checkbox — Card C's "I've saved it somewhere safe" gate.
+ * Previously inheriting browser defaults; now styled to match the rest of
+ * the wizard's form-control look. */
+.enm-conv-checkbox {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    color: var(--text-primary);
+    font-size: var(--fs-body);
+    cursor: pointer;
+    padding: var(--sp-2) 0;
+    user-select: none;
+}
+.enm-conv-checkbox input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--accent);
+    cursor: pointer;
+    flex-shrink: 0;
+}
+.enm-conv-checkbox span {
+    flex: 1;
+    line-height: 1.5;
+}
+
+/* ============================================================================
  * Settings → Danger Zone (beta.3.33)
  *
  * Reuses ENM design tokens end-to-end so the section reads "on-brand"

@@ -1108,10 +1108,26 @@
         var self = this;
         els.title.textContent = t('friendly.setup.card_c.title_generated');
         els.sub.textContent   = t('friendly.setup.card_c.sub_generated');
+        // beta.3.38 — added a structured layout: prominent warning callout
+        // above the password block so the operator can't miss the "won't
+        // be shown again" consequence, then a full-width monospace block
+        // for the password value with the copy button in its own row
+        // (was inline + truncated visually next to the value).
         els.reveal.innerHTML =
-            '<div class="enm-password-reveal">'
+            '<div class="enm-password-warning" role="alert">'
+              + '<span class="enm-password-warning-icon" aria-hidden="true">⚠</span>'
+              + '<span class="enm-password-warning-body">'
+                + escapeHtml(t('friendly.setup.card_c.warning'))
+              + '</span>'
+            + '</div>'
+            + '<div class="enm-password-reveal">'
+              + '<div class="enm-password-label">'
+                + escapeHtml(t('friendly.setup.card_c.password_label'))
+              + '</div>'
               + '<code class="enm-password-value">' + escapeHtml(password) + '</code>'
-              + '<span class="enm-password-copy-slot"></span>'
+              + '<div class="enm-password-actions">'
+                + '<span class="enm-password-copy-slot"></span>'
+              + '</div>'
             + '</div>'
             + '<label class="enm-conv-checkbox">'
               + '<input type="checkbox" id="enm-wiz-c-ack"/>'

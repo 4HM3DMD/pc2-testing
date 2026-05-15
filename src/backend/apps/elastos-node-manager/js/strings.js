@@ -146,7 +146,12 @@
                     title_initial:    'Save your secret password',
                     title_generated:  '🔑 Here is your secret password',
                     sub_initial:      "We'll generate a strong password for you. It protects your earnings.",
-                    sub_generated:    'Save it somewhere safe — a password manager is best. We won\'t be able to show it again.',
+                    sub_generated:    "We just generated a strong password that unlocks the keystore signing your DPoS rounds. Save it before continuing.",
+                    // beta.3.38 — explicit warning callout above the password
+                    // block + a row label so the operator's eye lands on the
+                    // value, not on the surrounding chrome.
+                    warning:          "This password is shown ONCE. If you lose it, you can't recover the keystore — you'd have to re-register the supernode from scratch. A password manager is the safest place.",
+                    password_label:   'Password',
                     cta_generate:     'Generate my password',
                     cta_continue:     'Continue',
                     cta_copy:         'Copy',
