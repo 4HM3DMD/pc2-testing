@@ -515,11 +515,14 @@ function detectF18(snap) {
             ruleId: 'F18',
             tier: HEALING_TIERS.CRITICAL_NOTIFY,
             severity: 'CRITICAL',
-            summaryAction: `${snap.chainId}: no inbound peers — NAT/firewall blocking?`,
+            summaryAction: `${snap.chainId}: no inbound peers — firewall blocking 20338/20339?`,
             summaryReason:
                 'Outbound peers > 0 but inbound = 0. BPoS requires inbound on P2P (20338) '
-                + 'and DPoS p2p (20339) ports to receive consensus messages. Forward those '
-                + 'ports on your router or enable UPnP. Missed votes accumulate silently.',
+                + 'and DPoS p2p (20339) to receive consensus messages. On a hosted VPS the '
+                + 'usual cause is the host firewall: run `sudo ufw allow 20338/tcp && '
+                + 'sudo ufw allow 20339/tcp` (verified fix on srv832310, 2026-05-15). At '
+                + 'home behind a router: forward those ports or enable UPnP. Either way, '
+                + 'missed votes accumulate silently.',
             payload: {
                 action: 'nat-forward',
                 chainId: snap.chainId,
@@ -532,14 +535,14 @@ function detectF18(snap) {
         ruleId: 'F18',
         tier: HEALING_TIERS.OWNER_CONFIRMS,
         severity: 'INFO',
-        summaryAction: `${snap.chainId}: no inbound peers (cloud firewall blocking)`,
+        summaryAction: `${snap.chainId}: no inbound peers (firewall blocking 20338/20339)`,
         summaryReason:
-            'Your node has outbound peers but isn’t reachable from the network. This is '
-            + 'normal for a hosted VM with default firewall rules — you’re only learning '
-            + 'about chain state from peers you reached, not ones reaching to you. Fine '
-            + 'for a follower / observer node. If you ever register as a BPoS supernode, '
-            + 'you’ll need to open ports 20338 (P2P) and 20339 (DPoS p2p) on your hoster’s '
-            + 'firewall, otherwise you’ll silently miss votes.',
+            'Your node has outbound peers but isn’t reachable from the network. Common '
+            + 'cause on a hosted VPS: host firewall (UFW) is active and doesn’t allow '
+            + '20338 / 20339 inbound. Quick check: `sudo ufw status verbose` — if active '
+            + 'and the chain ports aren’t in the allow list, run `sudo ufw allow 20338/tcp '
+            + '&& sudo ufw allow 20339/tcp`. Otherwise harmless for a follower node, but '
+            + 'mandatory before you register as a BPoS supernode.',
         payload: {
             action: 'nat-forward-info',
             chainId: snap.chainId,
