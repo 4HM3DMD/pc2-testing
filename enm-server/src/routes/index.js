@@ -38,6 +38,8 @@ const healingRouter = require('./healing');
 const auditRouter = require('./audit');
 const configRouter = require('./config');
 const updatesRouter = require('./updates');
+// beta.3.33 — Settings → Danger Zone backend.
+const maintenanceRouter = require('./maintenance');
 const ChainRegistry = require('../services/ChainRegistry');
 
 /**
@@ -117,6 +119,8 @@ function mountRoutes(app, extensionHandle) {
         engine: lazyEngine(extensionHandle),
     }));
     api.use('/audit', auditRouter.build({ extensionHandle, getDb }));
+    // beta.3.33 — Settings → Danger Zone.
+    api.use('/maintenance', maintenanceRouter.build({ extensionHandle, getDb }));
 
     app.use(ENM_API_PREFIX, api);
 

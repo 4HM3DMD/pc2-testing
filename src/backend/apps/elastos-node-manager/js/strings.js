@@ -719,6 +719,56 @@
             healing_tier_owner:           'owner',
             healing_tier_critical:        'critical',
             healing_tier_manual:          'manual',
+
+            // beta.3.33 — Danger Zone. Four destructive actions backed
+            // by /api/enm/maintenance/*. The copy here is operator-
+            // facing: short labels on buttons, longer explanations in
+            // help text so an operator pressed for time can scan the
+            // titles, and one who's about to type the confirmation
+            // word has the consequences in front of them.
+            heading_danger:                 'Danger Zone',
+            danger_intro:                   'Destructive actions. Each one has a typed-confirmation gate. There is no undo.',
+
+            // Update card (least destructive — top of section).
+            danger_update_title:            'Update ENM',
+            danger_update_help:             'Install the latest ENM extension from GitHub. Your chain data, keystore, and settings are preserved — only the extension code is replaced. The chain restarts after the new version comes up.',
+            danger_update_current_label:    'Current',
+            danger_update_latest_label:     'Latest available',
+            danger_update_btn:              'Update now',
+            danger_update_uptodate:         'You are running the latest version.',
+            danger_update_available:        'A newer version is available.',
+            danger_update_error:            'Update check failed:',
+            danger_update_confirm_dialog:   'Install the latest ENM version? The chain will restart automatically and may briefly disconnect.',
+            danger_update_in_progress:      'Update in progress — ENM will restart in a few seconds…',
+            danger_update_queued:           '✓ Update queued. Reload this page after ~30 seconds to see the new version.',
+
+            // Chain resync card.
+            danger_resync_title:            'Chain resync (keep keystore)',
+            danger_resync_help:             'Wipe the chain database and re-sync from the network. Your keystore and settings are preserved. Use this if the chain is stuck, corrupted, or stuck on a forked tip. A re-sync from genesis can take 4–8 hours.',
+            danger_resync_confirm_label:    'Type the chain name to confirm:',
+            danger_resync_btn:              'Resync chain',
+            danger_resync_confirm_dialog:   'This will delete all chain data and start a fresh sync. Your keystore is backed up first and stays on disk. Continue?',
+            danger_resync_in_progress:      'Stopping chain, wiping data, restarting…',
+            danger_resync_ok:               '✓ Chain data wiped. Re-sync started — may take 4–8 hours.',
+
+            // App removal card (uninstall extension only).
+            danger_remove_title:            'Remove app (keep chain data + keystore)',
+            danger_remove_help:             'Uninstall the ENM extension from PC2. Your chain data, keystore, and audit log stay on disk at /var/lib/pc2/data/extensions/elastos-node-manager so you can reinstall later and pick up where you left off.',
+            danger_remove_confirm_label:    'Type "remove" to confirm:',
+            danger_remove_btn:              'Remove app',
+            danger_remove_confirm_dialog:   'Uninstall the ENM extension? Your chain data, keystore, and audit log stay on disk so reinstall can recover them.',
+            danger_remove_in_progress:      'Uninstalling ENM in a few seconds…',
+            danger_remove_queued:           '✓ Uninstall queued. ENM will be removed shortly. Chain data + keystore stay on disk.',
+
+            // Nuclear card (uninstall AND wipe everything).
+            danger_nuke_title:              'Nuclear — remove app AND wipe everything',
+            danger_nuke_help:               'Uninstall the ENM extension AND delete every piece of ENM data, including your keystore. This is the truly-start-from-zero option. There is no recovery without an off-server backup of the keystore.',
+            danger_nuke_warning:            'This deletes your keystore. If you re-register as a BPoS supernode after this, you do so as a new producer with a new node identity. Any stake delegated to your current owner public key remains under your control in Elastos Essentials.',
+            danger_nuke_confirm_label:      'Type WIPE EVERYTHING (uppercase) to confirm:',
+            danger_nuke_btn:                'Wipe everything',
+            danger_nuke_confirm_dialog:     'This will DELETE your keystore. There is no undo. Continue?',
+            danger_nuke_in_progress:        'Wiping everything in a few seconds…',
+            danger_nuke_queued:             '✓ Nuclear wipe queued. ENM and all its data will be removed shortly.',
         },
 
         validator_card: {

@@ -170,6 +170,39 @@ const storageBody = Joi.object({
         'any.invalid': '{{#message}}',
     });
 
+// beta.3.33 — POST /maintenance/update body.
+//
+// `tag` is the GitHub release tag, e.g. "enm-v0.2.0-beta.3.33". We
+// constrain to the enm-v<semver> shape so an operator can't accidentally
+// run the deploy script against an arbitrary tag (which could be a
+// non-ENM release on the same repo). Pattern enforces:
+//   - Must start with literal "enm-v"
+//   - Then [\d.\-a-z]+ (digits, dots, dashes, lowercase letters)
+//   - 6..64 chars total (sanity bounds)
+//
+// `confirm` echoes the operator's typed confirmation from the UI;
+// the route compares it to the typed-confirmation token expected for
+// each action. The pattern allows just the words / numbers we use.
+const maintenanceUpdateBody = Joi.object({
+    tag: Joi.string().pattern(/^enm-v[\d.\-a-z]+$/).min(6).max(64).required(),
+}).unknown(false).label('POST /maintenance/update body');
+
+// beta.3.33 — POST /maintenance/chain-resync body.
+const maintenanceChainResyncBody = Joi.object({
+    chainId: Joi.string().pattern(/^[a-z0-9-]+$/).min(1).max(32).required(),
+    confirm: Joi.string().required(),  // route validates exact match
+}).unknown(false).label('POST /maintenance/chain-resync body');
+
+// beta.3.33 — POST /maintenance/uninstall body.
+const maintenanceUninstallBody = Joi.object({
+    confirm: Joi.string().required(),  // route validates exact match
+}).unknown(false).label('POST /maintenance/uninstall body');
+
+// beta.3.33 — POST /maintenance/nuke body.
+const maintenanceNukeBody = Joi.object({
+    confirm: Joi.string().required(),  // route validates exact match
+}).unknown(false).label('POST /maintenance/nuke body');
+
 // POST /config/anti-snipe-password
 const antiSnipeBody = Joi.object({
     // `password` is the ONLY field. Empty string = explicit clear.
@@ -228,5 +261,9 @@ module.exports = {
     notificationsBody,
     storageBody,
     antiSnipeBody,
+    maintenanceUpdateBody,
+    maintenanceChainResyncBody,
+    maintenanceUninstallBody,
+    maintenanceNukeBody,
     validateBody,
 };

@@ -209,6 +209,11 @@
             { key: 'alerts',   glyph: '⚑', label: t('settings.heading_alerts'),   build: this._buildAlertsSection },
             { key: 'storage',  glyph: '◳', label: t('settings.heading_storage'),  build: this._buildStorageSection },
             { key: 'advanced', glyph: '⚙', label: t('settings.heading_advanced'), build: this._buildAdvancedSection },
+            // beta.3.33 — Danger Zone. Update / chain-resync / uninstall
+            // / nuke. Distinct red-accented styling (.enm-section-danger)
+            // and no Save/Revert pattern — each card is independently
+            // action-driven with a typed-confirmation gate.
+            { key: 'danger',   glyph: '⚠', label: t('settings.heading_danger'),   build: this._buildDangerSection },
         ];
         nav.forEach(function (item) {
             // Nav item (wide rail).
@@ -279,7 +284,7 @@
     // beta.3.19 — Alerts section inserted between Network and Storage
     // (it's about when-to-notify, sits between the access/network and
     // the data-at-rest sections).
-    var SECTION_KEYS = ['access', 'security', 'network', 'alerts', 'storage', 'advanced'];
+    var SECTION_KEYS = ['access', 'security', 'network', 'alerts', 'storage', 'advanced', 'danger'];
     SettingsTab.prototype._sectionRef = function (key) {
         return this['_' + key];
     };
@@ -357,6 +362,12 @@
             if (typeof this._refreshHealingActivity === 'function') {
                 this._refreshHealingActivity();
             }
+        }
+        // beta.3.33 — Danger Zone: pull latest version info from GitHub
+        // each time the section opens so the operator never sees a stale
+        // "no update available" while one's actually published.
+        if (key === 'danger' && typeof this._refreshUpdateInfo === 'function') {
+            this._refreshUpdateInfo();
         }
     };
 
@@ -644,6 +655,435 @@
 
         return sec.card;
     };
+
+    // -----------------------------------------------------------------
+    // Section: Danger Zone (beta.3.33 — NEW)
+    //   Four destructive actions backed by /api/enm/maintenance/*:
+    //     1. Update ENM extension       (no typed gate — operator-clicked)
+    //     2. Chain resync               (gate: type chainId, e.g. "mainchain")
+    //     3. App removal                (gate: type "remove")
+    //     4. Nuclear wipe               (gate: type "WIPE EVERYTHING")
+    //
+    //   Each is its own self-contained sub-card. No section-level Save/
+    //   Revert — each card has its own action button.
+    // -----------------------------------------------------------------
+    SettingsTab.prototype._buildDangerSection = function (t) {
+        var self = this;
+
+        // Outer section card. We don't use makeSection() here because
+        // the Save/Revert footer doesn't fit the destructive-action
+        // pattern — each sub-card has its own button.
+        var card = document.createElement('section');
+        card.className = 'enm-section-card enm-section-danger';
+
+        var head = document.createElement('div');
+        head.className = 'enm-section-card-head';
+        var icon = document.createElement('div');
+        icon.className = 'enm-section-card-icon';
+        icon.setAttribute('aria-hidden', 'true');
+        icon.textContent = '⚠';
+        head.appendChild(icon);
+        var headbody = document.createElement('div');
+        headbody.className = 'enm-section-card-headbody';
+        var title = document.createElement('div');
+        title.className = 'enm-section-card-title';
+        title.id = 'enm-section-h-danger';
+        title.textContent = t('settings.heading_danger');
+        headbody.appendChild(title);
+        var help = document.createElement('div');
+        help.className = 'enm-section-card-help';
+        help.textContent = t('settings.danger_intro');
+        headbody.appendChild(help);
+        head.appendChild(headbody);
+        card.appendChild(head);
+
+        var body = document.createElement('div');
+        body.className = 'enm-section-card-body';
+        card.appendChild(body);
+
+        // Track danger-zone elements on the instance for hydration.
+        this._danger = {
+            card: card,
+            body: body,
+            // setDirty no-op so the wireDirtyTracking call doesn't blow up.
+            // Danger Zone never has unsaved state.
+            setDirty: function () {},
+        };
+
+        // ---------- Sub-card 1: Update ----------
+        var updateCard = _buildDangerCard({
+            kind: 'info',
+            title: t('settings.danger_update_title'),
+            help: t('settings.danger_update_help'),
+        });
+        body.appendChild(updateCard.el);
+        // Version info row (current / latest / published) — hydrated
+        // from GET /maintenance/check-update on section activation.
+        var versionRow = document.createElement('div');
+        versionRow.className = 'enm-danger-versionrow';
+        var verCurrent = document.createElement('div');
+        verCurrent.className = 'enm-danger-versioncell';
+        verCurrent.innerHTML = '<div class="enm-danger-versionlabel">'
+            + _h(t('settings.danger_update_current_label'))
+            + '</div><div class="enm-danger-versionval" data-current>—</div>';
+        var verLatest = document.createElement('div');
+        verLatest.className = 'enm-danger-versioncell';
+        verLatest.innerHTML = '<div class="enm-danger-versionlabel">'
+            + _h(t('settings.danger_update_latest_label'))
+            + '</div><div class="enm-danger-versionval" data-latest>—</div>';
+        versionRow.appendChild(verCurrent);
+        versionRow.appendChild(verLatest);
+        updateCard.body.appendChild(versionRow);
+        // Update button + status.
+        var updateBtn = document.createElement('button');
+        updateBtn.type = 'button';
+        updateBtn.className = 'enm-btn enm-btn-primary';
+        updateBtn.textContent = t('settings.danger_update_btn');
+        updateBtn.disabled = true;  // enabled once check-update returns updateAvailable
+        var updateStatus = document.createElement('div');
+        updateStatus.className = 'enm-danger-status';
+        updateStatus.setAttribute('role', 'status');
+        updateStatus.setAttribute('aria-live', 'polite');
+        updateCard.foot.appendChild(updateStatus);
+        updateCard.foot.appendChild(updateBtn);
+        this._danger.update = {
+            card: updateCard.el,
+            currentEl: verCurrent.querySelector('[data-current]'),
+            latestEl: verLatest.querySelector('[data-latest]'),
+            btn: updateBtn,
+            status: updateStatus,
+            tag: null,  // set by _refreshUpdateInfo
+        };
+        updateBtn.addEventListener('click', function () { self._doUpdate(); });
+
+        // ---------- Sub-card 2: Chain resync ----------
+        var resyncCard = _buildDangerCard({
+            kind: 'warn',
+            title: t('settings.danger_resync_title'),
+            help: t('settings.danger_resync_help'),
+        });
+        body.appendChild(resyncCard.el);
+        var resyncConfirm = _buildTypedConfirm({
+            label: t('settings.danger_resync_confirm_label'),
+            placeholder: 'mainchain',
+            expected: 'mainchain',
+        });
+        resyncCard.body.appendChild(resyncConfirm.el);
+        var resyncBtn = document.createElement('button');
+        resyncBtn.type = 'button';
+        resyncBtn.className = 'enm-btn enm-btn-danger';
+        resyncBtn.textContent = t('settings.danger_resync_btn');
+        resyncBtn.disabled = true;
+        var resyncStatus = document.createElement('div');
+        resyncStatus.className = 'enm-danger-status';
+        resyncStatus.setAttribute('role', 'status');
+        resyncStatus.setAttribute('aria-live', 'polite');
+        resyncCard.foot.appendChild(resyncStatus);
+        resyncCard.foot.appendChild(resyncBtn);
+        resyncConfirm.input.addEventListener('input', function () {
+            resyncBtn.disabled = !resyncConfirm.matches();
+        });
+        resyncBtn.addEventListener('click', function () {
+            self._doChainResync('mainchain', resyncConfirm.input.value);
+        });
+        this._danger.resync = {
+            confirm: resyncConfirm, btn: resyncBtn, status: resyncStatus,
+        };
+
+        // ---------- Sub-card 3: App removal ----------
+        var removeCard = _buildDangerCard({
+            kind: 'warn',
+            title: t('settings.danger_remove_title'),
+            help: t('settings.danger_remove_help'),
+        });
+        body.appendChild(removeCard.el);
+        var removeConfirm = _buildTypedConfirm({
+            label: t('settings.danger_remove_confirm_label'),
+            placeholder: 'remove',
+            expected: 'remove',
+        });
+        removeCard.body.appendChild(removeConfirm.el);
+        var removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'enm-btn enm-btn-danger';
+        removeBtn.textContent = t('settings.danger_remove_btn');
+        removeBtn.disabled = true;
+        var removeStatus = document.createElement('div');
+        removeStatus.className = 'enm-danger-status';
+        removeStatus.setAttribute('role', 'status');
+        removeStatus.setAttribute('aria-live', 'polite');
+        removeCard.foot.appendChild(removeStatus);
+        removeCard.foot.appendChild(removeBtn);
+        removeConfirm.input.addEventListener('input', function () {
+            removeBtn.disabled = !removeConfirm.matches();
+        });
+        removeBtn.addEventListener('click', function () {
+            self._doUninstall(removeConfirm.input.value);
+        });
+        this._danger.remove = {
+            confirm: removeConfirm, btn: removeBtn, status: removeStatus,
+        };
+
+        // ---------- Sub-card 4: Nuclear wipe ----------
+        var nukeCard = _buildDangerCard({
+            kind: 'critical',
+            title: t('settings.danger_nuke_title'),
+            help: t('settings.danger_nuke_help'),
+        });
+        body.appendChild(nukeCard.el);
+        var nukeWarn = document.createElement('div');
+        nukeWarn.className = 'enm-danger-warning';
+        nukeWarn.textContent = t('settings.danger_nuke_warning');
+        nukeCard.body.appendChild(nukeWarn);
+        var nukeConfirm = _buildTypedConfirm({
+            label: t('settings.danger_nuke_confirm_label'),
+            placeholder: 'WIPE EVERYTHING',
+            expected: 'WIPE EVERYTHING',
+            // Case-sensitive — matches the backend gate exactly.
+            caseSensitive: true,
+        });
+        nukeCard.body.appendChild(nukeConfirm.el);
+        var nukeBtn = document.createElement('button');
+        nukeBtn.type = 'button';
+        nukeBtn.className = 'enm-btn enm-btn-danger';
+        nukeBtn.textContent = t('settings.danger_nuke_btn');
+        nukeBtn.disabled = true;
+        var nukeStatus = document.createElement('div');
+        nukeStatus.className = 'enm-danger-status';
+        nukeStatus.setAttribute('role', 'status');
+        nukeStatus.setAttribute('aria-live', 'polite');
+        nukeCard.foot.appendChild(nukeStatus);
+        nukeCard.foot.appendChild(nukeBtn);
+        nukeConfirm.input.addEventListener('input', function () {
+            nukeBtn.disabled = !nukeConfirm.matches();
+        });
+        nukeBtn.addEventListener('click', function () {
+            self._doNuke(nukeConfirm.input.value);
+        });
+        this._danger.nuke = {
+            confirm: nukeConfirm, btn: nukeBtn, status: nukeStatus,
+        };
+
+        return card;
+    };
+
+    /**
+     * Render an update-info refresh against /maintenance/check-update.
+     * Called on Danger Zone activation; idempotent if hit multiple
+     * times during a single visit.
+     */
+    SettingsTab.prototype._refreshUpdateInfo = function () {
+        var self = this;
+        var t = root.enmTOrFallback;
+        if (!self._danger || !self._danger.update) { return; }
+        var u = self._danger.update;
+        u.status.textContent = t('common.loading') || 'Loading…';
+        u.status.classList.remove('ok', 'err');
+        self.api.get('/maintenance/check-update', { skipCache: true })
+            .then(function (resp) {
+                if (self._destroyed) { return; }
+                var r = (resp && resp.result) || resp || {};
+                u.currentEl.textContent = r.current || '—';
+                u.latestEl.textContent = r.latest || '—';
+                if (r.error) {
+                    u.status.textContent = t('settings.danger_update_error') + ' ' + r.error;
+                    u.status.classList.add('err');
+                    u.btn.disabled = true;
+                    return;
+                }
+                if (r.updateAvailable && r.tag) {
+                    u.tag = r.tag;
+                    u.btn.disabled = false;
+                    u.status.textContent = t('settings.danger_update_available');
+                    u.status.classList.add('ok');
+                } else {
+                    u.btn.disabled = true;
+                    u.status.textContent = t('settings.danger_update_uptodate');
+                    u.status.classList.remove('err');
+                }
+            })
+            .catch(function (err) {
+                if (self._destroyed) { return; }
+                if (err && err.status === 401) { return; }
+                u.status.textContent = (err && err.message) || 'Update check failed.';
+                u.status.classList.add('err');
+            });
+    };
+
+    SettingsTab.prototype._doUpdate = function () {
+        var self = this;
+        var t = root.enmTOrFallback;
+        var u = self._danger.update;
+        if (!u.tag) { return; }
+        if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
+            if (!window.confirm(t('settings.danger_update_confirm_dialog'))) { return; }
+        }
+        u.status.textContent = t('settings.danger_update_in_progress');
+        u.status.classList.remove('ok', 'err');
+        return root.enmRunOnce(u.btn, t('settings.danger_update_in_progress'), function () {
+            return self.api.post('/maintenance/update', { tag: u.tag })
+                .then(function () {
+                    if (self._destroyed) { return; }
+                    u.status.textContent = t('settings.danger_update_queued');
+                    u.status.classList.add('ok');
+                })
+                .catch(function (err) {
+                    if (self._destroyed) { return; }
+                    u.status.textContent = (err && err.message) || 'Update failed.';
+                    u.status.classList.add('err');
+                });
+        });
+    };
+
+    SettingsTab.prototype._doChainResync = function (chainId, confirmText) {
+        var self = this;
+        var t = root.enmTOrFallback;
+        var s = self._danger.resync;
+        if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
+            if (!window.confirm(t('settings.danger_resync_confirm_dialog'))) { return; }
+        }
+        s.status.textContent = t('settings.danger_resync_in_progress');
+        s.status.classList.remove('ok', 'err');
+        return root.enmRunOnce(s.btn, t('settings.danger_resync_in_progress'), function () {
+            return self.api.post('/maintenance/chain-resync', {
+                chainId: chainId,
+                confirm: confirmText,
+            })
+                .then(function (resp) {
+                    if (self._destroyed) { return; }
+                    var r = (resp && resp.result) || resp || {};
+                    s.status.textContent = r.message || t('settings.danger_resync_ok');
+                    s.status.classList.add('ok');
+                    s.confirm.input.value = '';
+                    s.btn.disabled = true;
+                })
+                .catch(function (err) {
+                    if (self._destroyed) { return; }
+                    s.status.textContent = (err && err.message) || 'Resync failed.';
+                    s.status.classList.add('err');
+                });
+        });
+    };
+
+    SettingsTab.prototype._doUninstall = function (confirmText) {
+        var self = this;
+        var t = root.enmTOrFallback;
+        var s = self._danger.remove;
+        if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
+            if (!window.confirm(t('settings.danger_remove_confirm_dialog'))) { return; }
+        }
+        s.status.textContent = t('settings.danger_remove_in_progress');
+        s.status.classList.remove('ok', 'err');
+        return root.enmRunOnce(s.btn, t('settings.danger_remove_in_progress'), function () {
+            return self.api.post('/maintenance/uninstall', { confirm: confirmText })
+                .then(function (resp) {
+                    if (self._destroyed) { return; }
+                    var r = (resp && resp.result) || resp || {};
+                    s.status.textContent = r.message || t('settings.danger_remove_queued');
+                    s.status.classList.add('ok');
+                })
+                .catch(function (err) {
+                    if (self._destroyed) { return; }
+                    s.status.textContent = (err && err.message) || 'Uninstall failed.';
+                    s.status.classList.add('err');
+                });
+        });
+    };
+
+    SettingsTab.prototype._doNuke = function (confirmText) {
+        var self = this;
+        var t = root.enmTOrFallback;
+        var s = self._danger.nuke;
+        if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
+            if (!window.confirm(t('settings.danger_nuke_confirm_dialog'))) { return; }
+        }
+        s.status.textContent = t('settings.danger_nuke_in_progress');
+        s.status.classList.remove('ok', 'err');
+        return root.enmRunOnce(s.btn, t('settings.danger_nuke_in_progress'), function () {
+            return self.api.post('/maintenance/nuke', { confirm: confirmText })
+                .then(function (resp) {
+                    if (self._destroyed) { return; }
+                    var r = (resp && resp.result) || resp || {};
+                    s.status.textContent = r.message || t('settings.danger_nuke_queued');
+                    s.status.classList.add('ok');
+                })
+                .catch(function (err) {
+                    if (self._destroyed) { return; }
+                    s.status.textContent = (err && err.message) || 'Nuke failed.';
+                    s.status.classList.add('err');
+                });
+        });
+    };
+
+    /**
+     * Build a sub-card inside the Danger Zone section. kind is one of
+     * 'info' / 'warn' / 'critical' — drives accent colour via CSS.
+     */
+    function _buildDangerCard(opts) {
+        var el = document.createElement('div');
+        el.className = 'enm-danger-card enm-danger-' + (opts.kind || 'warn');
+        var head = document.createElement('div');
+        head.className = 'enm-danger-card-head';
+        var h = document.createElement('div');
+        h.className = 'enm-danger-card-title';
+        h.textContent = opts.title || '';
+        head.appendChild(h);
+        if (opts.help) {
+            var helpEl = document.createElement('div');
+            helpEl.className = 'enm-danger-card-help';
+            helpEl.textContent = opts.help;
+            head.appendChild(helpEl);
+        }
+        el.appendChild(head);
+        var body = document.createElement('div');
+        body.className = 'enm-danger-card-body';
+        el.appendChild(body);
+        var foot = document.createElement('div');
+        foot.className = 'enm-danger-card-foot';
+        el.appendChild(foot);
+        return { el: el, body: body, foot: foot };
+    }
+
+    /**
+     * Type-to-confirm input row. The button caller wires its own
+     * `disabled = !matches()` on the input event. caseSensitive
+     * defaults to false (matches what most operators expect for
+     * "type the chain name").
+     */
+    function _buildTypedConfirm(opts) {
+        var row = document.createElement('div');
+        row.className = 'enm-danger-typedconfirm';
+        var lbl = document.createElement('label');
+        lbl.className = 'enm-danger-typedconfirm-label';
+        var inputId = 'enm-danger-confirm-' + Math.random().toString(36).slice(2, 8);
+        lbl.htmlFor = inputId;
+        lbl.textContent = opts.label || '';
+        row.appendChild(lbl);
+        var input = document.createElement('input');
+        input.type = 'text';
+        input.id = inputId;
+        input.className = 'enm-input enm-danger-typedconfirm-input';
+        input.autocomplete = 'off';
+        input.spellcheck = false;
+        input.placeholder = opts.placeholder || '';
+        row.appendChild(input);
+        function matches() {
+            var v = input.value || '';
+            return opts.caseSensitive
+                ? (v === opts.expected)
+                : (v.toLowerCase() === String(opts.expected || '').toLowerCase());
+        }
+        return { el: row, input: input, matches: matches };
+    }
+
+    /** HTML-escape — small helper for innerHTML use sites in this section. */
+    function _h(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
 
     // -----------------------------------------------------------------
     // Section: Access (beta.3.18 — NEW)
