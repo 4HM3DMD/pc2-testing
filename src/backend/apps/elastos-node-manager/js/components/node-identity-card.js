@@ -228,9 +228,10 @@
 
         // ----- Node public key (only meaningful when keystore exists) -----
         if (ks.exists && pubkey) {
-            html += '<div class="enm-identity-row enm-identity-pubkey-row">'
+            html += '<div class="enm-identity-row enm-identity-pubkey-row enm-identity-row-actionable">'
                 + '<div class="enm-identity-row-head">'
                 +   '<span class="enm-identity-row-label">Node public key</span>'
+                +   '<span class="enm-identity-row-pill enm-identity-row-pill-action">Share with Essentials</span>'
                 +   '<span class="enm-identity-row-hint">Paste this into Essentials when registering your supernode. The Essentials wallet signing the registration becomes the producer owner.</span>'
                 + '</div>'
                 + '<div class="enm-identity-value-stack">'
@@ -248,22 +249,27 @@
         // registered the producer). Verified against Elastos.ELA
         // HEAD: dpos/state/arbitrators.go:732-801,
         // servers/interfaces.go:2317-2347.
+        //
+        // beta.3.39 — dropped the "DPoSV2ClaimReward transaction"
+        // mechanic from the dashboard note. The dashboard isn't the
+        // place to explain the on-chain reward-claim flow; that
+        // belongs in the Essentials walkthrough docs. Operators
+        // told us this card "doesn't look nice and shows DPoS v1
+        // rewards which is not needed" — simpler copy wins.
         if (ks.exists && addr) {
-            html += '<div class="enm-identity-row enm-identity-addr-row">'
+            html += '<div class="enm-identity-row enm-identity-addr-row enm-identity-row-informational">'
                 + '<div class="enm-identity-row-head">'
                 +   '<span class="enm-identity-row-label">Node signing address</span>'
-                +   '<span class="enm-identity-row-hint">Derived from the keystore. Signs block proposals during your producer&rsquo;s on-duty rounds. <strong>Does not hold funds and does not receive rewards.</strong></span>'
+                +   '<span class="enm-identity-row-pill">Internal · do not share</span>'
+                +   '<span class="enm-identity-row-hint">Derived from the keystore. Signs block proposals during your producer&rsquo;s on-duty rounds. Does not hold funds and does not receive rewards.</span>'
                 + '</div>'
                 + '<div class="enm-identity-value-stack">'
                 +   '<code class="enm-identity-value enm-identity-addr" data-fill="addr"></code>'
                 +   '<span class="enm-identity-copy-slot" data-copy="addr" data-copy-value="' + esc(addr) + '"></span>'
                 + '</div>'
                 + '<div class="enm-identity-note">'
-                +   '<strong>Block rewards go to your Essentials wallet</strong>, not this address. '
-                +   'When you register the supernode in Essentials, that wallet becomes the '
-                +   'producer owner. Rewards are credited to the owner address every round '
-                +   'and claimed by signing a <code>DPoSV2ClaimReward</code> transaction from '
-                +   'Essentials.'
+                +   'Block rewards from this supernode are paid to the Essentials wallet '
+                +   'that registered it, not to this address.'
                 + '</div>'
                 + '</div>';
         }
@@ -290,12 +296,13 @@
                 + '</div>'
                 + '<div class="enm-identity-producer-grid">'
                 +   (producer.nickname ? ('<div class="enm-identity-stat"><span class="enm-identity-stat-label">Name</span><span class="enm-identity-stat-value">' + esc(producer.nickname) + '</span></div>') : '')
+                // beta.3.39 — "Votes (DPoS v1)" stat dropped. Operator
+                // told us DPoS v1 references are noise on a BPoS-only
+                // dashboard; the v1 protocol has been superseded since
+                // the BPoS upgrade and showing the legacy total
+                // misleads operators into thinking it matters.
                 +   '<div class="enm-identity-stat">'
-                +     '<span class="enm-identity-stat-label">Votes (DPoS v1)</span>'
-                +     '<span class="enm-identity-stat-value">' + esc(producer.votes || '0') + '</span>'
-                +   '</div>'
-                +   '<div class="enm-identity-stat">'
-                +     '<span class="enm-identity-stat-label">Votes (DPoS v2)</span>'
+                +     '<span class="enm-identity-stat-label">BPoS votes</span>'
                 +     '<span class="enm-identity-stat-value">' + esc(producer.dposv2votes || '0') + '</span>'
                 +   '</div>'
                 +   (producer.deposit != null ? (

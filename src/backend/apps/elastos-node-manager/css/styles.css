@@ -4335,7 +4335,7 @@ body[data-app-size="compact"] .enm-role-card-badge-short,
 .enm-identity-row-head {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 4px;
 }
 .enm-identity-row-label {
     font-size: var(--fs-caption);
@@ -4343,6 +4343,32 @@ body[data-app-size="compact"] .enm-role-card-badge-short,
     font-weight: var(--fw-semibold);
     text-transform: uppercase;
     letter-spacing: 0.06em;
+}
+/* beta.3.39 — pill marker that visually distinguishes "share this"
+ * rows (pubkey) from "internal" rows (signing address). Two variants:
+ * .enm-identity-row-pill-action (accent palette — public-facing data)
+ * vs the default neutral pill (informational/internal). */
+.enm-identity-row-pill {
+    align-self: flex-start;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: var(--fw-semibold);
+    padding: 2px 8px;
+    border-radius: var(--r-pill, 999px);
+    background: var(--bg-overlay);
+    color: var(--text-tertiary);
+    border: 1px solid var(--border-subtle);
+}
+.enm-identity-row-pill-action {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-color: var(--accent-soft);
+}
+/* Subtle accent on the actionable row's left edge so the eye lands
+ * there first; informational row stays neutral. */
+.enm-identity-row-actionable {
+    border-left: 3px solid var(--accent);
 }
 .enm-identity-row-hint {
     font-size: var(--fs-caption);
@@ -4398,12 +4424,11 @@ body[data-app-size="compact"] .enm-role-card-badge-short,
 }
 .enm-identity-note {
     font-size: var(--fs-caption);
-    color: var(--text-tertiary);
+    color: var(--text-secondary);
     line-height: 1.5;
-    border-left: 3px solid var(--accent);
     background: var(--bg-surface);
     padding: var(--sp-2) var(--sp-3);
-    border-radius: 0 var(--r-sm) var(--r-sm) 0;
+    border-radius: var(--r-sm);
 }
 .enm-identity-empty {
     background: var(--bg-elevated);
