@@ -313,18 +313,27 @@ body {
     flex: 1;
     min-width: 0;
     overflow-x: auto;
-    scrollbar-width: none;
+    overflow-y: hidden;
     /* Mask the right edge with a transparent-to-opaque gradient so
-       any clipped tab fades out instead of being abruptly cut. The
-       mask-image is purely visual; tabs scroll past it and remain
-       interactive when scrolled into view. */
+       any clipped tab fades out instead of being abruptly cut. */
     mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
     -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
-    /* Touch swipe friction — keep tabs aligned to start so a partial
-       scroll reveals the next tab head, not a fragment. */
     scroll-snap-type: x proximity;
+    /* beta.3.24 — same touch-routing fix as .enm-settings-pills.
+       The topbar's vertical layout was claiming swipes that should
+       have scrolled tabs horizontally. */
+    touch-action: pan-x;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
 }
-.enm-tabs::-webkit-scrollbar { display: none; }
+.enm-tabs::-webkit-scrollbar {
+    height: 3px;
+}
+.enm-tabs::-webkit-scrollbar-track { background: transparent; }
+.enm-tabs::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 2px;
+}
 .enm-tab { scroll-snap-align: start; }
 
 .enm-tab {
@@ -1604,16 +1613,49 @@ body[data-app-size="compact"] .enm-sys-cell:last-child,
     text-align: center;
 }
 
-/* Pills (narrow/compact alternative) */
+/* Pills (narrow/compact alternative) — beta.3.24:
+   Phase 4 polish round 2. Operator hit the same overflow-with-no-
+   scroll-affordance problem on this strip that beta.3.23 fixed for
+   the top tab strip: with 6 sections (Access / Security / Network /
+   Alerts / Storage / Advanced) at narrow widths, the last pills sit
+   past the visible edge and the operator can't see they're there.
+   Apply the same mask-image fade + scroll-snap pattern. */
 .enm-settings-pills {
     display: none;   /* wide hides pills; narrow/compact override below */
+    position: relative;
     gap: var(--sp-1);
     overflow-x: auto;
-    scrollbar-width: none;
+    overflow-y: hidden;
     padding-bottom: var(--sp-3);
     border-bottom: 1px solid var(--border-subtle);
+    /* Right-edge fade — pills past the viewport edge fade to
+       transparent so the operator sees there's more. */
+    mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+    scroll-snap-type: x proximity;
+    scroll-padding-right: 24px;
+    /* beta.3.24 — operator hit a touch-routing dead-end on mobile:
+       the parent .enm-pane uses overflow:auto for vertical scroll,
+       so a vertical-leaning swipe on the pills was claimed by the
+       pane instead of routing to the pills' horizontal scroll. The
+       operator literally couldn't reach the rightmost pills.
+       touch-action: pan-x scopes touch to horizontal panning on
+       this strip; vertical scrolling still works on the pane
+       (touch BELOW the strip). */
+    touch-action: pan-x;
+    /* Visible thin scrollbar so the affordance is discoverable.
+       Standard scrollbar-width "thin" + a styled webkit fallback. */
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
 }
-.enm-settings-pills::-webkit-scrollbar { display: none; }
+.enm-settings-pills::-webkit-scrollbar {
+    height: 4px;
+}
+.enm-settings-pills::-webkit-scrollbar-track { background: transparent; }
+.enm-settings-pills::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 2px;
+}
 .enm-settings-pill {
     padding: 6px var(--sp-3);
     border-radius: var(--r-pill);
@@ -1628,6 +1670,7 @@ body[data-app-size="compact"] .enm-sys-cell:last-child,
     gap: 6px;
     flex-shrink: 0;
     font-family: inherit;
+    scroll-snap-align: start;
 }
 .enm-settings-pill.active {
     background: var(--accent-soft);
