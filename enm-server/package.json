@@ -1,6 +1,6 @@
 {
   "name": "@elacity/enm-server",
-  "version": "0.2.0-beta.3.30",
+  "version": "0.2.0-beta.3.31",
   "description": "Elastos Node Manager — standalone sidecar server for PC2 that runs and self-heals an Elastos mainchain node for BPoS supernode operators.",
   "main": "src/server.js",
   "author": "Elacity",

@@ -217,9 +217,84 @@ async function ensureAllowed(ports, opts) {
     };
 }
 
+/**
+ * Remove the `allow <port>/tcp` rule if present. Only acts when UFW is
+ * active. No-op when the rule doesn't exist (so callers can flip a
+ * toggle off-then-off safely) or when UFW isn't managed.
+ *
+ * Used by the Settings → Access RPC toggle (beta.3.31): turning the
+ * external-RPC switch off closes the UFW hole that turning it on opened.
+ * Without this, an operator who enables RPC, exposes 20336, then changes
+ * their mind would still have the firewall hole sitting open even
+ * though ela has been told to re-bind WhiteIPList=['127.0.0.1'].
+ *
+ * Note on UFW's `delete` semantics: `ufw delete allow 20336/tcp`
+ * deletes the IPv4 + IPv6 lines that match the rule spec. If the
+ * operator added the rule manually via a different spec (e.g.
+ * `from 1.2.3.4 to any port 20336`), THAT rule survives — we only
+ * remove the simple allow-all-source form. That's the safer
+ * default: we won't surprise an operator by deleting an ACL they
+ * built by hand.
+ *
+ * @param {number} port
+ * @param {object} [opts]
+ * @param {object} [opts.logger]
+ * @returns {Promise<{
+ *   tool: 'ufw'|null,
+ *   active: boolean,
+ *   removed: boolean,
+ *   skipped: boolean,
+ *   reason?: string,
+ *   error?: string,
+ * }>}
+ */
+async function removeRule(port, opts) {
+    const logger = (opts && opts.logger) || { info() {}, warn() {}, error() {} };
+    const p = parseInt(port, 10);
+    if (!Number.isInteger(p) || p <= 0 || p >= 65536) {
+        return {
+            tool: null, active: false, removed: false,
+            skipped: true, reason: 'invalid port',
+        };
+    }
+    const state = await detect();
+    if (!state.tool) {
+        return {
+            tool: null, active: false, removed: false,
+            skipped: true, reason: 'ufw not installed / not detectable',
+        };
+    }
+    if (!state.active) {
+        return {
+            tool: 'ufw', active: false, removed: false,
+            skipped: true, reason: 'ufw installed but inactive',
+        };
+    }
+    if (!state.allowedTcp.has(p)) {
+        // Rule wasn't there. Treat as success — the desired end state
+        // (no allow rule) is satisfied.
+        return {
+            tool: 'ufw', active: true, removed: false,
+            skipped: false, reason: 'rule already absent',
+        };
+    }
+    const r = await execCapture('ufw', ['delete', 'allow', `${p}/tcp`], 8_000);
+    if (r.code === 0) {
+        logger.info(`${ENM_LOG_PREFIX} ufw delete allow ${p}/tcp ok`);
+        return { tool: 'ufw', active: true, removed: true, skipped: false };
+    }
+    const msg = (r.stderr || r.stdout || `exit ${r.code}`).trim().split('\n')[0];
+    logger.warn(`${ENM_LOG_PREFIX} ufw delete allow ${p}/tcp failed: ${msg}`);
+    return {
+        tool: 'ufw', active: true, removed: false,
+        skipped: false, error: msg,
+    };
+}
+
 module.exports = {
     detect,
     ensureAllowed,
+    removeRule,
     DEFAULT_TIMEOUT_MS,
     // exported for tests
     _execCapture: execCapture,

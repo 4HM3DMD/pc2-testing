@@ -30,6 +30,12 @@ const { requireOwner, readActorWallet } = require('../auth/OwnerCheckMiddleware'
 const os = require('node:os');
 const ConfigStore = require('../services/ConfigStore');
 const { redactSecrets } = require('../services/EnmConfigRedact');
+// beta.3.31 — wire RPC enable toggle to UFW so flipping the switch in
+// Settings → Access opens/closes port 20336 at the host firewall. Without
+// this, an operator who enables external RPC sees the toggle go green but
+// inbound SYN packets still get dropped at UFW INPUT (same root cause as
+// the 20338/20339 issue documented in EnmFirewallManager.js).
+const EnmFirewallManager = require('../services/EnmFirewallManager');
 // 0.2.0-beta.3.11 — request-body Joi schemas replace the per-route
 // inline `typeof body.X === 'Y'` checks. See EnmRequestSchemas.js
 // for the rationale (4 categories of problems with the old approach).
@@ -219,6 +225,12 @@ function build(extensionHandle) {
             // on new installs (see EnmConfigSchema). When false, the generated
             // ela config.json hard-forces WhiteIPList=['127.0.0.1'] regardless
             // of what the operator saved here.
+            //
+            // beta.3.31: capture the prior state so we know whether the
+            // operator is toggling ON (false → true: open firewall) or
+            // toggling OFF (true → false: close firewall). Same-state
+            // saves are a no-op on the firewall side.
+            const rpcEnabledBefore = chain.rpc.enabled === true;
             if (body.rpcEnabled != null) {
                 chain.rpc.enabled = body.rpcEnabled;
             }
@@ -240,6 +252,58 @@ function build(extensionHandle) {
             }
 
             await ConfigStore.save(cfg, { logger: extensionHandle.log });
+
+            // beta.3.31 — keep the host firewall in sync with the RPC
+            // toggle. We do this AFTER the config save so the persisted
+            // state is the source of truth even if the UFW shell-out
+            // misbehaves. UFW failure is non-fatal: ela's own WhiteIPList
+            // is still the security boundary; the worst case is that the
+            // operator's external clients can't reach 20336 even though
+            // they "enabled" RPC, which is the safer failure mode.
+            //
+            // No-op when:
+            //   - rpcEnabled wasn't in the request body (operator only
+            //     touched logLevel / user / password / whitelist)
+            //   - prior state == new state (idempotent save)
+            //   - UFW not installed or inactive (EnmFirewallManager
+            //     handles this internally and returns skipped:true)
+            if (body.rpcEnabled != null && body.rpcEnabled !== rpcEnabledBefore) {
+                const rpcPort = chain.ports && chain.ports.rpc;
+                if (Number.isInteger(rpcPort)) {
+                    try {
+                        if (body.rpcEnabled) {
+                            const fw = await EnmFirewallManager.ensureAllowed(
+                                [rpcPort],
+                                {
+                                    comment: 'ela mainchain RPC (ENM toggle)',
+                                    logger: extensionHandle.log,
+                                },
+                            );
+                            if (fw.errors && fw.errors.length) {
+                                extensionHandle.log.warn(
+                                    `${ENM_LOG_PREFIX} PUT /config/mainchain: `
+                                    + `UFW open ${rpcPort}/tcp failed: `
+                                    + fw.errors.map((e) => e.message).join('; '),
+                                );
+                            }
+                        } else {
+                            await EnmFirewallManager.removeRule(rpcPort, {
+                                logger: extensionHandle.log,
+                            });
+                        }
+                    } catch (fwErr) {
+                        // Defensive — EnmFirewallManager shouldn't throw,
+                        // but if a future change ever does, we don't want
+                        // to fail the config save the operator already
+                        // committed.
+                        extensionHandle.log.warn(
+                            `${ENM_LOG_PREFIX} PUT /config/mainchain: `
+                            + `UFW sync threw: ${fwErr.message}`,
+                        );
+                    }
+                }
+            }
+
             return res.json(successBody({ ok: true }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} PUT /config/mainchain: ${err.message}`);
