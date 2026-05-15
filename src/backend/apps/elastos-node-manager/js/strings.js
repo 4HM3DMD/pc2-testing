@@ -822,6 +822,25 @@
             identity_reset_password_warning:'Save this password somewhere safe — it’s shown only once and unlocks the new keystore.',
 
             identity_password_required:     'Password is required.',
+
+            // beta.3.46 — Server integrity sub-card. Quiet by default;
+            // operator clicks "Run check" to expand details. Honest
+            // about scope (tamper-EVIDENCE not tamper-PROOF; can't
+            // see hypervisor-level threats).
+            identity_integrity_title:       'Server integrity',
+            identity_integrity_help:        'Checks for changes to the ela binary, the keystore, and the host environment since this install. Run this if you want to know whether anything has shifted under your feet.',
+            identity_integrity_collapsed:   'Not run yet. Click Run check to scan.',
+            identity_integrity_run_btn:     'Run check',
+            identity_integrity_running:     'Running…',
+            identity_integrity_summary_ok:      '✓ All checks pass',
+            identity_integrity_summary_warn:    '⚠ Drift detected — review the rows below',
+            identity_integrity_summary_fail:    '✗ One or more checks failed',
+            identity_integrity_summary_unknown: '? Some checks couldn’t run',
+            identity_integrity_scope_note:  'Limits: this catches changes to the ela binary, the keystore.dat file, the system clock, and the host environment after install. It can’t see VPS-level threats like live RAM snapshots or pre-install disk images — those are invisible from inside the guest OS. Your owner key in Essentials remains the strongest protection.',
+            identity_integrity_rebaseline_btn:      'Re-baseline (mark current state as trusted)',
+            identity_integrity_rebaseline_running:  'Re-capturing baseline…',
+            identity_integrity_rebaseline_ok:       '✓ Baseline re-captured.',
+            identity_integrity_rebaseline_confirm:  'Mark the current state as the new trusted baseline? Use this AFTER you ran a legitimate change (binary update, keystore reset).',
             // beta.3.45 — audited against Elastos.ELA HEAD. Inactivity
             // does NOT slash the deposit (InactivePenalty = 0 on
             // mainnet, common/config/config.go:193). The risk is lost

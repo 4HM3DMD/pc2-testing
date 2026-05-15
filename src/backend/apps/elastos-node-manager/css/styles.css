@@ -4974,6 +4974,75 @@ body[data-app-size="compact"] .enm-bpos-head-chip,
     margin-top: var(--sp-3);
 }
 
+/* Integrity sub-card (beta.3.46) — collapsed by default, expands
+ * to show per-check rows. Reuses .enm-danger-card chrome. */
+.enm-integrity-summary {
+    font-size: var(--fs-body);
+    color: var(--text-primary);
+}
+.enm-integrity-summary-status {
+    font-weight: var(--fw-medium);
+}
+.enm-integrity-summary-status.enm-integrity-ok      { color: var(--success); }
+.enm-integrity-summary-status.enm-integrity-warn    { color: var(--warning); }
+.enm-integrity-summary-status.enm-integrity-fail    { color: var(--danger); }
+.enm-integrity-summary-status.enm-integrity-unknown { color: var(--text-tertiary); }
+
+.enm-integrity-details {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+    margin-top: var(--sp-3);
+    padding-top: var(--sp-3);
+    border-top: 1px solid var(--border-subtle);
+}
+.enm-integrity-row {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--sp-3);
+    padding: var(--sp-2) var(--sp-3);
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-sm);
+}
+.enm-integrity-row.enm-integrity-ok    { border-left: 3px solid var(--success); }
+.enm-integrity-row.enm-integrity-warn  { border-left: 3px solid var(--warning); }
+.enm-integrity-row.enm-integrity-fail  { border-left: 3px solid var(--danger); }
+.enm-integrity-row.enm-integrity-unknown { border-left: 3px solid var(--text-tertiary); }
+.enm-integrity-row-glyph {
+    flex: 0 0 auto;
+    font-size: 14px;
+    line-height: 1.5;
+}
+.enm-integrity-row.enm-integrity-ok   .enm-integrity-row-glyph { color: var(--success); }
+.enm-integrity-row.enm-integrity-warn .enm-integrity-row-glyph { color: var(--warning); }
+.enm-integrity-row.enm-integrity-fail .enm-integrity-row-glyph { color: var(--danger); }
+.enm-integrity-row.enm-integrity-unknown .enm-integrity-row-glyph { color: var(--text-tertiary); }
+.enm-integrity-row-body {
+    flex: 1;
+    min-width: 0;
+}
+.enm-integrity-row-label {
+    font-size: var(--fs-body);
+    color: var(--text-primary);
+    font-weight: var(--fw-medium);
+}
+.enm-integrity-row-detail {
+    font-size: var(--fs-caption);
+    color: var(--text-secondary);
+    margin-top: 2px;
+    word-break: break-word;
+}
+.enm-integrity-scope {
+    margin-top: var(--sp-3);
+    padding: var(--sp-2) var(--sp-3);
+    background: var(--bg-elevated);
+    border-radius: var(--r-sm);
+    font-size: var(--fs-caption);
+    color: var(--text-tertiary);
+    line-height: 1.5;
+}
+
 /* Narrow viewport — collapse the 3-col grid to stacked rows. */
 .enm-app[data-app-size="narrow"] .enm-identity-grid-row,
 .enm-app[data-app-size="compact"] .enm-identity-grid-row {

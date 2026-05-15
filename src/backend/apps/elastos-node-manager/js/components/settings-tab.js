@@ -1342,7 +1342,173 @@
         this._identity.resetWarn = resetWarn;
         this._identity.resetReveal = resetReveal;
 
+        // ----- Card 6: Server integrity (beta.3.46) -------------------
+        // Quiet by default — collapsed, only runs when expanded. Cached
+        // server-side response so opening + closing repeatedly is cheap.
+        // Honest about what we can't detect (hypervisor-level threats).
+        var integrityCard = _buildDangerCard({
+            kind: 'info',
+            title: t('settings.identity_integrity_title'),
+            help: t('settings.identity_integrity_help'),
+        });
+        body.appendChild(integrityCard.el);
+        var integritySummary = document.createElement('div');
+        integritySummary.className = 'enm-integrity-summary';
+        integritySummary.innerHTML =
+            '<span class="enm-integrity-summary-status" data-fill="status">'
+              + _h(t('settings.identity_integrity_collapsed'))
+            + '</span>';
+        integrityCard.body.appendChild(integritySummary);
+        var integrityDetails = document.createElement('div');
+        integrityDetails.className = 'enm-integrity-details';
+        integrityDetails.hidden = true;
+        integrityCard.body.appendChild(integrityDetails);
+        var integrityScope = document.createElement('div');
+        integrityScope.className = 'enm-integrity-scope';
+        integrityScope.textContent = t('settings.identity_integrity_scope_note');
+        integrityScope.hidden = true;
+        integrityCard.body.appendChild(integrityScope);
+        var integrityExpandBtn = document.createElement('button');
+        integrityExpandBtn.type = 'button';
+        integrityExpandBtn.className = 'enm-btn';
+        integrityExpandBtn.textContent = t('settings.identity_integrity_run_btn');
+        var integrityRebaselineBtn = document.createElement('button');
+        integrityRebaselineBtn.type = 'button';
+        integrityRebaselineBtn.className = 'enm-btn';
+        integrityRebaselineBtn.textContent = t('settings.identity_integrity_rebaseline_btn');
+        integrityRebaselineBtn.hidden = true;
+        var integrityStatus = _statusEl();
+        integrityCard.foot.appendChild(integrityStatus);
+        integrityCard.foot.appendChild(integrityRebaselineBtn);
+        integrityCard.foot.appendChild(integrityExpandBtn);
+        integrityExpandBtn.addEventListener('click', function () {
+            self._doIntegrityRun(integritySummary, integrityDetails, integrityScope,
+                integrityRebaselineBtn, integrityStatus, integrityExpandBtn);
+        });
+        integrityRebaselineBtn.addEventListener('click', function () {
+            self._doIntegrityRebaseline(integrityRebaselineBtn, integrityStatus,
+                integritySummary, integrityDetails, integrityScope, integrityExpandBtn);
+        });
+        this._identity.integrity = {
+            card: integrityCard.el,
+            summary: integritySummary,
+            details: integrityDetails,
+            scope: integrityScope,
+            runBtn: integrityExpandBtn,
+            rebaselineBtn: integrityRebaselineBtn,
+            status: integrityStatus,
+        };
+
         return card;
+    };
+
+    /**
+     * Run the integrity check on demand. Renders the summary status +
+     * per-check details. Cached server-side so repeated clicks are
+     * cheap.
+     */
+    SettingsTab.prototype._doIntegrityRun = function (
+        summary, details, scope, rebaselineBtn, status, runBtn
+    ) {
+        var self = this;
+        var t = root.enmTOrFallback;
+        status.textContent = t('settings.identity_integrity_running');
+        status.classList.remove('ok', 'err');
+        return root.enmRunOnce(runBtn,
+            t('settings.identity_integrity_running'),
+            function () {
+                return self.api.get('/identity/integrity', { skipCache: true })
+                    .then(function (resp) {
+                        if (self._destroyed) { return; }
+                        var r = (resp && resp.result) || resp || {};
+                        self._renderIntegrity(summary, details, scope, rebaselineBtn, r);
+                        details.hidden = false;
+                        scope.hidden = false;
+                        status.textContent = '';
+                    })
+                    .catch(function (err) {
+                        if (self._destroyed) { return; }
+                        status.textContent = (err && err.message) || 'Integrity check failed.';
+                        status.classList.add('err');
+                    });
+            });
+    };
+
+    /**
+     * Render the summary + per-check rows from a runAll() response.
+     */
+    SettingsTab.prototype._renderIntegrity = function (
+        summary, details, scope, rebaselineBtn, r
+    ) {
+        var t = root.enmTOrFallback;
+        var s = r.summary || {};
+        var sumEl = summary.querySelector('[data-fill="status"]');
+        var label;
+        if (s.status === 'ok')        { label = t('settings.identity_integrity_summary_ok'); }
+        else if (s.status === 'warn') { label = t('settings.identity_integrity_summary_warn'); }
+        else if (s.status === 'fail') { label = t('settings.identity_integrity_summary_fail'); }
+        else                          { label = t('settings.identity_integrity_summary_unknown'); }
+        sumEl.textContent = label;
+        sumEl.className = 'enm-integrity-summary-status enm-integrity-' + (s.status || 'unknown');
+
+        // Drift detected → expose the Re-baseline button so the operator
+        // can mark the new state as the new trusted baseline.
+        rebaselineBtn.hidden = !(s.warn > 0 || s.fail > 0);
+
+        // Render per-check rows.
+        var rows = (r.checks || []).map(function (c) {
+            var statusGlyph = c.status === 'ok'      ? '✓'
+                            : c.status === 'warn'    ? '⚠'
+                            : c.status === 'fail'    ? '✗'
+                            :                          '?';
+            return ''
+                + '<div class="enm-integrity-row enm-integrity-' + _h(c.status) + '">'
+                  + '<span class="enm-integrity-row-glyph" aria-hidden="true">' + _h(statusGlyph) + '</span>'
+                  + '<div class="enm-integrity-row-body">'
+                    + '<div class="enm-integrity-row-label">' + _h(c.label) + '</div>'
+                    + '<div class="enm-integrity-row-detail">' + _h(c.detail || '') + '</div>'
+                  + '</div>'
+                + '</div>';
+        }).join('');
+        details.innerHTML = rows;
+    };
+
+    /**
+     * Re-capture the integrity baseline. Operator-blessed action
+     * (you ran a legitimate update, this is the new trusted state).
+     */
+    SettingsTab.prototype._doIntegrityRebaseline = function (
+        rebaselineBtn, status, summary, details, scope, runBtn
+    ) {
+        var self = this;
+        var t = root.enmTOrFallback;
+        if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
+            if (!window.confirm(t('settings.identity_integrity_rebaseline_confirm'))) { return; }
+        }
+        status.textContent = t('settings.identity_integrity_rebaseline_running');
+        status.classList.remove('ok', 'err');
+        return root.enmRunOnce(rebaselineBtn,
+            t('settings.identity_integrity_rebaseline_running'),
+            function () {
+                return self.api.post('/identity/integrity/rebaseline', {})
+                    .then(function () {
+                        if (self._destroyed) { return; }
+                        // Re-run check to confirm everything reads green.
+                        return self.api.get('/identity/integrity', { skipCache: true })
+                            .then(function (resp) {
+                                if (self._destroyed) { return; }
+                                var r = (resp && resp.result) || resp || {};
+                                self._renderIntegrity(summary, details, scope, rebaselineBtn, r);
+                                status.textContent = t('settings.identity_integrity_rebaseline_ok');
+                                status.classList.add('ok');
+                            });
+                    })
+                    .catch(function (err) {
+                        if (self._destroyed) { return; }
+                        status.textContent = (err && err.message) || 'Rebaseline failed.';
+                        status.classList.add('err');
+                    });
+            });
     };
 
     /**

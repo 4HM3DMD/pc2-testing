@@ -48,6 +48,7 @@ const { limit } = require('../services/EnmRateLimit');
 const { requireOwner, readActorWallet } = require('../auth/OwnerCheckMiddleware');
 const RequestSchemas = require('../services/EnmRequestSchemas');
 const KeystoreIdentity = require('../services/EnmKeystoreIdentity');
+const IntegrityChecker = require('../services/EnmIntegrityChecker');
 const AuditLog = require('../services/EnmAuditLog');
 const ConfigStore = require('../services/ConfigStore');
 
@@ -337,6 +338,58 @@ function build(deps) {
             }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} POST /identity/reset: ${err.message}`);
+            return res.status(500).json(errorBody(err.message));
+        }
+    });
+
+    // ------------------------------------------------------------------
+    // GET /identity/integrity     beta.3.46
+    //
+    // Server-integrity panel under Identity tab. Honest about scope:
+    // detects tamper-EVIDENCE (changes since install) not tamper-PROOF
+    // (correctness at install). Hypervisor-level threats (live RAM
+    // snapshot, pre-install disk image) remain undetectable from
+    // inside the guest. UI surfaces this honestly.
+    //
+    // Cheap to run — file hashing on ~60 MB binaries is <100 ms; rest
+    // is metadata. Frontend caches for ~3 min via the API client's
+    // default TTL so opening the Identity tab multiple times in a
+    // session doesn't re-hash on every paint.
+    // ------------------------------------------------------------------
+    router.get('/integrity', limit('read'), async (req, res) => {
+        if (!readActorWallet(req)) {
+            return res.status(401).json(errorBody('Authentication required.'));
+        }
+        try {
+            const r = await IntegrityChecker.runAll({ log: extensionHandle.log });
+            return res.json(successBody(r));
+        } catch (err) {
+            extensionHandle.log.error(`${ENM_LOG_PREFIX} GET /identity/integrity: ${err.message}`);
+            return res.status(500).json(errorBody(err.message));
+        }
+    });
+
+    // ------------------------------------------------------------------
+    // POST /identity/integrity/rebaseline    beta.3.46
+    //
+    // Operator-blessed reset of the integrity baseline. Used after a
+    // legitimate change (binary update, keystore reset/import, owner
+    // token rotation) so the next integrity run doesn't keep flagging
+    // the "drift". Owner-gated, audit-logged. No body required.
+    // ------------------------------------------------------------------
+    router.post('/integrity/rebaseline', limit('admin'), requireOwner, async (req, res) => {
+        const wallet = readActorWallet(req);
+        try {
+            const b = await IntegrityChecker.rebaseline({ log: extensionHandle.log });
+            await _audit(getDb, extensionHandle.log, {
+                walletAddress: wallet,
+                decision: 'executed',
+                outcome: 'Integrity baseline re-captured',
+                payload: { action: 'integrity-rebaseline', capturedAt: b.capturedAt },
+            });
+            return res.json(successBody({ baseline: b }));
+        } catch (err) {
+            extensionHandle.log.error(`${ENM_LOG_PREFIX} POST /identity/integrity/rebaseline: ${err.message}`);
             return res.status(500).json(errorBody(err.message));
         }
     });
