@@ -508,7 +508,18 @@ class HealthChecker {
     /** @private */
     async _loadConfigSafe() {
         try {
-            return await this.loadConfig();
+            const cfg = await this.loadConfig();
+            // beta.3.19 — push operator-tuned alert thresholds from
+            // cfg.global.notifications.thresholds into HealthRules.
+            // Cheap + idempotent so we just do it on every load
+            // rather than wire a config-change event. Defaults are
+            // re-applied if the operator clears the section (set
+            // to undefined).
+            if (cfg && cfg.global && cfg.global.notifications
+                && cfg.global.notifications.thresholds) {
+                HealthRules.setThresholds(cfg.global.notifications.thresholds);
+            }
+            return cfg;
         } catch (err) {
             this.extensionHandle.log.warn(
                 `${ENM_LOG_PREFIX} HealthChecker config.load failed: ${err.message}`,

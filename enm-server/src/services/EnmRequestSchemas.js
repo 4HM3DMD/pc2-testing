@@ -92,6 +92,46 @@ const generalBody = Joi.object({
     auditRetentionDays: Joi.number().integer().min(0).max(3650).optional(),
 }).unknown(false).label('PUT /config/general body');
 
+// beta.3.19 — Phase 2 alert thresholds. The four knobs are operator-
+// tunable values that today live as hardcoded `let`s in HealthRules.js
+// (DISK_WARN_GB / DISK_CRITICAL_GB / PEER_ZERO_GRACE_MS /
+// HEIGHT_STALL_GRACE_MS). The frontend's Alerts section hits this
+// endpoint; the backend route writes them into
+// cfg.global.notifications.thresholds and HealthChecker pushes them
+// into HealthRules.setThresholds() on each tick.
+//
+// Bounds picked to be defensible:
+//   - Disk warn 10–10000 GB, critical 1–disk-warn GB
+//   - Peer-zero grace 1–120 min (zero-peers under 1 min would alert
+//     constantly during normal handshake flutter; >120 min is denial)
+//   - Sync-stall grace 1–240 min (similar reasoning — block times
+//     of ~2 min on mainnet make <1 min noise; >240 min lets a real
+//     stall ride invisibly for hours)
+const notificationsBody = Joi.object({
+    diskFreeWarnGb: Joi.number().integer().min(10).max(10000).optional(),
+    diskFreeCriticalGb: Joi.number().integer().min(1).max(10000).optional(),
+    peerZeroGraceMin: Joi.number().integer().min(1).max(120).optional(),
+    syncStallGraceMin: Joi.number().integer().min(1).max(240).optional(),
+})
+    .unknown(false)
+    .label('PUT /config/notifications body')
+    // Cross-field: critical must be strictly less than warn so the
+    // operator can't accidentally configure a state where "below 20 GB
+    // is critical, below 30 GB is just a warning".
+    .custom((value, helpers) => {
+        if (Number.isFinite(value.diskFreeWarnGb)
+            && Number.isFinite(value.diskFreeCriticalGb)
+            && value.diskFreeCriticalGb >= value.diskFreeWarnGb) {
+            return helpers.error('any.invalid', {
+                message: 'diskFreeCriticalGb must be less than diskFreeWarnGb',
+            });
+        }
+        return value;
+    })
+    .messages({
+        'any.invalid': '{{#message}}',
+    });
+
 // POST /config/anti-snipe-password
 const antiSnipeBody = Joi.object({
     // `password` is the ONLY field. Empty string = explicit clear.
@@ -147,6 +187,7 @@ module.exports = {
     networkBody,
     mainchainBody,
     generalBody,
+    notificationsBody,
     antiSnipeBody,
     validateBody,
 };

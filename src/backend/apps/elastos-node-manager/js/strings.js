@@ -616,6 +616,31 @@
             anti_snipe_clear_confirm:       'Disable anti-snipe password? Healing proposals that require it will fail until you set a new one.',
             anti_snipe_cleared:             '✓ Anti-snipe disabled',
             revert_btn:                     'Revert',
+
+            // beta.3.19 — Phase 2 Alerts section. Operator-tunable
+            // thresholds that drive HealthChecker's F3/F4/F5 detectors.
+            // No restart needed — HealthChecker picks the new values
+            // up on its next _loadConfigSafe tick (≤5 s).
+            heading_alerts:           'Alerts',
+            alerts_intro:             'When the dashboard should warn you. These thresholds drive the health detectors that decide what counts as a problem worth surfacing.',
+            save_alerts:              'Save Alerts',
+            // Disk-space pair (warn comes before critical so the operator
+            // reads it in increasing-severity order).
+            alerts_disk_warn_label:   'Disk space — warn at',
+            alerts_disk_warn_help:    'Show a warning when free disk on the chain data dir drops below this. Default 20 GB.',
+            alerts_disk_critical_label: 'Disk space — critical at',
+            alerts_disk_critical_help:  'Escalate to a critical alert when free disk drops below this. Must be less than the warn value. Default 5 GB.',
+            // Peer + sync timers. Both are "grace periods" — how long the
+            // bad condition has to persist before the alert fires.
+            alerts_peer_grace_label:  'Peer-count alert after',
+            alerts_peer_grace_help:   'Wait this long with zero peers before alerting. Short values (1–2 min) catch real network issues fast but trip during normal handshake flutter. Default 5 min.',
+            alerts_sync_grace_label:  'Sync-stall alert after',
+            alerts_sync_grace_help:   'Alert when block height hasn’t advanced for this long despite peers being connected. Default 10 min — well above the ~2-minute block cadence on mainnet.',
+            // Inline validation errors.
+            alerts_err_disk_warn:     'Disk-warn threshold must be between 10 and 10,000 GB.',
+            alerts_err_disk_critical: 'Disk-critical threshold must be between 1 and 10,000 GB and strictly less than the warn threshold.',
+            alerts_err_peer_grace:    'Peer-zero grace must be between 1 and 120 minutes.',
+            alerts_err_sync_grace:    'Sync-stall grace must be between 1 and 240 minutes.',
         },
 
         validator_card: {

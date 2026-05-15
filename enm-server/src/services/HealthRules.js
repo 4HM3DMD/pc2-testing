@@ -25,12 +25,55 @@
 
 const { HEALING_TIERS, MAX_INACTIVE_ROUNDS } = require('./EnmConstants');
 
-// Thresholds — keep them as named constants so tests can poke at them.
-const PEER_ZERO_GRACE_MS         = 5 * 60_000;
-const RPC_UNREACHABLE_GRACE_MS   = 2 * 60_000;
-const HEIGHT_STALL_GRACE_MS      = 10 * 60_000;
-const DISK_CRITICAL_GB           = 5;
-const DISK_WARN_GB               = 20;
+// Thresholds — beta.3.19 made these mutable so HealthChecker can push
+// operator-tuned values in from cfg.global.notifications.thresholds at
+// each tick. Defaults match the alpha.28 hardcoded values so behavior
+// is identical when no override is configured. RPC_UNREACHABLE_GRACE_MS
+// stays a const for now — operator audit didn't flag it as a knob worth
+// exposing and the 2-min grace is well-calibrated.
+let PEER_ZERO_GRACE_MS         = 5 * 60_000;
+const RPC_UNREACHABLE_GRACE_MS = 2 * 60_000;
+let HEIGHT_STALL_GRACE_MS      = 10 * 60_000;
+let DISK_CRITICAL_GB           = 5;
+let DISK_WARN_GB               = 20;
+
+/**
+ * beta.3.19 — apply operator-tuned thresholds from
+ * cfg.global.notifications.thresholds. Called by HealthChecker on
+ * every tick (cheap, idempotent). Unset / invalid fields are
+ * ignored — they fall back to the defaults above. Cross-field
+ * validation (criticalGb < warnGb) is enforced upstream in the Joi
+ * schema; this function trusts its input.
+ *
+ * @param {{diskFreeWarnGb?:number, diskFreeCriticalGb?:number,
+ *          peerZeroGraceMin?:number, syncStallGraceMin?:number}} overrides
+ */
+function setThresholds(overrides) {
+    if (!overrides || typeof overrides !== 'object') { return; }
+    if (Number.isFinite(overrides.diskFreeWarnGb)) {
+        DISK_WARN_GB = overrides.diskFreeWarnGb;
+    }
+    if (Number.isFinite(overrides.diskFreeCriticalGb)) {
+        DISK_CRITICAL_GB = overrides.diskFreeCriticalGb;
+    }
+    if (Number.isFinite(overrides.peerZeroGraceMin)) {
+        PEER_ZERO_GRACE_MS = overrides.peerZeroGraceMin * 60_000;
+    }
+    if (Number.isFinite(overrides.syncStallGraceMin)) {
+        HEIGHT_STALL_GRACE_MS = overrides.syncStallGraceMin * 60_000;
+    }
+}
+
+/** beta.3.19 — current effective threshold values (used by tests + the
+ *  frontend Alerts section's GET round-trip to read what's live). */
+function getThresholds() {
+    return {
+        diskFreeWarnGb:     DISK_WARN_GB,
+        diskFreeCriticalGb: DISK_CRITICAL_GB,
+        peerZeroGraceMin:   PEER_ZERO_GRACE_MS / 60_000,
+        syncStallGraceMin:  HEIGHT_STALL_GRACE_MS / 60_000,
+    };
+}
 
 // Phase 5 thresholds.
 const PEER_ZERO_FALLBACK_MS      = 10 * 60_000;       // F16 — promote to fallback peer suggestion
@@ -197,7 +240,7 @@ function detectF5(snap) {
         tier: HEALING_TIERS.OWNER_CONFIRMS,
         severity: 'WARNING',
         summaryAction: `Disk space getting low (${free.toFixed(1)} GB free)`,
-        summaryReason: `Below the 20 GB warn threshold. Plan a prune or volume migration before it crosses 5 GB.`,
+        summaryReason: `Below the ${DISK_WARN_GB} GB warn threshold. Plan a prune or volume migration before it crosses ${DISK_CRITICAL_GB} GB.`,
         payload: { action: 'prune-suggestion', chainId: snap.chainId, freeGb: free },
     };
 }
@@ -593,6 +636,9 @@ module.exports = {
     setRuleEnabled,
     isRuleEnabled,
     listRuleStates,
+    // beta.3.19 — operator-tunable thresholds (Phase 2 Alerts section).
+    setThresholds,
+    getThresholds,
     detectF1, detectF2, detectF3, detectF4, detectF5,
     detectF6, detectF7, detectF8, detectF9, detectF10,
     detectF11, detectF12, detectF13, detectF16, detectF18,

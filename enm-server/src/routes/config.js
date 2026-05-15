@@ -308,6 +308,61 @@ function build(extensionHandle) {
         }
     });
 
+    // beta.3.19 — PUT /config/notifications.
+    //
+    // Phase 2 Alerts section. Operator-tunable thresholds that drive
+    // the HealthChecker's F3 (peer-zero) / F4 (sync-stall) / F5 (disk-
+    // space) detectors. The values land in
+    // cfg.global.notifications.thresholds.* and HealthChecker pushes
+    // them into HealthRules.setThresholds() on its next
+    // _loadConfigSafe() tick (≤5 s cadence on the fast bucket).
+    //
+    // Defaults match the alpha.28 hardcoded values: warn at 20 GB,
+    // critical at 5 GB, peer-zero grace 5 min, sync-stall grace 10 min.
+    // Cross-field validation (critical < warn) is enforced in the Joi
+    // schema upstream, so by the time we get here the body is sane.
+    //
+    // No chain restart needed — HealthRules picks up the new thresholds
+    // on the next tick. The Settings Alerts section ships with the
+    // "No restart needed" tag.
+    router.put('/notifications', limit('admin'), requireOwner, async (req, res) => {
+        const { value, details } = RequestSchemas.validateBody(
+            RequestSchemas.notificationsBody, req.body,
+        );
+        if (details) {
+            return res.status(400).json({
+                ...errorBody('Invalid request body.'),
+                details,
+            });
+        }
+        const body = value;
+        try {
+            const cfg = await ConfigStore.load();
+            cfg.global = cfg.global || {};
+            cfg.global.notifications = cfg.global.notifications || {};
+            cfg.global.notifications.thresholds =
+                cfg.global.notifications.thresholds || {};
+            const slot = cfg.global.notifications.thresholds;
+            if (body.diskFreeWarnGb != null) {
+                slot.diskFreeWarnGb = body.diskFreeWarnGb;
+            }
+            if (body.diskFreeCriticalGb != null) {
+                slot.diskFreeCriticalGb = body.diskFreeCriticalGb;
+            }
+            if (body.peerZeroGraceMin != null) {
+                slot.peerZeroGraceMin = body.peerZeroGraceMin;
+            }
+            if (body.syncStallGraceMin != null) {
+                slot.syncStallGraceMin = body.syncStallGraceMin;
+            }
+            await ConfigStore.save(cfg, { logger: extensionHandle.log });
+            return res.json(successBody({ thresholds: slot }));
+        } catch (err) {
+            extensionHandle.log.error(`${ENM_LOG_PREFIX} PUT /config/notifications: ${err.message}`);
+            return res.status(500).json(errorBody(err.message));
+        }
+    });
+
     // 0.2.0-beta.3.10 — POST /config/anti-snipe-password.
     //
     // Sets (or clears) the scrypt hash that SelfHealingEngine.

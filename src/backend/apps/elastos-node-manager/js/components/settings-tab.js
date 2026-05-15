@@ -203,6 +203,10 @@
             { key: 'access',   glyph: '⇆', label: t('settings.heading_access'),   build: this._buildAccessSection },
             { key: 'security', glyph: '◈', label: t('settings.heading_security'), build: this._buildSecuritySection },
             { key: 'network',  glyph: '⇄', label: t('settings.heading_network'),  build: this._buildNetworkSection },
+            // beta.3.19 — Alerts (Phase 2). Drives when the dashboard
+            // health detectors fire. Writes cfg.global.notifications.
+            // thresholds.* via PUT /config/notifications.
+            { key: 'alerts',   glyph: '⚑', label: t('settings.heading_alerts'),   build: this._buildAlertsSection },
             { key: 'storage',  glyph: '◳', label: t('settings.heading_storage'),  build: this._buildStorageSection },
             { key: 'advanced', glyph: '⚙', label: t('settings.heading_advanced'), build: this._buildAdvancedSection },
         ];
@@ -272,7 +276,10 @@
     // beta.3.18 — section keys map 1:1 to instance properties. Cleaner
     // than the alphabet-soup `key === 'advanced' ? 'adv' : ...` chain
     // and easier to extend when more sections land in later phases.
-    var SECTION_KEYS = ['access', 'security', 'network', 'storage', 'advanced'];
+    // beta.3.19 — Alerts section inserted between Network and Storage
+    // (it's about when-to-notify, sits between the access/network and
+    // the data-at-rest sections).
+    var SECTION_KEYS = ['access', 'security', 'network', 'alerts', 'storage', 'advanced'];
     SettingsTab.prototype._sectionRef = function (key) {
         return this['_' + key];
     };
@@ -894,6 +901,193 @@
         return sec.card;
     };
 
+    // -----------------------------------------------------------------
+    // Section: Alerts (beta.3.19 — Phase 2)
+    //   Operator-tunable thresholds for the dashboard health detectors:
+    //   disk-warn / disk-critical (GB free) + peer-zero grace +
+    //   sync-stall grace (both in minutes). Backend pushes these into
+    //   HealthRules.setThresholds() on each tick — no chain restart.
+    // -----------------------------------------------------------------
+    /** @private */
+    SettingsTab.prototype._buildAlertsSection = function (t) {
+        var self = this;
+        var sec = makeSection({
+            id: 'alerts',
+            icon: '⚑',
+            title: t('settings.heading_alerts'),
+            help: t('settings.alerts_intro'),
+            tag: { kind: 'success', label: 'No restart needed' },
+        });
+        this._alerts = {
+            card: sec.card,
+            body: sec.body,
+            statusEl: sec.statusEl,
+            saveBtn: sec.saveBtn,
+            revertBtn: sec.revertBtn,
+            setDirty: sec.setDirty,
+        };
+
+        // Row 1 — Disk-warn threshold (GB free).
+        this._alerts.diskWarn = makeInputSuffix({
+            type: 'number',
+            value: '20',
+            min: 10,
+            max: 10000,
+            step: 1,
+            mono: true,
+            suffix: 'GB free',
+            ariaLabel: 'Disk-warn threshold in gigabytes free',
+            describedById: 'enm-alerts-status',
+        });
+        sec.body.appendChild(makeFormRow({
+            label: t('settings.alerts_disk_warn_label'),
+            help: t('settings.alerts_disk_warn_help'),
+            control: this._alerts.diskWarn.el,
+        }));
+
+        // Row 2 — Disk-critical threshold.
+        this._alerts.diskCritical = makeInputSuffix({
+            type: 'number',
+            value: '5',
+            min: 1,
+            max: 10000,
+            step: 1,
+            mono: true,
+            suffix: 'GB free',
+            ariaLabel: 'Disk-critical threshold in gigabytes free',
+            describedById: 'enm-alerts-status',
+        });
+        sec.body.appendChild(makeFormRow({
+            label: t('settings.alerts_disk_critical_label'),
+            help: t('settings.alerts_disk_critical_help'),
+            control: this._alerts.diskCritical.el,
+        }));
+
+        // Row 3 — Peer-zero grace minutes.
+        this._alerts.peerGrace = makeInputSuffix({
+            type: 'number',
+            value: '5',
+            min: 1,
+            max: 120,
+            step: 1,
+            mono: true,
+            suffix: 'minutes',
+            ariaLabel: 'Peer-zero alert grace in minutes',
+            describedById: 'enm-alerts-status',
+        });
+        sec.body.appendChild(makeFormRow({
+            label: t('settings.alerts_peer_grace_label'),
+            help: t('settings.alerts_peer_grace_help'),
+            control: this._alerts.peerGrace.el,
+        }));
+
+        // Row 4 — Sync-stall grace minutes.
+        this._alerts.syncGrace = makeInputSuffix({
+            type: 'number',
+            value: '10',
+            min: 1,
+            max: 240,
+            step: 1,
+            mono: true,
+            suffix: 'minutes',
+            ariaLabel: 'Sync-stall alert grace in minutes',
+            describedById: 'enm-alerts-status',
+        });
+        sec.body.appendChild(makeFormRow({
+            label: t('settings.alerts_sync_grace_label'),
+            help: t('settings.alerts_sync_grace_help'),
+            control: this._alerts.syncGrace.el,
+        }));
+
+        sec.statusEl.id = 'enm-alerts-status';
+
+        sec.saveBtn.addEventListener('click', function () { self._saveAlerts(); });
+        sec.revertBtn.addEventListener('click', function () { self.refresh('alerts'); });
+
+        return sec.card;
+    };
+
+    /**
+     * beta.3.19 — save Alerts thresholds. Backend:
+     * PUT /config/notifications. No chain restart required —
+     * HealthChecker picks up the new values on its next tick.
+     * @private
+     */
+    SettingsTab.prototype._saveAlerts = function () {
+        var t = root.enmTOrFallback;
+        var self = this;
+        var a = this._alerts;
+        // Clear stale aria-invalid hints.
+        a.diskWarn.input.removeAttribute('aria-invalid');
+        a.diskCritical.input.removeAttribute('aria-invalid');
+        a.peerGrace.input.removeAttribute('aria-invalid');
+        a.syncGrace.input.removeAttribute('aria-invalid');
+
+        var diskWarn = parseInt(a.diskWarn.input.value, 10);
+        var diskCrit = parseInt(a.diskCritical.input.value, 10);
+        var peerMin  = parseInt(a.peerGrace.input.value, 10);
+        var syncMin  = parseInt(a.syncGrace.input.value, 10);
+
+        if (!Number.isInteger(diskWarn) || diskWarn < 10 || diskWarn > 10000) {
+            setStatus(a.statusEl, 'error',
+                t('settings.save_failed', { error: t('settings.alerts_err_disk_warn') }));
+            a.diskWarn.input.setAttribute('aria-invalid', 'true');
+            try { a.diskWarn.input.focus({ preventScroll: true }); }
+            catch (e) { a.diskWarn.input.focus(); }
+            return;
+        }
+        // Critical must be valid AND strictly less than warn (matches the
+        // Joi cross-field check on the backend).
+        if (!Number.isInteger(diskCrit) || diskCrit < 1 || diskCrit > 10000
+            || diskCrit >= diskWarn) {
+            setStatus(a.statusEl, 'error',
+                t('settings.save_failed', { error: t('settings.alerts_err_disk_critical') }));
+            a.diskCritical.input.setAttribute('aria-invalid', 'true');
+            try { a.diskCritical.input.focus({ preventScroll: true }); }
+            catch (e) { a.diskCritical.input.focus(); }
+            return;
+        }
+        if (!Number.isInteger(peerMin) || peerMin < 1 || peerMin > 120) {
+            setStatus(a.statusEl, 'error',
+                t('settings.save_failed', { error: t('settings.alerts_err_peer_grace') }));
+            a.peerGrace.input.setAttribute('aria-invalid', 'true');
+            try { a.peerGrace.input.focus({ preventScroll: true }); }
+            catch (e) { a.peerGrace.input.focus(); }
+            return;
+        }
+        if (!Number.isInteger(syncMin) || syncMin < 1 || syncMin > 240) {
+            setStatus(a.statusEl, 'error',
+                t('settings.save_failed', { error: t('settings.alerts_err_sync_grace') }));
+            a.syncGrace.input.setAttribute('aria-invalid', 'true');
+            try { a.syncGrace.input.focus({ preventScroll: true }); }
+            catch (e) { a.syncGrace.input.focus(); }
+            return;
+        }
+
+        var body = {
+            diskFreeWarnGb: diskWarn,
+            diskFreeCriticalGb: diskCrit,
+            peerZeroGraceMin: peerMin,
+            syncStallGraceMin: syncMin,
+        };
+        var savingLabel = t('common.saving') || 'Saving…';
+        setStatus(a.statusEl, '', t('common.loading') || 'Saving…');
+        return root.enmRunOnce(a.saveBtn, savingLabel, function () {
+            return self.api.put('/config/notifications', body)
+                .then(function () {
+                    if (self._destroyed) { return; }
+                    setStatus(a.statusEl, 'success', '✓ ' + t('settings.saved'));
+                    self.refresh('alerts');
+                })
+                .catch(function (err) {
+                    if (self._destroyed) { return; }
+                    if (err && err.status === 401) { return; }
+                    setStatus(a.statusEl, 'error',
+                        t('settings.save_failed', { error: err.message || String(err) }));
+                });
+        });
+    };
+
     /**
      * @private
      * Fetch /config/rpc/credentials/mainchain to populate the whitelist
@@ -1366,6 +1560,7 @@
         if (!scope || scope === 'access')   { this._fillAccess(cfg); }
         if (!scope || scope === 'security') { this._fillSecurity(cfg); }
         if (!scope || scope === 'network')  { this._fillNetwork(cfg); }
+        if (!scope || scope === 'alerts')   { this._fillAlerts(cfg); }
         if (!scope || scope === 'storage')  { this._fillStorage(cfg); }
         if (!scope || scope === 'advanced') { this._fillAdvanced(cfg); }
     };
@@ -1437,6 +1632,28 @@
         var g = (cfg && cfg.global) || {};
         this._storage.auditRetention.input.value =
             String((g.audit && g.audit.retentionDays) || 365);
+    };
+
+    /**
+     * beta.3.19 — Alerts section (Phase 2). Hydrates from
+     * cfg.global.notifications.thresholds with the same defaults the
+     * backend HealthRules module ships with so the form never shows
+     * empty inputs on first paint.
+     * @private
+     */
+    SettingsTab.prototype._fillAlerts = function (cfg) {
+        if (!this._alerts) { return; }
+        var t = (cfg && cfg.global
+            && cfg.global.notifications
+            && cfg.global.notifications.thresholds) || {};
+        this._alerts.diskWarn.input.value =
+            String(Number.isFinite(t.diskFreeWarnGb) ? t.diskFreeWarnGb : 20);
+        this._alerts.diskCritical.input.value =
+            String(Number.isFinite(t.diskFreeCriticalGb) ? t.diskFreeCriticalGb : 5);
+        this._alerts.peerGrace.input.value =
+            String(Number.isFinite(t.peerZeroGraceMin) ? t.peerZeroGraceMin : 5);
+        this._alerts.syncGrace.input.value =
+            String(Number.isFinite(t.syncStallGraceMin) ? t.syncStallGraceMin : 10);
     };
 
     // -----------------------------------------------------------------
@@ -1725,6 +1942,7 @@
         else if (opts.id === 'advanced')  { saveLabel = 'Save Advanced'; }
         else if (opts.id === 'access')    { saveLabel = 'Save Access'; }
         else if (opts.id === 'security')  { saveLabel = 'Save Security'; }
+        else if (opts.id === 'alerts')    { saveLabel = 'Save Alerts'; }
         else if (opts.id === 'storage')   { saveLabel = 'Save Storage'; }
         else if (opts.id === 'general')   { saveLabel = 'Save General'; }
         saveBtn.textContent = saveLabel;
