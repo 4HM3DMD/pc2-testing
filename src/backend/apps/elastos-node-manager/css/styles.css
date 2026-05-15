@@ -1716,6 +1716,117 @@ body[data-app-size="compact"] .enm-sys-cell:last-child,
 .enm-section-card-foot-status.error   { color: var(--error); }
 .enm-section-card-foot-status.warn    { color: var(--warning); }
 
+/* beta.3.18 — Phase 1 IA reshape. Three new visual primitives:
+   1. .enm-advanced-warning  — banner at the top of the Advanced section
+      to mark that everything below is "don't touch unless you know why"
+   2. .enm-security-callout  — info banner above each Security toggle
+      explaining what that toggle actually protects
+   3. .enm-restart-modal-*   — the post-save prompt that asks the
+      operator to restart mainchain now / later
+*/
+
+/* (1) Advanced warning banner. Sits inside the Advanced section card
+   body, above the first form row. Operator chose option (2b): the
+   risky knobs stay visible, but everything below this banner is
+   visually flagged as "here be dragons". */
+.enm-advanced-warning {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--sp-3);
+    padding: var(--sp-3) var(--sp-4);
+    margin-bottom: var(--sp-3);
+    background: var(--warning-bg);
+    border: 1px solid var(--warning-soft);
+    border-radius: var(--r-md);
+}
+.enm-advanced-warning-icon {
+    flex: 0 0 auto;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--warning);
+    color: var(--bg-page);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: var(--fw-semibold);
+    font-size: 14px;
+    line-height: 1;
+}
+.enm-advanced-warning-body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.enm-advanced-warning-title {
+    font-size: var(--fs-body);
+    font-weight: var(--fw-semibold);
+    color: var(--text-primary);
+    line-height: 1.35;
+}
+.enm-advanced-warning-text {
+    font-size: var(--fs-caption);
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+
+/* (2) Security callout. Renders above each toggle/password row in the
+   Security section, explaining what the control protects. Lighter
+   weight than the warning banner (info palette, no icon — meant to
+   inform, not warn). */
+.enm-security-callout {
+    background: var(--accent-soft);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 var(--r-sm) var(--r-sm) 0;
+    padding: var(--sp-2) var(--sp-3);
+    margin: var(--sp-3) 0 var(--sp-1);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.enm-security-callout-head {
+    font-size: 10px;
+    font-weight: var(--fw-semibold);
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+.enm-security-callout-body {
+    font-size: var(--fs-caption);
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+
+/* (3) Restart modal. Reuses the .enm-modal-scrim + .enm-modal-card
+   chrome from phase-06 (already shipped by proposal-card + tools-
+   update-card). This rule just sizes the restart variant — the
+   common chrome handles the scrim, focus trap visuals, animation. */
+.enm-restart-modal-root {
+    position: fixed;
+    inset: 0;
+    z-index: 1100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.enm-restart-modal-card {
+    max-width: 440px;
+    width: 92%;
+}
+.enm-restart-modal-status {
+    margin: var(--sp-2) 0 0;
+    font-size: var(--fs-caption);
+    color: var(--text-tertiary);
+    min-height: 1.2em;
+}
+.enm-restart-modal-status:empty {
+    /* keep the slot reserved so the modal doesn't jump in height
+       when the operator clicks Restart now. */
+    visibility: hidden;
+}
+
 /* ---- Form row + primitives ------------------------------------ */
 .enm-form-row {
     display: grid;

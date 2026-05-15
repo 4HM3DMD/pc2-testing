@@ -134,9 +134,12 @@
             if (self._destroyed) { return; }
             self._cfg = data && data.config;
             self._fillForm(scope);
-            if (!scope || scope === 'network')  { self._markClean('network'); }
-            if (!scope || scope === 'advanced') { self._markClean('advanced'); }
-            if (!scope || scope === 'general')  { self._markClean('general'); }
+            // beta.3.18 — clean every section the refresh touched.
+            // Without `scope` we clean every section after a full
+            // /config reload (initial mount or external refresh).
+            SECTION_KEYS.forEach(function (k) {
+                if (!scope || scope === k) { self._markClean(k); }
+            });
         }).catch(function (err) {
             if (self._destroyed) { return; }
             if (err && err.status === 401) { return; }
@@ -169,7 +172,7 @@
 
         var navHead = document.createElement('div');
         navHead.className = 'enm-settings-nav-head';
-        navHead.textContent = 'Configuration';
+        navHead.textContent = t('settings.nav_label_config') || 'Configuration';
         this._navEl.appendChild(navHead);
 
         // Pills (alt nav for narrow/compact). Same role pattern. Hidden by
@@ -183,11 +186,25 @@
         this._contentEl = document.createElement('div');
         this._contentEl.className = 'enm-settings-content';
 
-        // Order matches mock: Network first, Advanced second, General last.
+        // beta.3.18 — Phase 1 IA reshape. Five task-oriented sections in
+        // the order an operator opens them. The schema-dump (Network /
+        // Mainchain Advanced / General) is gone; each section now groups
+        // by what the operator is trying to DO. The previous knobs are
+        // redistributed:
+        //   Access   ← (NEW) RPC whitelist (was Advanced) + RPC creds collapsed
+        //   Security ← anti-snipe (was General) + healing toggle (was General) +
+        //              critical-ack (was General), with explainer copy
+        //   Network  ← IP detect (unchanged)
+        //   Storage  ← audit retention (was General)
+        //   Advanced ← (warning banner) + log level / memory / archive
+        //              (always visible per operator option (2b), with
+        //              "don't change unless you know why" banner).
         var nav = [
+            { key: 'access',   glyph: '⇆', label: t('settings.heading_access'),   build: this._buildAccessSection },
+            { key: 'security', glyph: '◈', label: t('settings.heading_security'), build: this._buildSecuritySection },
             { key: 'network',  glyph: '⇄', label: t('settings.heading_network'),  build: this._buildNetworkSection },
+            { key: 'storage',  glyph: '◳', label: t('settings.heading_storage'),  build: this._buildStorageSection },
             { key: 'advanced', glyph: '⚙', label: t('settings.heading_advanced'), build: this._buildAdvancedSection },
-            { key: 'general',  glyph: '◉', label: t('settings.heading_general'),  build: this._buildGeneralSection },
         ];
         nav.forEach(function (item) {
             // Nav item (wide rail).
@@ -252,12 +269,19 @@
      *
      * @private
      */
+    // beta.3.18 — section keys map 1:1 to instance properties. Cleaner
+    // than the alphabet-soup `key === 'advanced' ? 'adv' : ...` chain
+    // and easier to extend when more sections land in later phases.
+    var SECTION_KEYS = ['access', 'security', 'network', 'storage', 'advanced'];
+    SettingsTab.prototype._sectionRef = function (key) {
+        return this['_' + key];
+    };
+
     SettingsTab.prototype._wireDirtyTracking = function () {
         var self = this;
         var handler = function (sectionKey) {
             return function () {
-                var sec = self['_' + (sectionKey === 'advanced' ? 'adv' :
-                    sectionKey === 'general' ? 'gen' : 'network')];
+                var sec = self._sectionRef(sectionKey);
                 if (sec && typeof sec.setDirty === 'function') {
                     sec.setDirty(true);
                 }
@@ -265,9 +289,8 @@
         };
         // Attach to each section's BODY el so events bubble up from
         // any contained form control (input, select, button, toggle).
-        ['network', 'advanced', 'general'].forEach(function (key) {
-            var sec = self['_' + (key === 'advanced' ? 'adv' :
-                key === 'general' ? 'gen' : 'network')];
+        SECTION_KEYS.forEach(function (key) {
+            var sec = self._sectionRef(key);
             if (!sec || !sec.body) { return; }
             sec.body.addEventListener('input',  handler(key));
             sec.body.addEventListener('change', handler(key));
@@ -283,11 +306,10 @@
      * .then() after a successful PUT.
      *
      * @private
-     * @param {string} key   one of 'network' / 'advanced' / 'general'
+     * @param {string} key  one of SECTION_KEYS (access/security/network/storage/advanced)
      */
     SettingsTab.prototype._markClean = function (key) {
-        var sec = this['_' + (key === 'advanced' ? 'adv' :
-            key === 'general' ? 'gen' : 'network')];
+        var sec = this._sectionRef(key);
         if (sec && typeof sec.setDirty === 'function') {
             sec.setDirty(false);
         }
@@ -473,6 +495,9 @@
                     if (self._destroyed) { return; }
                     setStatus(self._network.statusEl, 'success', '✓ ' + t('settings.saved'));
                     self.refresh('network');
+                    // beta.3.18 — Network change needs a chain restart
+                    // before peers see the new IP. Prompt the operator.
+                    self._promptRestartIfNeeded('network');
                 })
                 .catch(function (err) {
                     if (self._destroyed) { return; }
@@ -493,11 +518,10 @@
             id: 'advanced',
             icon: '⚙',
             title: t('settings.heading_advanced'),
-            help: 'Runtime knobs for the ela mainchain process. Writes ',
-            helpCodes: ['chains.mainchain.{logLevel, archiveMode, memoryLimitMb, rpc}'],
+            help: t('settings.advanced_intro'),
             tag: { kind: 'warn', label: 'Restart required' },
         });
-        this._adv = {
+        this._advanced = {
             card: sec.card,
             body: sec.body,
             statusEl: sec.statusEl,
@@ -505,9 +529,38 @@
             revertBtn: sec.revertBtn,
             setDirty: sec.setDirty,
         };
+        // beta.3.18 backward-compat alias — _saveAdvanced and _fillAdvanced
+        // refer to this._adv historically. Both reshaping paths now hit
+        // this._advanced; keep the alias so a stray reference doesn't
+        // throw mid-refresh.
+        this._adv = this._advanced;
+
+        // beta.3.18 — operator chose option (2b): the dangerous knobs
+        // are always visible at the bottom of Settings, but only behind
+        // an explicit "don't touch this" warning banner. This makes
+        // them discoverable without making them tempting.
+        var warn = document.createElement('div');
+        warn.className = 'enm-advanced-warning';
+        var warnIcon = document.createElement('div');
+        warnIcon.className = 'enm-advanced-warning-icon';
+        warnIcon.setAttribute('aria-hidden', 'true');
+        warnIcon.textContent = '⚠';
+        var warnBody = document.createElement('div');
+        warnBody.className = 'enm-advanced-warning-body';
+        var warnTitle = document.createElement('div');
+        warnTitle.className = 'enm-advanced-warning-title';
+        warnTitle.textContent = t('settings.advanced_warn_title');
+        var warnText = document.createElement('div');
+        warnText.className = 'enm-advanced-warning-text';
+        warnText.textContent = t('settings.advanced_warn_body');
+        warnBody.appendChild(warnTitle);
+        warnBody.appendChild(warnText);
+        warn.appendChild(warnIcon);
+        warn.appendChild(warnBody);
+        sec.body.appendChild(warn);
 
         // Row 1 — Log level.
-        this._adv.logLevel = makeSelectWrap({
+        this._advanced.logLevel = makeSelectWrap({
             options: [
                 { value: 'debug', label: 'debug' },
                 { value: 'info',  label: 'info' },
@@ -520,12 +573,12 @@
             label: 'Log level',
             help: 'Mapped to ela.conf ',
             helpCodes: ['PrintLevel'],
-            helpSuffix: ' by ElaMainChainAdapter.',
-            control: this._adv.logLevel.el,
+            helpSuffix: ' by ElaMainChainAdapter. Default (info) is right for almost everyone.',
+            control: this._advanced.logLevel.el,
         }));
 
         // Row 2 — Archive mode toggle.
-        this._adv.archiveMode = makeToggleRow({
+        this._advanced.archiveMode = makeToggleRow({
             initial: false,
             getLabel: function (on) {
                 return on
@@ -538,11 +591,11 @@
         sec.body.appendChild(makeFormRow({
             label: 'Archive mode',
             help: 'Keeps full historical block data instead of pruning. Disk-heavy.',
-            control: this._adv.archiveMode.el,
+            control: this._advanced.archiveMode.el,
         }));
 
         // Row 3 — Memory limit with MB suffix.
-        this._adv.memory = makeInputSuffix({
+        this._advanced.memory = makeInputSuffix({
             type: 'number',
             value: '4096',
             min: 512,
@@ -556,61 +609,287 @@
         sec.body.appendChild(makeFormRow({
             label: 'Memory limit',
             help: 'Per-process cap. Range 512 – 32,768 MB. Default 4,096.',
-            control: this._adv.memory.el,
-        }));
-
-        // Row 4 — RPC user.
-        this._adv.rpcUser = makeInput({
-            type: 'text',
-            value: 'ela',
-            mono: true,
-            ariaLabel: 'RPC user',
-            describedById: 'enm-adv-status',
-        });
-        this._adv.rpcUser.setAttribute('pattern', '[A-Za-z0-9]+');
-        this._adv.rpcUser.setAttribute('autocomplete', 'username');
-        this._adv.rpcUser.setAttribute('spellcheck', 'false');
-        this._adv.rpcUser.setAttribute('autocapitalize', 'off');
-        this._adv.rpcUser.title = 'Letters and numbers only (no spaces or symbols).';
-        sec.body.appendChild(makeFormRow({
-            label: 'RPC user',
-            help: 'ela.conf ',
-            helpCodes: ['RPCConfiguration.User'],
-            helpSuffix: ' · Basic-Auth principal.',
-            control: this._adv.rpcUser,
-        }));
-
-        // Row 5 — RPC password (secret-field with show/hide).
-        this._adv.rpcPasswordField = makeSecretField({
-            ariaLabel: 'RPC password',
-            placeholder: '(leave blank to keep current)',
-        });
-        sec.body.appendChild(makeFormRow({
-            label: 'RPC password',
-            help: 'Encrypted by ',
-            helpCodes: ['ConfigStore.setRpcPassword'],
-            helpSuffix: '. Leave blank to keep the current one.',
-            control: this._adv.rpcPasswordField.el,
-        }));
-
-        // Row 6 — IP whitelist (chip input with locked loopback).
-        this._adv.whiteIp = makeChipInput({
-            locked: ['127.0.0.1'],
-            placeholder: 'add IP or CIDR…',
-            ariaLabel: 'Add IP address or CIDR to whitelist',
-        });
-        sec.body.appendChild(makeFormRow({
-            label: 'IP whitelist',
-            help: 'ela.conf ',
-            helpCodes: ['RPCConfiguration.WhiteIPList'],
-            helpSuffix: '. Loopback stays locked so ENM can’t lose access to its own RPC.',
-            control: this._adv.whiteIp.el,
+            control: this._advanced.memory.el,
         }));
 
         sec.statusEl.id = 'enm-adv-status';
 
         sec.saveBtn.addEventListener('click', function () { self._saveAdvanced(); });
         sec.revertBtn.addEventListener('click', function () { self.refresh('advanced'); });
+
+        return sec.card;
+    };
+
+    // -----------------------------------------------------------------
+    // Section: Access (beta.3.18 — NEW)
+    //   RPC whitelist + RPC creds (user/password). All three move out
+    //   of the old "Mainchain Advanced" since they're access-control
+    //   concerns, not runtime tuning. Saves via PUT /config/mainchain
+    //   (same backend endpoint; partial body is supported per the
+    //   alpha.28 _saveRpcEnabled dead-code comment).
+    // -----------------------------------------------------------------
+    /** @private */
+    SettingsTab.prototype._buildAccessSection = function (t) {
+        var self = this;
+        var sec = makeSection({
+            id: 'access',
+            icon: '⇆',
+            title: t('settings.heading_access'),
+            help: t('settings.access_intro'),
+            tag: { kind: 'warn', label: 'Restart required' },
+        });
+        this._access = {
+            card: sec.card,
+            body: sec.body,
+            statusEl: sec.statusEl,
+            saveBtn: sec.saveBtn,
+            revertBtn: sec.revertBtn,
+            setDirty: sec.setDirty,
+        };
+
+        // Row 1 — IP whitelist (chip input with locked loopback). This
+        // is the one knob the operator told us actually mattered, so
+        // it's the first thing in the first section.
+        this._access.whiteIp = makeChipInput({
+            locked: ['127.0.0.1'],
+            placeholder: t('settings.rpc_white_add_placeholder'),
+            ariaLabel: 'Add IP address or CIDR to whitelist',
+        });
+        sec.body.appendChild(makeFormRow({
+            label: 'Allowed IPs',
+            help: 'Anyone on these IPs (or CIDR ranges) can hit the JSON-RPC. 127.0.0.1 stays locked so ENM doesn’t lose access to its own RPC. Whitelisted IPs still need the credentials below to authenticate.',
+            control: this._access.whiteIp.el,
+        }));
+
+        // Row 2 — RPC user.
+        this._access.rpcUser = makeInput({
+            type: 'text',
+            value: 'ela',
+            mono: true,
+            ariaLabel: 'RPC user',
+            describedById: 'enm-access-status',
+        });
+        this._access.rpcUser.setAttribute('pattern', '[A-Za-z0-9]+');
+        this._access.rpcUser.setAttribute('autocomplete', 'username');
+        this._access.rpcUser.setAttribute('spellcheck', 'false');
+        this._access.rpcUser.setAttribute('autocapitalize', 'off');
+        this._access.rpcUser.title = t('settings.rpc_user_tooltip');
+        sec.body.appendChild(makeFormRow({
+            label: 'RPC user',
+            help: 'Basic-Auth principal. Default (ela) is fine unless you have a reason to change it.',
+            control: this._access.rpcUser,
+        }));
+
+        // Row 3 — RPC password (secret field with show/hide).
+        this._access.rpcPasswordField = makeSecretField({
+            ariaLabel: 'RPC password',
+            placeholder: t('settings.rpc_password_placeholder_set'),
+        });
+        sec.body.appendChild(makeFormRow({
+            label: 'RPC password',
+            help: 'Stored encrypted on disk. Leave blank to keep the current one; type a new value to rotate.',
+            control: this._access.rpcPasswordField.el,
+        }));
+
+        sec.statusEl.id = 'enm-access-status';
+
+        sec.saveBtn.addEventListener('click', function () { self._saveAccess(); });
+        sec.revertBtn.addEventListener('click', function () { self.refresh('access'); });
+
+        return sec.card;
+    };
+
+    // -----------------------------------------------------------------
+    // Section: Security (beta.3.18 — NEW)
+    //   Anti-snipe password (was in General) + healing toggle (was in
+    //   General) + critical-ack (was in General). All recontextualized
+    //   with "what this protects" callouts. Two backend endpoints:
+    //   POST /config/anti-snipe-password (its own button row) and
+    //   PUT /config/general (criticalRequiresAck + autoExecuteSafe).
+    // -----------------------------------------------------------------
+    /** @private */
+    SettingsTab.prototype._buildSecuritySection = function (t) {
+        var self = this;
+        var sec = makeSection({
+            id: 'security',
+            icon: '◈',
+            title: t('settings.heading_security'),
+            help: t('settings.security_intro'),
+            tag: { kind: 'success', label: 'No restart needed' },
+        });
+        this._security = {
+            card: sec.card,
+            body: sec.body,
+            statusEl: sec.statusEl,
+            saveBtn: sec.saveBtn,
+            revertBtn: sec.revertBtn,
+            setDirty: sec.setDirty,
+        };
+
+        // Row 1 — Anti-snipe password (set / clear) with a "what this
+        // protects" callout above it so operators understand WHY the
+        // password is worth setting.
+        var antiSnipeCallout = document.createElement('div');
+        antiSnipeCallout.className = 'enm-security-callout';
+        var antiSnipeCalloutHead = document.createElement('div');
+        antiSnipeCalloutHead.className = 'enm-security-callout-head';
+        antiSnipeCalloutHead.textContent = t('settings.anti_snipe_what');
+        var antiSnipeCalloutBody = document.createElement('div');
+        antiSnipeCalloutBody.className = 'enm-security-callout-body';
+        antiSnipeCalloutBody.textContent = t('settings.anti_snipe_what_body');
+        antiSnipeCallout.appendChild(antiSnipeCalloutHead);
+        antiSnipeCallout.appendChild(antiSnipeCalloutBody);
+        sec.body.appendChild(antiSnipeCallout);
+
+        this._security.antiSnipeField = makeSecretField({
+            ariaLabel: 'Anti-snipe password',
+            placeholder: t('settings.anti_snipe_placeholder_unset'),
+        });
+        sec.body.appendChild(makeFormRow({
+            label: 'Anti-snipe password',
+            help: 'Optional. When set, high-stakes healing actions need this password to execute. Leave blank when typing a NEW password to keep the current one.',
+            control: this._security.antiSnipeField.el,
+        }));
+        // Inline button row for Set + Clear (independent of the
+        // section's main Save button — backend uses a dedicated
+        // POST /config/anti-snipe-password endpoint).
+        var antiSnipeActions = document.createElement('div');
+        antiSnipeActions.className = 'enm-form-inline';
+        this._security.antiSnipeSaveBtn = document.createElement('button');
+        this._security.antiSnipeSaveBtn.type = 'button';
+        this._security.antiSnipeSaveBtn.className = 'enm-btn';
+        this._security.antiSnipeSaveBtn.textContent = t('settings.anti_snipe_set_btn');
+        this._security.antiSnipeClearBtn = document.createElement('button');
+        this._security.antiSnipeClearBtn.type = 'button';
+        this._security.antiSnipeClearBtn.className = 'enm-btn enm-btn-danger';
+        this._security.antiSnipeClearBtn.textContent = t('settings.anti_snipe_clear_btn');
+        this._security.antiSnipeClearBtn.hidden = true;
+        this._security.antiSnipeStatus = document.createElement('span');
+        this._security.antiSnipeStatus.className = 'enm-detect-result';
+        antiSnipeActions.appendChild(this._security.antiSnipeSaveBtn);
+        antiSnipeActions.appendChild(this._security.antiSnipeClearBtn);
+        antiSnipeActions.appendChild(this._security.antiSnipeStatus);
+        sec.body.appendChild(makeFormRow({
+            label: 'Apply password',
+            help: 'Saves immediately on click — bypasses the section Save.',
+            control: antiSnipeActions,
+        }));
+        this._security.antiSnipeSaveBtn.addEventListener('click', function () { self._saveAntiSnipe(); });
+        this._security.antiSnipeClearBtn.addEventListener('click', function () { self._clearAntiSnipe(); });
+
+        // Row 2 — Auto-execute safe healing (with a callout).
+        var healingCallout = document.createElement('div');
+        healingCallout.className = 'enm-security-callout';
+        var healingHead = document.createElement('div');
+        healingHead.className = 'enm-security-callout-head';
+        healingHead.textContent = t('settings.healing_what');
+        var healingBody = document.createElement('div');
+        healingBody.className = 'enm-security-callout-body';
+        healingBody.textContent = t('settings.healing_what_body');
+        healingCallout.appendChild(healingHead);
+        healingCallout.appendChild(healingBody);
+        sec.body.appendChild(healingCallout);
+
+        this._security.autoSafe = makeToggleRow({
+            initial: true,
+            getLabel: function (on) {
+                return on
+                    ? { title: 'On · auto-execute safe healing',
+                        sub: 'Restart-on-crash, rotate logs, reload config — handled automatically.' }
+                    : { title: 'Off · every action waits for the operator',
+                        sub: 'Even AUTOMATED-SAFE playbooks need a manual confirm.' };
+            },
+        });
+        sec.body.appendChild(makeFormRow({
+            label: 'Auto-execute safe healing',
+            help: 'If a healing playbook is tagged safe, ENM runs it without asking. Unsafe playbooks always wait for the operator.',
+            control: this._security.autoSafe.el,
+        }));
+
+        // Row 3 — Critical alerts require ack (with a callout).
+        var ackCallout = document.createElement('div');
+        ackCallout.className = 'enm-security-callout';
+        var ackHead = document.createElement('div');
+        ackHead.className = 'enm-security-callout-head';
+        ackHead.textContent = t('settings.critical_ack_what');
+        var ackBody = document.createElement('div');
+        ackBody.className = 'enm-security-callout-body';
+        ackBody.textContent = t('settings.critical_ack_what_body');
+        ackCallout.appendChild(ackHead);
+        ackCallout.appendChild(ackBody);
+        sec.body.appendChild(ackCallout);
+
+        this._security.criticalAck = makeToggleRow({
+            initial: true,
+            getLabel: function (on) {
+                return on
+                    ? { title: 'On · require explicit ack',
+                        sub: 'Recommended. Keeps slashing-risk alerts sticky.' }
+                    : { title: 'Off · auto-dismiss after view',
+                        sub: 'Critical alerts stop being sticky.' };
+            },
+        });
+        sec.body.appendChild(makeFormRow({
+            label: 'Critical alerts require ack',
+            help: 'Critical events stay visible in the alerts strip until you explicitly dismiss them. Off = auto-dismiss after view.',
+            control: this._security.criticalAck.el,
+        }));
+
+        sec.statusEl.id = 'enm-security-status';
+
+        sec.saveBtn.addEventListener('click', function () { self._saveSecurity(); });
+        sec.revertBtn.addEventListener('click', function () { self.refresh('security'); });
+
+        return sec.card;
+    };
+
+    // -----------------------------------------------------------------
+    // Section: Storage (beta.3.18 — NEW)
+    //   Audit retention (was in General). Future Phase 3 will add log
+    //   retention + keystore backup. Saves via PUT /config/general.
+    // -----------------------------------------------------------------
+    /** @private */
+    SettingsTab.prototype._buildStorageSection = function (t) {
+        var self = this;
+        var sec = makeSection({
+            id: 'storage',
+            icon: '◳',
+            title: t('settings.heading_storage'),
+            help: t('settings.storage_intro'),
+            tag: { kind: 'success', label: 'No restart needed' },
+        });
+        this._storage = {
+            card: sec.card,
+            body: sec.body,
+            statusEl: sec.statusEl,
+            saveBtn: sec.saveBtn,
+            revertBtn: sec.revertBtn,
+            setDirty: sec.setDirty,
+        };
+
+        this._storage.auditRetention = makeInputSuffix({
+            type: 'number',
+            value: '365',
+            min: 0,
+            max: 3650,
+            step: 1,
+            mono: true,
+            suffix: 'days',
+            ariaLabel: 'Audit retention in days',
+            describedById: 'enm-storage-status',
+        });
+        sec.body.appendChild(makeFormRow({
+            label: 'Audit retention',
+            help: 'How long ENM keeps audit-log entries. ',
+            helpCodes: ['0'],
+            helpSuffix: ' = forever. Range 0 – 3,650 days.',
+            control: this._storage.auditRetention.el,
+        }));
+
+        sec.statusEl.id = 'enm-storage-status';
+
+        sec.saveBtn.addEventListener('click', function () { self._saveStorage(); });
+        sec.revertBtn.addEventListener('click', function () { self.refresh('storage'); });
 
         return sec.card;
     };
@@ -641,18 +920,16 @@
             });
     };
 
-    /** @private */
+    /** beta.3.18 — _fillCreds rebased onto the Access section. */
     SettingsTab.prototype._fillCreds = function () {
-        if (!this._adv || !this._creds) { return; }
+        if (!this._access || !this._creds) { return; }
         var d = this._creds;
         if (Array.isArray(d.whiteIPList)) {
-            this._adv.whiteIp.setValue(d.whiteIPList);
+            this._access.whiteIp.setValue(d.whiteIPList);
         }
-        // user + passwordSet may also come back here; prefer /config but
-        // keep this as a fallback for the password placeholder.
         if (typeof d.user === 'string' && d.user.length > 0
-            && (!this._adv.rpcUser.value || this._adv.rpcUser.value === 'ela')) {
-            this._adv.rpcUser.value = d.user;
+            && (!this._access.rpcUser.value || this._access.rpcUser.value === 'ela')) {
+            this._access.rpcUser.value = d.user;
         }
     };
 
@@ -662,56 +939,96 @@
         var self = this;
         // Clear any stale aria-invalid hints from a previous failed save
         // (batch 30).
-        this._adv.memory.input.removeAttribute('aria-invalid');
-        this._adv.rpcUser.removeAttribute('aria-invalid');
+        this._advanced.memory.input.removeAttribute('aria-invalid');
 
         // Inline client-side validation parity with the joi schema, so
         // the operator sees the problem before the round-trip.
-        var memMb = parseInt(this._adv.memory.input.value, 10);
+        var memMb = parseInt(this._advanced.memory.input.value, 10);
         if (!Number.isInteger(memMb) || memMb < 512 || memMb > 32768) {
-            setStatus(this._adv.statusEl, 'error',
+            setStatus(this._advanced.statusEl, 'error',
                 t('settings.save_failed', { error: t('settings.err_memory_range') }));
-            this._adv.memory.input.setAttribute('aria-invalid', 'true');
-            try { this._adv.memory.input.focus({ preventScroll: true }); }
-            catch (e) { this._adv.memory.input.focus(); }
-            return;
-        }
-        var rpcUser = this._adv.rpcUser.value.trim();
-        if (rpcUser.length === 0 || !/^[A-Za-z0-9]+$/.test(rpcUser)) {
-            setStatus(this._adv.statusEl, 'error',
-                t('settings.save_failed', { error: t('settings.err_rpc_user') }));
-            this._adv.rpcUser.setAttribute('aria-invalid', 'true');
-            try { this._adv.rpcUser.focus({ preventScroll: true }); }
-            catch (e) { this._adv.rpcUser.focus(); }
+            this._advanced.memory.input.setAttribute('aria-invalid', 'true');
+            try { this._advanced.memory.input.focus({ preventScroll: true }); }
+            catch (e) { this._advanced.memory.input.focus(); }
             return;
         }
 
+        // beta.3.18 — Advanced now ONLY owns log/memory/archive. RPC
+        // user/password/whitelist moved to the Access section + are
+        // saved via _saveAccess (also PUT /config/mainchain; partial
+        // body, backend merges).
         var body = {
-            logLevel: this._adv.logLevel.getValue(),
-            archiveMode: this._adv.archiveMode.getValue(),
+            logLevel: this._advanced.logLevel.getValue(),
+            archiveMode: this._advanced.archiveMode.getValue(),
             memoryLimitMb: memMb,
-            rpcUser: rpcUser,
-            whiteIPList: this._adv.whiteIp.getValue(),
         };
-        // RPC password is only sent if the operator typed something so
-        // they can edit other knobs without re-typing it (alpha.28).
-        var pw = this._adv.rpcPasswordField.input.value;
-        if (pw && pw.length > 0) { body.rpcPassword = pw; }
 
         var savingLabel = t('common.saving') || 'Saving…';
-        setStatus(this._adv.statusEl, '', t('common.loading') || 'Saving…');
-        return root.enmRunOnce(this._adv.saveBtn, savingLabel, function () {
+        setStatus(this._advanced.statusEl, '', t('common.loading') || 'Saving…');
+        return root.enmRunOnce(this._advanced.saveBtn, savingLabel, function () {
             return self.api.put('/config/mainchain', body)
                 .then(function () {
                     if (self._destroyed) { return; }
-                    setStatus(self._adv.statusEl, 'success', '✓ ' + t('settings.saved'));
-                    self._adv.rpcPasswordField.input.value = '';
+                    setStatus(self._advanced.statusEl, 'success', '✓ ' + t('settings.saved'));
                     self.refresh('advanced');
+                    self._promptRestartIfNeeded('advanced');
                 })
                 .catch(function (err) {
                     if (self._destroyed) { return; }
                     if (err && err.status === 401) { return; }
-                    setStatus(self._adv.statusEl, 'error',
+                    setStatus(self._advanced.statusEl, 'error',
+                        t('settings.save_failed', { error: err.message || String(err) }));
+                });
+        });
+    };
+
+    /**
+     * beta.3.18 — save Access section (RPC user / password / whitelist).
+     * Same backend endpoint as _saveAdvanced (PUT /config/mainchain) but
+     * carries a different subset of the body. Partial PUT is supported
+     * by the backend route.
+     * @private
+     */
+    SettingsTab.prototype._saveAccess = function () {
+        var t = root.enmTOrFallback;
+        var self = this;
+        this._access.rpcUser.removeAttribute('aria-invalid');
+
+        var rpcUser = this._access.rpcUser.value.trim();
+        if (rpcUser.length === 0 || !/^[A-Za-z0-9]+$/.test(rpcUser)) {
+            setStatus(this._access.statusEl, 'error',
+                t('settings.save_failed', { error: t('settings.err_rpc_user') }));
+            this._access.rpcUser.setAttribute('aria-invalid', 'true');
+            try { this._access.rpcUser.focus({ preventScroll: true }); }
+            catch (e) { this._access.rpcUser.focus(); }
+            return;
+        }
+
+        var body = {
+            rpcUser: rpcUser,
+            whiteIPList: this._access.whiteIp.getValue(),
+        };
+        // RPC password is only sent if the operator typed something so
+        // they can edit other Access knobs without re-typing it
+        // (carried over from alpha.28 _saveAdvanced behavior).
+        var pw = this._access.rpcPasswordField.input.value;
+        if (pw && pw.length > 0) { body.rpcPassword = pw; }
+
+        var savingLabel = t('common.saving') || 'Saving…';
+        setStatus(this._access.statusEl, '', t('common.loading') || 'Saving…');
+        return root.enmRunOnce(this._access.saveBtn, savingLabel, function () {
+            return self.api.put('/config/mainchain', body)
+                .then(function () {
+                    if (self._destroyed) { return; }
+                    setStatus(self._access.statusEl, 'success', '✓ ' + t('settings.saved'));
+                    self._access.rpcPasswordField.input.value = '';
+                    self.refresh('access');
+                    self._promptRestartIfNeeded('access');
+                })
+                .catch(function (err) {
+                    if (self._destroyed) { return; }
+                    if (err && err.status === 401) { return; }
+                    setStatus(self._access.statusEl, 'error',
                         t('settings.save_failed', { error: err.message || String(err) }));
                 });
         });
@@ -752,11 +1069,14 @@
     // SettingsTab.prototype._handleWipeSuccess = function () { /* idem */ };
     // SettingsTab.prototype._handleWipeFailure = function () { /* idem */ };
 
-    // -----------------------------------------------------------------
-    // Section: General
-    // -----------------------------------------------------------------
-    /** @private */
-    SettingsTab.prototype._buildGeneralSection = function (t) {
+    // beta.3.18 — _buildGeneralSection retired. Its rows redistributed:
+    //   anti-snipe + healing toggle + critical-ack  → _buildSecuritySection
+    //   audit retention                              → _buildStorageSection
+    // The function body below is kept as DEAD CODE (never wired into the
+    // nav array) for one release as audit-trail of the original copy;
+    // remove on the next IA-touching phase.
+    // eslint-disable-next-line no-unused-vars
+    SettingsTab.prototype._buildGeneralSection_DEAD = function (t) {
         var self = this;
         var sec = makeSection({
             id: 'general',
@@ -889,107 +1209,141 @@
         return sec.card;
     };
 
-    /** 0.2.0-beta.3.10 — POST a new anti-snipe password. */
+    /**
+     * beta.3.18 — POST a new anti-snipe password. Rebased onto
+     * this._security.antiSnipeField from the Security section build.
+     */
     SettingsTab.prototype._saveAntiSnipe = function () {
         var self = this;
         var t = root.enmTOrFallback;
-        var password = this._gen.antiSnipeField.input.value;
-        // Inline validation matches the backend's joi-ish check
-        // (length >= 8). Saves a round-trip for the common typo case.
+        var s = this._security;
+        var password = s.antiSnipeField.input.value;
         if (typeof password !== 'string' || password.length < 8) {
-            this._gen.antiSnipeStatus.textContent = 'Password must be at least 8 characters.';
-            this._gen.antiSnipeStatus.classList.remove('ok');
-            this._gen.antiSnipeStatus.classList.add('err');
-            try { this._gen.antiSnipeField.input.focus({ preventScroll: true }); }
-            catch (e) { this._gen.antiSnipeField.input.focus(); }
+            s.antiSnipeStatus.textContent = t('settings.anti_snipe_min_length');
+            s.antiSnipeStatus.classList.remove('ok');
+            s.antiSnipeStatus.classList.add('err');
+            try { s.antiSnipeField.input.focus({ preventScroll: true }); }
+            catch (e) { s.antiSnipeField.input.focus(); }
             return;
         }
-        this._gen.antiSnipeStatus.textContent = t('common.saving') || 'Saving…';
-        this._gen.antiSnipeStatus.classList.remove('ok', 'err');
-        return root.enmRunOnce(this._gen.antiSnipeSaveBtn, t('common.saving') || 'Saving…', function () {
+        s.antiSnipeStatus.textContent = t('common.saving') || 'Saving…';
+        s.antiSnipeStatus.classList.remove('ok', 'err');
+        return root.enmRunOnce(s.antiSnipeSaveBtn, t('common.saving') || 'Saving…', function () {
             return self.api.post('/config/anti-snipe-password', { password: password })
                 .then(function () {
                     if (self._destroyed) { return; }
-                    self._gen.antiSnipeField.input.value = '';
-                    self._gen.antiSnipeStatus.textContent = '✓ Anti-snipe password set';
-                    self._gen.antiSnipeStatus.classList.add('ok');
-                    self._gen.antiSnipeClearBtn.hidden = false;
-                    self._gen.antiSnipeField.input.placeholder = 'set · type a new password to change';
+                    s.antiSnipeField.input.value = '';
+                    s.antiSnipeStatus.textContent = t('settings.anti_snipe_saved');
+                    s.antiSnipeStatus.classList.add('ok');
+                    s.antiSnipeClearBtn.hidden = false;
+                    s.antiSnipeField.input.placeholder = t('settings.anti_snipe_placeholder_set');
                 })
                 .catch(function (err) {
                     if (self._destroyed) { return; }
                     if (err && err.status === 401) { return; }
-                    self._gen.antiSnipeStatus.textContent =
-                        (err && err.message) || 'Save failed.';
-                    self._gen.antiSnipeStatus.classList.add('err');
+                    s.antiSnipeStatus.textContent = (err && err.message) || 'Save failed.';
+                    s.antiSnipeStatus.classList.add('err');
                 });
         });
     };
 
-    /** 0.2.0-beta.3.10 — POST empty-string password to clear the hash. */
+    /** beta.3.18 — POST empty-string password to clear the hash. */
     SettingsTab.prototype._clearAntiSnipe = function () {
         var self = this;
         var t = root.enmTOrFallback;
-        // Light confirm — clearing disables a security feature.
+        var s = this._security;
         if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
-            if (!window.confirm('Disable anti-snipe password? Healing proposals that require it will fail until you set a new one.')) {
+            if (!window.confirm(t('settings.anti_snipe_clear_confirm'))) {
                 return;
             }
         }
-        this._gen.antiSnipeStatus.textContent = t('common.saving') || 'Saving…';
-        this._gen.antiSnipeStatus.classList.remove('ok', 'err');
-        return root.enmRunOnce(this._gen.antiSnipeClearBtn, t('common.saving') || 'Saving…', function () {
+        s.antiSnipeStatus.textContent = t('common.saving') || 'Saving…';
+        s.antiSnipeStatus.classList.remove('ok', 'err');
+        return root.enmRunOnce(s.antiSnipeClearBtn, t('common.saving') || 'Saving…', function () {
             return self.api.post('/config/anti-snipe-password', { password: '' })
                 .then(function () {
                     if (self._destroyed) { return; }
-                    self._gen.antiSnipeStatus.textContent = '✓ Anti-snipe disabled';
-                    self._gen.antiSnipeStatus.classList.add('ok');
-                    self._gen.antiSnipeClearBtn.hidden = true;
-                    self._gen.antiSnipeField.input.placeholder = 'unset · type a new password to set';
+                    s.antiSnipeStatus.textContent = t('settings.anti_snipe_cleared');
+                    s.antiSnipeStatus.classList.add('ok');
+                    s.antiSnipeClearBtn.hidden = true;
+                    s.antiSnipeField.input.placeholder = t('settings.anti_snipe_placeholder_unset');
                 })
                 .catch(function (err) {
                     if (self._destroyed) { return; }
                     if (err && err.status === 401) { return; }
-                    self._gen.antiSnipeStatus.textContent =
-                        (err && err.message) || 'Clear failed.';
-                    self._gen.antiSnipeStatus.classList.add('err');
+                    s.antiSnipeStatus.textContent = (err && err.message) || 'Clear failed.';
+                    s.antiSnipeStatus.classList.add('err');
                 });
         });
     };
 
-    /** @private */
-    SettingsTab.prototype._saveGeneral = function () {
+    /**
+     * beta.3.18 — save Security section (autoExecuteSafe +
+     * criticalRequiresAck). Anti-snipe is saved separately via
+     * _saveAntiSnipe (its own button row, bypasses this section save).
+     * Backend: PUT /config/general; same endpoint as Storage's save,
+     * different subset.
+     * @private
+     */
+    SettingsTab.prototype._saveSecurity = function () {
         var t = root.enmTOrFallback;
         var self = this;
-        this._gen.auditRetention.input.removeAttribute('aria-invalid');
-
-        var retention = parseInt(this._gen.auditRetention.input.value, 10);
-        if (!Number.isInteger(retention) || retention < 0 || retention > 3650) {
-            setStatus(this._gen.statusEl, 'error',
-                t('settings.save_failed', { error: t('settings.err_retention') }));
-            this._gen.auditRetention.input.setAttribute('aria-invalid', 'true');
-            try { this._gen.auditRetention.input.focus({ preventScroll: true }); }
-            catch (e) { this._gen.auditRetention.input.focus(); }
-            return;
-        }
         var body = {
-            autoExecuteSafe: this._gen.autoSafe.getValue(),
-            criticalRequiresAck: this._gen.criticalAck.getValue(),
-            auditRetentionDays: retention,
+            autoExecuteSafe: this._security.autoSafe.getValue(),
+            criticalRequiresAck: this._security.criticalAck.getValue(),
         };
         var savingLabel = t('common.saving') || 'Saving…';
-        setStatus(this._gen.statusEl, '', t('common.loading') || 'Saving…');
-        return root.enmRunOnce(this._gen.saveBtn, savingLabel, function () {
+        setStatus(this._security.statusEl, '', t('common.loading') || 'Saving…');
+        return root.enmRunOnce(this._security.saveBtn, savingLabel, function () {
             return self.api.put('/config/general', body)
                 .then(function () {
                     if (self._destroyed) { return; }
-                    setStatus(self._gen.statusEl, 'success', '✓ ' + t('settings.saved'));
-                    self.refresh('general');
+                    setStatus(self._security.statusEl, 'success', '✓ ' + t('settings.saved'));
+                    self.refresh('security');
                 })
                 .catch(function (err) {
                     if (self._destroyed) { return; }
                     if (err && err.status === 401) { return; }
-                    setStatus(self._gen.statusEl, 'error',
+                    setStatus(self._security.statusEl, 'error',
+                        t('settings.save_failed', { error: err.message || String(err) }));
+                });
+        });
+    };
+
+    /**
+     * beta.3.18 — save Storage section (auditRetentionDays only in
+     * Phase 1; Phase 3 will add log retention + keystore backup).
+     * Backend: PUT /config/general; same endpoint as Security's save.
+     * @private
+     */
+    SettingsTab.prototype._saveStorage = function () {
+        var t = root.enmTOrFallback;
+        var self = this;
+        this._storage.auditRetention.input.removeAttribute('aria-invalid');
+
+        var retention = parseInt(this._storage.auditRetention.input.value, 10);
+        if (!Number.isInteger(retention) || retention < 0 || retention > 3650) {
+            setStatus(this._storage.statusEl, 'error',
+                t('settings.save_failed', { error: t('settings.err_retention') }));
+            this._storage.auditRetention.input.setAttribute('aria-invalid', 'true');
+            try { this._storage.auditRetention.input.focus({ preventScroll: true }); }
+            catch (e) { this._storage.auditRetention.input.focus(); }
+            return;
+        }
+        var body = { auditRetentionDays: retention };
+        var savingLabel = t('common.saving') || 'Saving…';
+        setStatus(this._storage.statusEl, '', t('common.loading') || 'Saving…');
+        return root.enmRunOnce(this._storage.saveBtn, savingLabel, function () {
+            return self.api.put('/config/general', body)
+                .then(function () {
+                    if (self._destroyed) { return; }
+                    setStatus(self._storage.statusEl, 'success', '✓ ' + t('settings.saved'));
+                    self.refresh('storage');
+                })
+                .catch(function (err) {
+                    if (self._destroyed) { return; }
+                    if (err && err.status === 401) { return; }
+                    setStatus(self._storage.statusEl, 'error',
                         t('settings.save_failed', { error: err.message || String(err) }));
                 });
         });
@@ -998,23 +1352,22 @@
     // -----------------------------------------------------------------
     // Form fill / hydration
     // -----------------------------------------------------------------
-    /** @private — Hydrate all three sections from the /config response. */
     /**
-     * 0.2.0-beta.3.9 — _fillForm split into per-section fills.
-     * Each section's save handler can now re-hydrate only its own
-     * fields after a successful PUT instead of wiping pending edits
-     * in the other two sections.
+     * beta.3.18 — _fillForm rebased onto 5 sections. Each section's
+     * save handler re-hydrates only its own fields after a successful
+     * PUT so pending edits in other sections aren't wiped.
      *
      * @private
-     * @param {string} [scope]  'network' / 'advanced' / 'general' /
-     *                          undefined (default: fill all three)
+     * @param {string} [scope]  one of SECTION_KEYS or undefined (= all)
      */
     SettingsTab.prototype._fillForm = function (scope) {
         var cfg = this._cfg;
         if (!cfg) { return; }
+        if (!scope || scope === 'access')   { this._fillAccess(cfg); }
+        if (!scope || scope === 'security') { this._fillSecurity(cfg); }
         if (!scope || scope === 'network')  { this._fillNetwork(cfg); }
+        if (!scope || scope === 'storage')  { this._fillStorage(cfg); }
         if (!scope || scope === 'advanced') { this._fillAdvanced(cfg); }
-        if (!scope || scope === 'general')  { this._fillGeneral(cfg); }
     };
 
     /** @private */
@@ -1029,50 +1382,253 @@
             (chain.dpos && chain.dpos.ipAddressManual) || '';
     };
 
-    /** @private */
+    /** beta.3.18 — only fills log/memory/archive now. */
     SettingsTab.prototype._fillAdvanced = function (cfg) {
         var chain = cfg && cfg.chains && cfg.chains.mainchain;
-        if (!chain || !this._adv) { return; }
-        this._adv.logLevel.setValue(chain.logLevel || 'info');
-        this._adv.archiveMode.setValue(!!chain.archiveMode);
-        this._adv.memory.input.value = String(chain.memoryLimitMb || 4096);
-        this._adv.rpcUser.value = (chain.rpc && chain.rpc.user) || 'ela';
-        this._adv.rpcPasswordField.input.value = '';
-        this._adv.rpcPasswordField.input.placeholder =
-            (chain.rpc && chain.rpc.passwordSet)
-                ? '(leave blank to keep current)' : 'set a password';
+        if (!chain || !this._advanced) { return; }
+        this._advanced.logLevel.setValue(chain.logLevel || 'info');
+        this._advanced.archiveMode.setValue(!!chain.archiveMode);
+        this._advanced.memory.input.value = String(chain.memoryLimitMb || 4096);
     };
 
-    /** @private */
-    SettingsTab.prototype._fillGeneral = function (cfg) {
-        if (!this._gen) { return; }
+    /** beta.3.18 — Access section (RPC user / password / whitelist). */
+    SettingsTab.prototype._fillAccess = function (cfg) {
+        var chain = cfg && cfg.chains && cfg.chains.mainchain;
+        if (!chain || !this._access) { return; }
+        this._access.rpcUser.value = (chain.rpc && chain.rpc.user) || 'ela';
+        this._access.rpcPasswordField.input.value = '';
+        this._access.rpcPasswordField.input.placeholder =
+            (chain.rpc && chain.rpc.passwordSet)
+                ? (root.enmTOrFallback('settings.rpc_password_placeholder_set') || '(leave blank to keep current)')
+                : 'set a password';
+        // Whitelist chips are populated by _loadCreds (separate endpoint
+        // returns the actual list); _fillAccess doesn't need to touch
+        // them. Same shape as alpha.28's flow.
+    };
+
+    /** beta.3.18 — Security section (anti-snipe + healing + ack). */
+    SettingsTab.prototype._fillSecurity = function (cfg) {
+        if (!this._security) { return; }
+        var t = root.enmTOrFallback;
         var g = (cfg && cfg.global) || {};
-        this._gen.autoSafe.setValue(
+        this._security.autoSafe.setValue(
             !(g.healing && g.healing.autoExecuteSafe === false));
-        this._gen.criticalAck.setValue(
+        this._security.criticalAck.setValue(
             !(g.notifications && g.notifications.criticalRequiresAck === false));
-        this._gen.auditRetention.input.value =
-            String((g.audit && g.audit.retentionDays) || 365);
-        // 0.2.0-beta.3.10 — wire anti-snipe state. Backend redacts
-        // the hash to a `antiSnipePasswordSet` boolean (see
-        // EnmConfigRedact.js). Clear button only shows when one IS
-        // set; placeholder mirrors the state so the operator knows
-        // whether typing+Save will create-vs-change.
-        if (this._gen.antiSnipeField) {
-            this._gen.antiSnipeField.input.value = '';
+        if (this._security.antiSnipeField) {
+            this._security.antiSnipeField.input.value = '';
             if (g.antiSnipePasswordSet) {
-                this._gen.antiSnipeClearBtn.hidden = false;
-                this._gen.antiSnipeField.input.placeholder = 'set · type a new password to change';
+                this._security.antiSnipeClearBtn.hidden = false;
+                this._security.antiSnipeField.input.placeholder = t('settings.anti_snipe_placeholder_set');
             } else {
-                this._gen.antiSnipeClearBtn.hidden = true;
-                this._gen.antiSnipeField.input.placeholder = 'unset · type a new password to set';
+                this._security.antiSnipeClearBtn.hidden = true;
+                this._security.antiSnipeField.input.placeholder = t('settings.anti_snipe_placeholder_unset');
             }
-            // Clear any stale per-row status from previous interactions.
-            if (this._gen.antiSnipeStatus) {
-                this._gen.antiSnipeStatus.textContent = '';
-                this._gen.antiSnipeStatus.classList.remove('ok', 'err');
+            if (this._security.antiSnipeStatus) {
+                this._security.antiSnipeStatus.textContent = '';
+                this._security.antiSnipeStatus.classList.remove('ok', 'err');
             }
         }
+    };
+
+    /** beta.3.18 — Storage section (audit retention only in Phase 1). */
+    SettingsTab.prototype._fillStorage = function (cfg) {
+        if (!this._storage) { return; }
+        var g = (cfg && cfg.global) || {};
+        this._storage.auditRetention.input.value =
+            String((g.audit && g.audit.retentionDays) || 365);
+    };
+
+    // -----------------------------------------------------------------
+    // beta.3.18 — Restart modal helper.
+    //
+    // Operator option (3): lifecycle stays on the Dashboard, but when
+    // a Settings save needs a chain restart to take effect, surface a
+    // modal here so the operator can restart in one click instead of
+    // hunting for the power circle. Reuses the phase-06 modal-card
+    // chrome (.enm-modal-scrim + .enm-modal-card) shared with the
+    // proposal card and tools-update modal.
+    // -----------------------------------------------------------------
+    /**
+     * Fire the restart prompt after a successful save. Caller passes
+     * the section key so the modal can name what changed in the body.
+     * If the chain isn't currently running, we show a different
+     * message (nothing to restart — changes apply on next start).
+     *
+     * @private
+     * @param {string} sectionKey
+     */
+    SettingsTab.prototype._promptRestartIfNeeded = function (sectionKey) {
+        var self = this;
+        var t = root.enmTOrFallback;
+
+        // Tear down any prior restart modal still open. The Settings
+        // tab can fire two saves back-to-back; we only want one active.
+        if (typeof this._restartModalClose === 'function') {
+            try { this._restartModalClose(); } catch (e) { /* no-op */ }
+            this._restartModalClose = null;
+        }
+
+        // Probe chain state via the same /chains/mainchain endpoint
+        // the dashboard uses. Best-effort: if the probe fails we still
+        // open the modal but with the generic body, since the change
+        // is saved and the operator's intent (restart) is clear.
+        this.api.get('/chains/mainchain', { skipCache: true })
+            .then(function (envelope) {
+                if (self._destroyed) { return; }
+                var state = envelope && envelope.data;
+                // Coarse states that mean "process alive". Anything
+                // else means "nothing to restart".
+                var alive = !!(state && (
+                    state.state === 'healthy'
+                    || state.state === 'syncing'
+                    || state.state === 'starting'
+                    || state.state === 'recovering'
+                    || state.state === 'stalled'
+                    || (state.pid && state.attached !== false)
+                ));
+                self._openRestartModal(alive);
+            })
+            .catch(function () {
+                if (self._destroyed) { return; }
+                // Assume alive on probe failure so the operator still
+                // gets the Restart-now button. Worst case: backend
+                // returns "chain not running" on /restart and the
+                // modal's status line surfaces that.
+                self._openRestartModal(true);
+            });
+    };
+
+    /** @private — actually mount the modal DOM. */
+    SettingsTab.prototype._openRestartModal = function (chainAlive) {
+        var self = this;
+        var t = root.enmTOrFallback;
+
+        var modalRoot = document.createElement('div');
+        modalRoot.className = 'enm-restart-modal-root';
+
+        var scrim = document.createElement('div');
+        scrim.className = 'enm-modal-scrim';
+        modalRoot.appendChild(scrim);
+
+        var card = document.createElement('div');
+        card.className = 'enm-modal-card enm-restart-modal-card';
+        card.setAttribute('role', 'dialog');
+        card.setAttribute('aria-labelledby', 'enm-restart-mod-h');
+        card.setAttribute('aria-modal', 'true');
+
+        var heading = document.createElement('h2');
+        heading.id = 'enm-restart-mod-h';
+        heading.className = 'enm-modal-heading';
+        heading.textContent = t('settings.restart_modal_title');
+        card.appendChild(heading);
+
+        var summary = document.createElement('p');
+        summary.className = 'enm-modal-summary';
+        summary.textContent = chainAlive
+            ? t('settings.restart_modal_body')
+            : t('settings.restart_modal_chain_stopped');
+        card.appendChild(summary);
+
+        var statusLine = document.createElement('p');
+        statusLine.className = 'enm-restart-modal-status';
+        statusLine.setAttribute('role', 'status');
+        statusLine.setAttribute('aria-live', 'polite');
+        card.appendChild(statusLine);
+
+        var actions = document.createElement('div');
+        actions.className = 'enm-modal-actions';
+        var laterBtn = document.createElement('button');
+        laterBtn.type = 'button';
+        laterBtn.className = 'enm-btn';
+        laterBtn.textContent = t('settings.restart_modal_later');
+        var nowBtn = document.createElement('button');
+        nowBtn.type = 'button';
+        nowBtn.className = 'enm-btn enm-btn-primary';
+        nowBtn.textContent = t('settings.restart_modal_now');
+        // When the chain isn't alive there's nothing to restart;
+        // disable the primary action + lean on the secondary as
+        // the dismiss button.
+        if (!chainAlive) {
+            nowBtn.disabled = true;
+            laterBtn.textContent = t('common.close') || 'Close';
+        }
+        actions.appendChild(laterBtn);
+        actions.appendChild(nowBtn);
+        card.appendChild(actions);
+
+        modalRoot.appendChild(card);
+        document.body.appendChild(modalRoot);
+
+        // Focus management — capture the return target + simple
+        // focus trap on Tab.
+        var previousFocus = document.activeElement;
+        var modalClosed = false;
+        var close = function () {
+            if (modalClosed) { return; }
+            modalClosed = true;
+            if (modalRoot.parentNode) { modalRoot.parentNode.removeChild(modalRoot); }
+            document.removeEventListener('keydown', onEsc);
+            document.removeEventListener('keydown', trap, true);
+            scrim.removeEventListener('click', onScrim);
+            try {
+                if (previousFocus && typeof previousFocus.focus === 'function') {
+                    previousFocus.focus({ preventScroll: true });
+                }
+            } catch (e) { /* focus may fail on detached elements */ }
+            if (self) { self._restartModalClose = null; }
+        };
+        var onEsc = function (e) { if (e.key === 'Escape') close(); };
+        document.addEventListener('keydown', onEsc);
+        var onScrim = function (ev) { if (ev.target === scrim) close(); };
+        scrim.addEventListener('click', onScrim);
+        var trap = function (ev) {
+            if (ev.key !== 'Tab') { return; }
+            var focusables = card.querySelectorAll('button:not([disabled])');
+            if (!focusables.length) { return; }
+            var first = focusables[0];
+            var last  = focusables[focusables.length - 1];
+            if (ev.shiftKey && document.activeElement === first) {
+                ev.preventDefault(); last.focus();
+            } else if (!ev.shiftKey && document.activeElement === last) {
+                ev.preventDefault(); first.focus();
+            }
+        };
+        document.addEventListener('keydown', trap, true);
+
+        laterBtn.addEventListener('click', close);
+        nowBtn.addEventListener('click', function () {
+            statusLine.textContent = t('settings.restart_modal_restarting');
+            nowBtn.disabled = true;
+            laterBtn.disabled = true;
+            self.api.post('/chains/mainchain/restart')
+                .then(function () {
+                    if (modalClosed) { return; }
+                    statusLine.textContent = t('settings.restart_modal_done');
+                    // Auto-close after a brief read pause so the
+                    // operator sees the confirmation before the
+                    // modal disappears.
+                    setTimeout(close, 1200);
+                })
+                .catch(function (err) {
+                    if (modalClosed) { return; }
+                    nowBtn.disabled = false;
+                    laterBtn.disabled = false;
+                    if (err && err.status === 401) {
+                        statusLine.textContent = '';
+                        return;
+                    }
+                    statusLine.textContent = t('settings.restart_modal_failed',
+                        { error: (err && err.message) || String(err) });
+                });
+        });
+
+        // Initial focus on the primary action so the operator can
+        // hit Enter to restart immediately.
+        try { (chainAlive ? nowBtn : laterBtn).focus({ preventScroll: true }); }
+        catch (e) { (chainAlive ? nowBtn : laterBtn).focus(); }
+
+        this._restartModalClose = close;
     };
 
     // -----------------------------------------------------------------
@@ -1149,7 +1705,11 @@
         var revertBtn = document.createElement('button');
         revertBtn.type = 'button';
         revertBtn.className = 'enm-btn';
-        revertBtn.textContent = 'Revert';
+        // beta.3.18 — Revert label routed through i18n (settings audit
+        // flagged this as one of ~15 inline-English strings).
+        var tFn = root.enmTOrFallback;
+        revertBtn.textContent = (typeof tFn === 'function'
+            && tFn('settings.revert_btn')) || 'Revert';
         foot.appendChild(revertBtn);
 
         var saveBtn = document.createElement('button');
@@ -1163,6 +1723,9 @@
         var saveLabel = 'Save';
         if (opts.id === 'network')        { saveLabel = 'Save Network'; }
         else if (opts.id === 'advanced')  { saveLabel = 'Save Advanced'; }
+        else if (opts.id === 'access')    { saveLabel = 'Save Access'; }
+        else if (opts.id === 'security')  { saveLabel = 'Save Security'; }
+        else if (opts.id === 'storage')   { saveLabel = 'Save Storage'; }
         else if (opts.id === 'general')   { saveLabel = 'Save General'; }
         saveBtn.textContent = saveLabel;
         foot.appendChild(saveBtn);

@@ -552,6 +552,70 @@
             danger_in_progress: 'Backing up keystore and uninstalling…',
             danger_done:       'Done. Your keystore was preserved at {path}. Redirecting to PC2 home in 5…',
             danger_failed:     'Wipe failed: {error}. The app has NOT been uninstalled.',
+
+            // beta.3.18 — Phase 1 IA reshape. The 3-section schema-dump
+            // (Network / Mainchain Advanced / General) became 5 task-
+            // oriented sections (Access / Security / Network / Storage /
+            // Advanced). New copy throughout to explain WHY each knob
+            // matters to a BPoS supernode operator, not just WHAT it
+            // writes. See project_settings_phase_plan in memory.
+            heading_access:   'Access',
+            heading_security: 'Security',
+            heading_storage:  'Storage',
+            // Per-section one-line intros rendered as help under the heading.
+            access_intro:     'Allow specific tools to reach this node’s JSON-RPC. Loopback (127.0.0.1) is always allowed so ENM itself can talk to ela.',
+            security_intro:   'Defense-in-depth for your BPoS supernode.',
+            network_intro:    'How DPoS peers reach this node. Set once at first boot; only change if your public IP moves.',
+            storage_intro:    'How much history ENM keeps locally before pruning.',
+            advanced_intro:   'Runtime tuning for the ela chain process. Defaults are correct for almost every operator.',
+            // Advanced warning banner — operator chose option (b): always
+            // visible at the bottom of Settings with this banner above the
+            // controls explaining the risk of changing them.
+            advanced_warn_title: 'Don’t change these unless you know why.',
+            advanced_warn_body:  'Defaults are right for almost every BPoS supernode. Changing these can degrade chain performance or cost you blocks. Each change here needs a chain restart to apply.',
+            // "What this protects" callouts surfaced inside the Security
+            // section so operators understand the WHY behind the toggle/
+            // password they’re configuring.
+            anti_snipe_what:        'What this protects',
+            anti_snipe_what_body:   'High-stakes healing actions (restart-on-crash, reactivate producer, rebootstrap chain) won’t execute without this password — even if your owner token leaks. A leaked-token attacker could only do safe read actions.',
+            healing_what:           'What this controls',
+            healing_what_body:      'When ENM detects a known-safe issue (process crashed, log file too big, RPC unresponsive), it can fix it without asking. Off = every action waits for your explicit OK.',
+            critical_ack_what:      'What this controls',
+            critical_ack_what_body: 'Slashing-risk alerts (sync drift, peer drop, BPoS state change) stay visible until you click to dismiss. Off = critical events auto-clear after 5 seconds like normal toasts.',
+            // Save-button labels per new section. "Save General" is gone.
+            save_access:     'Save Access',
+            save_security:   'Save Security',
+            save_storage:    'Save Storage',
+            // Restart modal — fired after a save when the section requires
+            // a chain restart for the change to take effect. Operator option
+            // (3): don’t put lifecycle controls in Settings, but surface a
+            // restart prompt when one is needed.
+            restart_modal_title:      'Restart mainchain to apply',
+            restart_modal_body:       'Your changes are saved, but the running node still uses the old values. Restart the chain now to apply them.',
+            restart_modal_now:        'Restart now',
+            restart_modal_later:      'Restart later',
+            restart_modal_restarting: 'Restarting…',
+            restart_modal_done:       'Mainchain restarted.',
+            restart_modal_failed:     'Restart failed: {error}',
+            restart_modal_close_aria: 'Close restart prompt',
+            restart_modal_chain_stopped: 'The chain isn’t currently running, so there’s nothing to restart. Your settings will apply on next start.',
+            // Migration of hardcoded English strings flagged by the
+            // settings inventory audit. Same wording, just routed through
+            // the i18n layer.
+            nav_label_config:               'Configuration',
+            ip_manual_placeholder:          'e.g. 203.0.113.14',
+            rpc_user_tooltip:               'Letters and numbers only (no spaces or symbols).',
+            rpc_password_placeholder_set:   '(leave blank to keep current)',
+            rpc_white_add_placeholder:      'add IP or CIDR…',
+            anti_snipe_placeholder_unset:   'unset · type a new password to set',
+            anti_snipe_placeholder_set:     'set · type a new password to change',
+            anti_snipe_set_btn:             'Set password',
+            anti_snipe_clear_btn:           'Clear',
+            anti_snipe_min_length:          'Password must be at least 8 characters.',
+            anti_snipe_saved:               '✓ Anti-snipe password set',
+            anti_snipe_clear_confirm:       'Disable anti-snipe password? Healing proposals that require it will fail until you set a new one.',
+            anti_snipe_cleared:             '✓ Anti-snipe disabled',
+            revert_btn:                     'Revert',
         },
 
         validator_card: {
