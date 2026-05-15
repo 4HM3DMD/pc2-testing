@@ -444,8 +444,76 @@ body {
     height: 100%;
     overflow: auto;
     overscroll-behavior: contain;
+    /* beta.3.26 — Phase A root-cause fix for mobile reachability.
+       Mobile browsers evaluate touch at the closest scrollable
+       ancestor. Because this pane has overflow:auto, it was
+       claiming EVERY swipe — including horizontal swipes intended
+       for the .enm-tabs / .enm-settings-pills children that had
+       touch-action:pan-x. The result: rightmost pills + tabs were
+       visually rendered (via the mask-fade) but unreachable on
+       touch because the pane's overflow ate the swipe before the
+       child could see it.
+
+       Declaring touch-action:pan-y here tells the browser this
+       container only wants to claim vertical pan gestures.
+       Horizontal swipes pass through to children that declare
+       pan-x. Vertical scrolling on the pane keeps working
+       unchanged.
+
+       Phase A also makes the strips wrap on narrow/compact so
+       this fix is belt-and-suspenders — if a mobile browser
+       ignores touch-action (rare in 2026), the wrap-layout
+       means there's no horizontal scroll to be claimed in the
+       first place. */
+    touch-action: pan-y;
 }
 .enm-pane[hidden] { display: none !important; }
+
+/* beta.3.26 — Phase A. The .enm-online-banner is inserted by
+   js/services/online-watcher.js as the first child of <body> when
+   the operator goes offline (or the SSE channel disconnects). The
+   markup shipped in alpha.29 batch 98 but no CSS rules were ever
+   added — the banner was rendering as a raw unstyled block: no
+   padding, no contrast, no visual hierarchy, no clear retry button.
+   Operators reported "everything wrecked on mobile" partly because
+   this thing flashes up unannotated and looks like a layout error.
+   Style it with the warning palette so it reads as "ENM is degraded
+   right now" + a tappable retry button. */
+.enm-online-banner {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    padding: var(--sp-2) var(--sp-4);
+    background: var(--warning-bg);
+    color: var(--text-primary);
+    border-bottom: 1px solid var(--warning-soft);
+    font-size: var(--fs-caption);
+    line-height: 1.5;
+    position: relative;
+    z-index: 10;
+}
+.enm-online-banner[hidden] { display: none; }
+.enm-online-banner-msg {
+    flex: 1;
+    min-width: 0;
+    color: var(--warning);
+    font-weight: var(--fw-medium);
+}
+.enm-online-banner-retry {
+    flex: 0 0 auto;
+    /* Inherits .enm-btn .enm-btn-secondary chrome from the JS;
+       just ensure the touch target meets the 24×24 a11y floor. */
+    min-height: 24px;
+}
+/* On narrow + compact, stack message above the retry so neither
+   wraps mid-word against the 4-button-wide retry. */
+body[data-app-size="compact"] .enm-online-banner,
+.enm-app[data-app-size="compact"] .enm-online-banner {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--sp-2);
+    padding: var(--sp-2) var(--sp-3);
+}
 
 /* beta.3.16 — the Logs pane needs to be a column flex container so
    the log-viewer's `flex: 1` actually fills the pane and its inner
@@ -636,6 +704,29 @@ body[data-app-size="narrow"] .enm-app .enm-topbar {
     padding: 0 var(--sp-4);
     gap: var(--sp-3);
     height: 48px;
+}
+/* beta.3.26 — Phase A. The wide-mode .enm-tabs / .enm-settings-pills
+   strips horizontally-scroll any overflowing items behind a mask-
+   fade. The whole shape relies on touch swiping past the fade to
+   reach hidden pills, which (per the touch audit) doesn't actually
+   work because the parent .enm-pane's overflow:auto eats the
+   gesture. The robust fix at narrow + compact is to wrap onto
+   multiple rows so there's no overflow at all — every section /
+   tab is visible without swiping. Mask-fade + scroll-snap stay on
+   wide where they're correct (mostly no overflow there anyway).
+   touch-action: auto restores normal touch routing since wrapping
+   eliminates the pan-x semantic. */
+.enm-app[data-app-size="narrow"] .enm-tabs,
+body[data-app-size="narrow"] .enm-app .enm-tabs,
+.enm-app[data-app-size="compact"] .enm-tabs,
+body[data-app-size="compact"] .enm-app .enm-tabs {
+    flex-wrap: wrap;
+    overflow: visible;
+    mask-image: none;
+    -webkit-mask-image: none;
+    scroll-snap-type: none;
+    touch-action: auto;
+    row-gap: 0;
 }
 .enm-app[data-app-size="narrow"] .enm-brand-name,
 body[data-app-size="narrow"] .enm-app .enm-brand-name { display: none; }
@@ -2630,7 +2721,20 @@ body[data-app-size="narrow"] .enm-settings-pills,
 .enm-app[data-app-size="narrow"] .enm-settings-pills,
 body[data-app-size="compact"] .enm-settings-pills,
 .enm-app[data-app-size="compact"] .enm-settings-pills {
+    /* beta.3.26 — Phase A. Same shape as .enm-tabs at narrow/compact:
+       wrap to multiple rows so all 6 section pills are visible
+       without horizontal swipe. The parent .enm-pane's overflow:auto
+       eats horizontal swipes anyway; wrapping eliminates the need
+       for swipe entirely. Pills end up as 2-3 rows of 2-3 pills
+       depending on viewport — every section reachable with one tap. */
     display: flex;
+    flex-wrap: wrap;
+    overflow: visible;
+    mask-image: none;
+    -webkit-mask-image: none;
+    scroll-snap-type: none;
+    touch-action: auto;
+    row-gap: var(--sp-1);
 }
 body[data-app-size="narrow"] .enm-form-row,
 .enm-app[data-app-size="narrow"] .enm-form-row,
