@@ -81,6 +81,9 @@ const auditRouter = require('./routes/audit');
 const configRouter = require('./routes/config');
 const updatesRouter = require('./routes/updates');
 const evmRouter = require('./routes/evm');
+// beta.3.33 — Settings → Danger Zone backend (update / chain-resync /
+// uninstall / nuke). Mounted at /api/enm/maintenance/* below.
+const maintenanceRouter = require('./routes/maintenance');
 
 const PORT = parseInt(process.env.PORT || '4180', 10);
 // Single source of truth for ENM's data location: DataDir.enmDataDir().
@@ -222,6 +225,11 @@ async function main() {
         engine: lazyEngine,
     }));
     api.use('/audit', auditRouter.build({ extensionHandle, getDb }));
+    // beta.3.33 — Settings → Danger Zone. Owner-gated POST routes for
+    // update / chain-resync / uninstall / nuke plus GET routes for
+    // check-update + status. Audit middleware (skips GETs) attached
+    // above already covers the destructive POSTs.
+    api.use('/maintenance', maintenanceRouter.build({ extensionHandle, getDb }));
 
     // EVM placeholder (v0.5+). Reserves /api/enm/evm/* so future cross-chain
     // routes can land without naming collisions. Returns 501 today.
