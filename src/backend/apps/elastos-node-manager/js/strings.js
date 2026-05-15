@@ -822,7 +822,18 @@
             identity_reset_password_warning:'Save this password somewhere safe — it’s shown only once and unlocks the new keystore.',
 
             identity_password_required:     'Password is required.',
-            identity_slashing_warning:      '⚠ This node is registered as an Active/Pending BPoS producer. Changing the keystore here orphans the on-chain registration — you’ll miss on-duty rounds until you sign DPoSV2UpdateProducer in Essentials swapping NodePublicKey to the new one. Failing that you risk slashing. Clicking the action below acknowledges this risk.',
+            // beta.3.45 — audited against Elastos.ELA HEAD. Inactivity
+            // does NOT slash the deposit (InactivePenalty = 0 on
+            // mainnet, common/config/config.go:193). The risk is lost
+            // rewards + identity orphaning, recoverable via an
+            // Essentials-signed DPoSV2UpdateProducer + ActivateProducer
+            // tx. The 200 ELA penalty (DPoSV2IllegalPenalty) only
+            // applies for double-sign of consensus messages — a
+            // keystore-swapped node can't even produce a valid sig,
+            // let alone a double-sig, so this path is N/A. See
+            // memory/feedback_enm_bpos_slashing_truth.md for the full
+            // line-walk citations.
+            identity_slashing_warning:      '⚠ This node is registered as a BPoS producer. Generating or importing a different keystore creates a new node public key that won’t match your on-chain registration, so ela stops being recognized as your producer’s signer. You’ll miss block-production rewards (no deposit penalty — InactivePenalty is 0 on mainnet) until you sign DPoSV2UpdateProducer in Essentials with the new node public key. After ~1440 missed rounds the chain flips the producer to Inactive; recovery from there is ActivateProducer + UpdateProducer in Essentials. Clicking below acknowledges the lost-rewards window.',
         },
 
         // beta.3.40 — Dashboard BPoS supernode card. Two visual variants

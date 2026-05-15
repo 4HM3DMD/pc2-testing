@@ -12,9 +12,21 @@
  *
  * Producer-state guard: the destructive routes (import / reset) check
  * the on-chain producer record BEFORE touching disk. If state is
- * Active/Pending and force!=true, return 412 PRECONDITION_REQUIRED so
- * the UI can surface the slashing-risk modal. Operator must re-submit
+ * Active/Pending/Inactive and force!=true, return 412 PRECONDITION_REQUIRED
+ * so the UI can surface the lost-rewards modal. Operator must re-submit
  * with force=true to acknowledge.
+ *
+ * IMPORTANT: this is NOT a slashing-risk modal. Mainnet penalty config
+ * sets InactivePenalty = 0 (common/config/config.go:193) — inactivity
+ * does NOT slash the deposit. The actual operator risk is lost
+ * REWARDS during the missed-rounds window plus on-chain identity
+ * orphaning, recoverable via DPoSV2UpdateProducer signed in
+ * Essentials with the new NodePublicKey. The 200-ELA penalty
+ * (DPoSV2IllegalPenalty) only applies for illegal-evidence
+ * (double-sign of proposal/vote/block/sidechain) and a keystore-
+ * swapped node can't produce valid signatures at all, so it can't
+ * produce illegal evidence. See memory/feedback_enm_bpos_slashing_truth.md
+ * for citations.
  *
  * Audit: every action emits an EnmAuditLog row with tier
  * "CRITICAL-INFO", decision "executed"/"failed", executor "operator".
@@ -41,11 +53,15 @@ const ConfigStore = require('../services/ConfigStore');
 
 // Producer states that imply the operator is locked in to a specific
 // NodePublicKey on chain. Destructive ops while in these states require
-// explicit force=true acknowledgement.
+// explicit force=true acknowledgement — not because they cause deposit
+// slashing (InactivePenalty=0 on mainnet) but because they orphan the
+// on-chain registration and the operator stops accruing block-
+// production rewards until they UpdateProducer in Essentials.
 const LOCKED_IN_PRODUCER_STATES = new Set([
     'Active', 'Pending',
-    // "Inactive" producers can still recover by signing again before
-    // the slashing threshold — they're locked in too.
+    // Inactive producers are recoverable via ActivateProducer +
+    // UpdateProducer — orphaning their NodePublicKey extends the
+    // recovery window, so still gate them behind the warning.
     'Inactive',
 ]);
 
@@ -192,7 +208,10 @@ function build(deps) {
             if (producer && LOCKED_IN_PRODUCER_STATES.has(producer.state) && !force) {
                 return res.status(412).json({
                     ...errorBody(
-                        `Producer is ${producer.state}. Importing a different keystore risks slashing. `
+                        `Producer is ${producer.state}. Importing a different keystore creates a new `
+                        + 'node public key that won\'t match the on-chain registration — you\'ll miss '
+                        + 'block-production rewards until you sign DPoSV2UpdateProducer in Essentials '
+                        + 'with the new key. No deposit penalty (InactivePenalty=0 on mainnet). '
                         + 'Re-submit with X-Keystore-Force: true to acknowledge.',
                     ),
                     code: 'PRODUCER_LOCKED_IN',
@@ -274,8 +293,10 @@ function build(deps) {
         if (producer && LOCKED_IN_PRODUCER_STATES.has(producer.state) && !value.force) {
             return res.status(412).json({
                 ...errorBody(
-                    `Producer is ${producer.state}. Resetting the keystore generates a new pubkey, `
-                    + 'orphaning the on-chain registration. Re-submit with force=true to acknowledge.',
+                    `Producer is ${producer.state}. Resetting generates a new node public key, `
+                    + 'orphaning your on-chain registration. You\'ll miss block-production rewards '
+                    + 'until you sign DPoSV2UpdateProducer in Essentials with the new key. No deposit '
+                    + 'penalty (InactivePenalty=0 on mainnet). Re-submit with force=true to acknowledge.',
                 ),
                 code: 'PRODUCER_LOCKED_IN',
                 producerState: producer.state,
