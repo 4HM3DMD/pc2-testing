@@ -952,8 +952,11 @@
         if (s.indexOf('skip') !== -1 || s.indexOf('no-owner') !== -1) { return 'skip'; }
         if (s === 'failure' || s.indexOf('fail') !== -1 || s.indexOf('error') !== -1
             || s.indexOf('unknown action') !== -1) { return 'error'; }
-        // 200 OK and similar success-shaped HTTP outcomes.
-        if (s.indexOf('200') === 0 || s.indexOf('2') === 0 && /^2\d\d/.test(s)) { return 'success'; }
+        // beta.3.47 — HTTP-shaped outcomes from EnmAuditMiddleware are
+        // "<status> <text>". Map status-code prefix to kind:
+        //   2xx → success, 4xx/5xx → error, else warn.
+        if (/^2\d\d/.test(s)) { return 'success'; }
+        if (/^[45]\d\d/.test(s)) { return 'error'; }
         return 'warn';
     }
 

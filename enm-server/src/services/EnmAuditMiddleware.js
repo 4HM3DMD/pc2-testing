@@ -63,16 +63,29 @@ function build(extensionHandle) {
             const durationMs = Date.now() - start;
             const success = res.statusCode >= 200 && res.statusCode < 400;
 
+            // beta.3.47 — audit table mock expects:
+            //   Rule    column shows the HTTP route (e.g. "PUT /config/mainchain")
+            //   Outcome column shows "<status> <text>" (e.g. "200 OK", "404 Not Found")
+            // Pre-3.47 we wrote ruleId=null + outcome="success"/"failure", which
+            // collapsed every HTTP-mutation row to an indistinct "—" / "success".
+            // Now we surface the actual mutation shape so operators can scan
+            // the audit page meaningfully.
+            const routeRule = `${req.method} ${normalizeRoutePath(req.originalUrl || req.url || '')}`;
+            const statusText = STATUS_TEXTS[res.statusCode] || '';
+            const httpOutcome = statusText
+                ? `${res.statusCode} ${statusText}`
+                : String(res.statusCode);
+
             // Asynchronous fire-and-forget. Audit failure must not propagate to the
             // user response (already sent).
             Promise.resolve().then(() => appendAudit(getDb(), {
                 walletAddress: wallet,
                 chainId: extractChainId(req) || 'system',
-                ruleId: null,
+                ruleId: routeRule,
                 tier: HEALING_TIERS.HTTP_MUTATION,
                 decision: success ? AUDIT_DECISION.EXECUTED : AUDIT_DECISION.FAILED,
                 executor: wallet,
-                outcome: success ? 'success' : 'failure',
+                outcome: httpOutcome,
                 durationMs,
                 payload: {
                     method: req.method,
@@ -106,6 +119,49 @@ function extractChainId(req) {
     const m = url.match(/\/chains\/([a-z0-9-]+)/i);
     return m ? m[1] : null;
 }
+
+/**
+ * beta.3.47 — normalize the URL path for the audit ruleId column.
+ * Strips the /api/enm prefix and replaces any chain-id segment with
+ * ":chainId" so the audit log groups by route shape, not by every
+ * distinct URL. Example:
+ *   /api/enm/chains/mainchain/start  →  /chains/:chainId/start
+ *   /api/enm/identity/reset          →  /identity/reset
+ *   /api/enm/config/general?x=1      →  /config/general
+ */
+function normalizeRoutePath(rawUrl) {
+    // Drop the API prefix.
+    let p = String(rawUrl).replace(/^\/api\/enm/, '');
+    // Drop the querystring.
+    const qIdx = p.indexOf('?');
+    if (qIdx >= 0) { p = p.slice(0, qIdx); }
+    // Drop URL fragment.
+    const hIdx = p.indexOf('#');
+    if (hIdx >= 0) { p = p.slice(0, hIdx); }
+    // Substitute chain-id segments. Match /chains/<id>/ where id is
+    // [a-z0-9-]+; preserve everything after.
+    p = p.replace(/\/chains\/[a-z0-9-]+/i, '/chains/:chainId');
+    return p || '/';
+}
+
+// HTTP status texts we surface in the Outcome column. Minimal set —
+// any status we don't recognise falls back to the bare numeric code.
+const STATUS_TEXTS = Object.freeze({
+    200: 'OK',
+    201: 'Created',
+    202: 'Accepted',
+    204: 'No Content',
+    400: 'Bad Request',
+    401: 'Unauthorized',
+    403: 'Forbidden',
+    404: 'Not Found',
+    409: 'Conflict',
+    412: 'Precondition Required',
+    429: 'Too Many Requests',
+    500: 'Internal Server Error',
+    501: 'Not Implemented',
+    503: 'Service Unavailable',
+});
 
 module.exports = {
     build,
