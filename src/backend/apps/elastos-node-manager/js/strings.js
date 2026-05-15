@@ -955,24 +955,62 @@
         },
 
         audit: {
-            heading:        'Audit log',
+            // beta.3.48 — renamed "Audit log" → "Activity" for plain-
+            // language clarity. "Audit" sounded like compliance jargon;
+            // the page is just a chronological list of things that
+            // happened on this node.
+            heading:        'Activity',
             filter_chain:   'Chain',
-            filter_tier:    'Tier',
+            filter_tier:    'Kind',
             filter_from:    'From',
             filter_to:      'To',
             apply_filter:   'Apply',
             export_btn:     'Export JSON',
-            empty:          'No audit entries match these filters.',
-            col_ts:         'Time',
+            empty:          'No activity matches these filters.',
+            // Default-friendly columns shown to all operators.
+            col_when:       'When',
+            col_what:       'What happened',
+            col_result:     'Result',
+            // Technical columns — surfaced only when the "Show technical
+            // details" toggle is on. Keep the names short so the wider
+            // table still fits on narrow viewports.
+            col_ts:         'Timestamp (UTC)',
             col_chain:      'Chain',
-            col_rule:       'Rule',
-            col_tier:       'Tier',
+            col_rule:       'Rule / Route',
+            col_tier:       'Kind',
             col_decision:   'Decision',
-            col_executor:   'Executor',
+            col_executor:   'Who',
             col_outcome:    'Outcome',
-            tier_any:       'Any tier',
+            tier_any:       'Any kind',
+            filter_when:    'When',
+            copy_filtered:  'Copy filtered rows',
             load_more:      'Load more',
             load_more_capped: 'Cap reached — narrow filters or export to see more.',
+            // beta.3.48 — toggle for the technical view.
+            show_technical:     'Show technical details',
+            hide_technical:     'Hide technical details',
+            // beta.3.48 — friendly names for the executor column. We
+            // can only resolve "operator" if the executor wallet
+            // matches the current logged-in operator wallet. Anything
+            // else surfaced as a short hex.
+            executor_you:       'You',
+            executor_system:    'System',
+            // beta.3.48 — friendly names for the 5 healing tiers.
+            // Mock kept the full codes; operator feedback was that
+            // they're internal jargon and don't help a regular user.
+            tier_label_AUTOMATED_SAFE:  'Auto-fix',
+            tier_label_OWNER_CONFIRMS:  'Awaits you',
+            tier_label_CRITICAL_NOTIFY: 'Alert',
+            tier_label_NEVER_AUTOMATIC: 'Manual',
+            tier_label_HTTP_MUTATION:   'Setting change',
+            tier_label_CRITICAL_INFO:   'Note',
+            // beta.3.48 — friendly outcome groups.
+            outcome_friendly_done:    'Done',
+            outcome_friendly_failed:  'Failed',
+            outcome_friendly_skipped: 'Skipped',
+            outcome_friendly_noted:   'Notified',
+            outcome_friendly_pending: 'Pending',
+
             // alpha.28.1 batch 39 — row-count suffix moved from inline
             // English. ICU plurals still deferred (audit-tab.js audit
             // acbcec6b flagged "1 rows" as the cosmetic bug).
@@ -980,8 +1018,8 @@
             // singular vs plural so "1 rows" stops being printed. The
             // ICU plural shim is still deferred; for now the audit-tab
             // caller picks between the two keys based on count.
-            row_count:      '{n} rows',
-            row_count_one:  '{n} row',
+            row_count:      '{n} entries',
+            row_count_one:  '{n} entry',
         },
 
         // beta.3.15 — producer_binding.* strings block deleted. Its only

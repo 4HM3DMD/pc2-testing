@@ -3368,6 +3368,21 @@ body[data-app-size="compact"] .enm-section-card-foot .enm-btn,
     min-height: 0;
     overflow-y: auto;
 }
+/* beta.3.48 — friendly mode (default) hides the technical columns;
+ * technical mode hides the friendly columns. Both views share a single
+ * <tr> with all cells so toggling is a CSS class flip — no re-render. */
+.enm-audit[data-audit-mode="friendly"] .col-technical { display: none; }
+.enm-audit[data-audit-mode="technical"] .col-friendly { display: none; }
+/* Default — if data-audit-mode isn't set yet (older bundles), hide
+ * the friendly columns so the table doesn't render double cells. */
+.enm-audit:not([data-audit-mode]) .col-friendly { display: none; }
+/* Friendly-column-specific typography. "What" carries the action
+ * description so it should read like body text, not mono. "When"
+ * stays mono so it tabular-aligns. */
+.enm-audit-table .col-when    { font-family: var(--font-mono); white-space: nowrap; color: var(--text-tertiary); }
+.enm-audit-table .col-what    { color: var(--text-primary); }
+.enm-audit-table .col-result  { white-space: nowrap; }
+
 .enm-audit-table {
     width: 100%;
     border-collapse: collapse;

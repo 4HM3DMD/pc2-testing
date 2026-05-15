@@ -96,11 +96,34 @@
         this._trapHandler = null;
         this._drawerCloseTimer = null;
 
+        // beta.3.48 — restore the audit-mode preference (friendly /
+        // technical) from sessionStorage so a toggle survives within
+        // the session. Default is "friendly" — the operator's first
+        // impression should be the plain-language view.
+        try {
+            if (typeof window !== 'undefined' && window.sessionStorage) {
+                var stored = window.sessionStorage.getItem('enm-audit-mode');
+                this._showTechnical = stored === 'technical';
+            }
+        } catch (_) { this._showTechnical = false; }
+
         this._renderShell();
     }
 
     AuditTab.prototype.mount = function (parent) {
         parent.appendChild(this.root);
+        // beta.3.48 — cache the operator wallet for friendlyExecutor()
+        // so "You" vs short-hex resolves correctly. Fire-and-forget;
+        // missing wallet just means friendlyExecutor falls back to
+        // short hex (matches the technical column behaviour).
+        if (this.api && typeof this.api.get === 'function') {
+            this.api.get('/whoami').then(function (resp) {
+                var r = (resp && resp.result) || resp || {};
+                if (r.wallet_address && typeof window !== 'undefined') {
+                    window.__enmCurrentOperatorWallet = r.wallet_address;
+                }
+            }).catch(function () { /* swallow — friendly fallback handles it */ });
+        }
         this.refresh();
         // 0.2.0-beta.3.8 — subscribe to the live `audit` SSE topic so
         // new rows prepend in place instead of needing a manual
@@ -219,6 +242,31 @@
         });
     };
 
+    /**
+     * beta.3.48 — toggle between friendly (default) and technical
+     * modes. Updates the data-audit-mode on the root, swaps the
+     * toggle label, and saves the preference so it persists across
+     * tab re-mounts within the session.
+     */
+    AuditTab.prototype._toggleTechnical = function () {
+        var t = root.enmTOrFallback;
+        this._showTechnical = !this._showTechnical;
+        this.root.dataset.auditMode = this._showTechnical ? 'technical' : 'friendly';
+        if (this._technicalToggle) {
+            this._technicalToggle.textContent = this._showTechnical
+                ? t('audit.hide_technical')
+                : t('audit.show_technical');
+        }
+        // Persist for the session (sessionStorage so reload resets;
+        // operator's first impression should be the friendly view).
+        try {
+            if (typeof window !== 'undefined' && window.sessionStorage) {
+                window.sessionStorage.setItem('enm-audit-mode',
+                    this._showTechnical ? 'technical' : 'friendly');
+            }
+        } catch (_) { /* private mode etc. */ }
+    };
+
     /** @private */
     AuditTab.prototype._currentFilterQs = function () {
         var parts = [];
@@ -261,20 +309,35 @@
         var t = root.enmTOrFallback;
         var self = this;
 
+        // beta.3.48 — default to "friendly" mode (When / What / Result);
+        // operator can flip to "technical" via the toolbar toggle.
+        if (typeof this._showTechnical !== 'boolean') {
+            this._showTechnical = false;
+        }
+        this.root.dataset.auditMode = this._showTechnical ? 'technical' : 'friendly';
+
         // --- Toolbar -------------------------------------------------
         var toolbar = el('div', 'enm-audit-toolbar');
         var title = el('h2', 'enm-audit-title');
         title.id = 'enm-audit-title';
         title.textContent = t('audit.heading');
         toolbar.appendChild(title);
-        // Scope note — mock has "All chains · 90-day retention" as a
-        // secondary line. Phrased neutrally because the retention
-        // window is operator-configured (general_audit_retention).
+        // Scope note — phrased neutrally because the retention window
+        // is operator-configured (general_audit_retention).
         var scope = el('div', 'enm-audit-scope-note');
         scope.textContent = 'All chains · audit retention as configured';
         toolbar.appendChild(scope);
 
         var actions = el('div', 'enm-audit-actions');
+        // beta.3.48 — technical toggle. Toggling re-renders the table
+        // body too (header is shared; CSS hides cells per mode).
+        this._technicalToggle = btn(
+            this._showTechnical
+                ? t('audit.hide_technical')
+                : t('audit.show_technical'),
+            'enm-btn-secondary enm-audit-technical-toggle',
+            function () { self._toggleTechnical(); });
+        actions.appendChild(this._technicalToggle);
         this._copyBtn = btn(t('audit.copy_filtered') || 'Copy filtered rows',
             'enm-btn-secondary enm-audit-copy', function () { self._copyTsv(); });
         actions.appendChild(this._copyBtn);
@@ -294,14 +357,22 @@
         // each cell when navigating the table grid.
         var thead = document.createElement('thead');
         var theadRow = document.createElement('tr');
+        // beta.3.48 — 3 friendly columns (default) + 7 technical
+        // (toggle-revealed). CSS hides one set or the other via the
+        // data-audit-mode on this.root.
         var headerKeys = [
-            { key: 'col_ts',       cls: 'col-ts' },
-            { key: 'col_chain',    cls: 'col-chain' },
-            { key: 'col_rule',     cls: 'col-rule' },
-            { key: 'col_tier',     cls: 'col-tier' },
-            { key: 'col_decision', cls: 'col-decision' },
-            { key: 'col_executor', cls: 'col-executor' },
-            { key: 'col_outcome',  cls: 'col-outcome' },
+            // Friendly mode
+            { key: 'col_when',     cls: 'col-when col-friendly' },
+            { key: 'col_what',     cls: 'col-what col-friendly' },
+            { key: 'col_result',   cls: 'col-result col-friendly' },
+            // Technical mode
+            { key: 'col_ts',       cls: 'col-ts col-technical' },
+            { key: 'col_chain',    cls: 'col-chain col-technical' },
+            { key: 'col_rule',     cls: 'col-rule col-technical' },
+            { key: 'col_tier',     cls: 'col-tier col-technical' },
+            { key: 'col_decision', cls: 'col-decision col-technical' },
+            { key: 'col_executor', cls: 'col-executor col-technical' },
+            { key: 'col_outcome',  cls: 'col-outcome col-technical' },
         ];
         headerKeys.forEach(function (h) {
             var th = document.createElement('th');
@@ -377,7 +448,12 @@
         tierGroup.appendChild(anyChip);
 
         TIER_VALUES.forEach(function (tier) {
-            var chip = chipBtn(tier, false);
+            // beta.3.48 — chip label uses the friendly name (e.g.
+            // "Auto-fix") instead of the internal tier code (e.g.
+            // "AUTOMATED-SAFE"). Tier-specific border/background
+            // styling still keys off data-tier so the existing CSS
+            // palette in styles.css works unchanged.
+            var chip = chipBtn(friendlyTierLabel(tier), false);
             chip.dataset.tier = tier;
             chip.addEventListener('click', function () { self._onTierChip(tier); });
             self._tierChips[tier] = chip;
@@ -489,13 +565,25 @@
         tr.setAttribute('role', 'button');
         tr.setAttribute('aria-label',
             (e.ruleId || e.rule_id || '—') + ' · ' + (e.decision || ''));
-        addCell(tr, 'col-ts',       formatTs(e.ts),                 formatTsLocal(e.ts));
-        addCell(tr, 'col-chain',    e.chainId || e.chain_id || '—');
-        addCell(tr, 'col-rule',     e.ruleId  || e.rule_id  || '—');
-        addBadgeCell(tr, 'col-tier',    e.tier   || '—', 'enm-tier-badge',    { tier: e.tier });
-        addCell(tr, 'col-decision', e.decision || '—');
-        addCell(tr, 'col-executor', shortenWallet(e.executor),      e.executor || '');
-        addBadgeCell(tr, 'col-outcome', e.outcome || '—', 'enm-outcome-badge',
+        // beta.3.48 — friendly cells (default) + technical cells
+        // (toggle-revealed). CSS hides whichever set isn't active.
+        addCell(tr, 'col-when col-friendly',
+            formatTsRelative(e.ts), formatTsLocal(e.ts));
+        addCell(tr, 'col-what col-friendly',
+            friendlyAction(e), e.decision || '');
+        addBadgeCell(tr, 'col-result col-friendly',
+            friendlyResult(e), 'enm-outcome-badge',
+            { kind: outcomeKind(e.outcome) });
+        addCell(tr, 'col-ts col-technical',       formatTs(e.ts),                 formatTsLocal(e.ts));
+        addCell(tr, 'col-chain col-technical',    e.chainId || e.chain_id || '—');
+        addCell(tr, 'col-rule col-technical',     e.ruleId  || e.rule_id  || '—');
+        addBadgeCell(tr, 'col-tier col-technical',
+            friendlyTierLabel(e.tier), 'enm-tier-badge', { tier: e.tier });
+        addCell(tr, 'col-decision col-technical', e.decision || '—');
+        addCell(tr, 'col-executor col-technical',
+            friendlyExecutor(e, getCurrentOperatorWallet()),
+            e.executor || '');
+        addBadgeCell(tr, 'col-outcome col-technical', e.outcome || '—', 'enm-outcome-badge',
             { kind: outcomeKind(e.outcome) });
         var openFromRow = function () { self._openDrawer(idx); };
         tr.addEventListener('click', openFromRow);
@@ -550,13 +638,25 @@
         tr.setAttribute('aria-label',
             (e.ruleId || e.rule_id || '—') + ' · ' + (e.decision || ''));
 
-        addCell(tr, 'col-ts',       formatTs(e.ts),                 formatTsLocal(e.ts));
-        addCell(tr, 'col-chain',    e.chainId || e.chain_id || '—');
-        addCell(tr, 'col-rule',     e.ruleId  || e.rule_id  || '—');
-        addBadgeCell(tr, 'col-tier',    e.tier   || '—', 'enm-tier-badge',    { tier: e.tier });
-        addCell(tr, 'col-decision', e.decision || '—');
-        addCell(tr, 'col-executor', shortenWallet(e.executor),      e.executor || '');
-        addBadgeCell(tr, 'col-outcome', e.outcome || '—', 'enm-outcome-badge',
+        // beta.3.48 — friendly cells (default) + technical cells
+        // (toggle-revealed). CSS hides whichever set isn't active.
+        addCell(tr, 'col-when col-friendly',
+            formatTsRelative(e.ts), formatTsLocal(e.ts));
+        addCell(tr, 'col-what col-friendly',
+            friendlyAction(e), e.decision || '');
+        addBadgeCell(tr, 'col-result col-friendly',
+            friendlyResult(e), 'enm-outcome-badge',
+            { kind: outcomeKind(e.outcome) });
+        addCell(tr, 'col-ts col-technical',       formatTs(e.ts),                 formatTsLocal(e.ts));
+        addCell(tr, 'col-chain col-technical',    e.chainId || e.chain_id || '—');
+        addCell(tr, 'col-rule col-technical',     e.ruleId  || e.rule_id  || '—');
+        addBadgeCell(tr, 'col-tier col-technical',
+            friendlyTierLabel(e.tier), 'enm-tier-badge', { tier: e.tier });
+        addCell(tr, 'col-decision col-technical', e.decision || '—');
+        addCell(tr, 'col-executor col-technical',
+            friendlyExecutor(e, getCurrentOperatorWallet()),
+            e.executor || '');
+        addBadgeCell(tr, 'col-outcome col-technical', e.outcome || '—', 'enm-outcome-badge',
             { kind: outcomeKind(e.outcome) });
 
         // Row-index lookup so Prev/Next walk siblings without DOM math.
@@ -975,6 +1075,171 @@
         return (typeof window !== 'undefined' && window.enmFormatDate)
             ? window.enmFormatDate(ms, { mode: 'local' })
             : new Date(ms).toLocaleString();
+    }
+
+    // beta.3.48 — relative-time format for the friendly "When" column.
+    // "Just now" / "5 min ago" / "Today 14:30" / "2 days ago" / explicit
+    // date for anything older than ~30 days. Tooltip carries the
+    // absolute UTC ISO so power users still see exact timing on hover.
+    function formatTsRelative(ms) {
+        if (!ms) { return '—'; }
+        var now = Date.now();
+        var dt = now - ms;
+        if (dt < 0) { dt = 0; }
+        var sec = Math.floor(dt / 1000);
+        if (sec < 30)       { return 'Just now'; }
+        if (sec < 60)       { return sec + 's ago'; }
+        var min = Math.floor(sec / 60);
+        if (min < 60)       { return min + ' min ago'; }
+        var hr = Math.floor(min / 60);
+        var d = new Date(ms);
+        var nowD = new Date();
+        var sameDay = d.getDate() === nowD.getDate()
+            && d.getMonth() === nowD.getMonth()
+            && d.getFullYear() === nowD.getFullYear();
+        if (sameDay) {
+            return 'Today ' + ('' + d.getHours()).padStart(2, '0')
+                + ':' + ('' + d.getMinutes()).padStart(2, '0');
+        }
+        var days = Math.floor(hr / 24);
+        if (days < 30) { return days + 'd ago'; }
+        return formatTs(ms);  // older than 30 days — show full timestamp
+    }
+
+    // beta.3.48 — translate internal rule codes / HTTP routes into
+    // operator-readable action labels for the friendly "What happened"
+    // column. Unknown keys fall through to the raw rule/decision so
+    // power users still see something meaningful.
+    var RULE_FRIENDLY = {
+        // Healing-engine rule codes. These are the F-numbers operators
+        // see in the audit log when an automated rule fires.
+        'F1':  'Auto-restart after crash',
+        'F2':  'Re-attached to running ela',
+        'F3':  'Restarted after 0 peers',
+        'F4':  'Restarted on stuck height',
+        'F5':  'Disk-space warning',
+        'F6':  'Process held excess memory',
+        'F7':  'RPC unreachable',
+        'F8':  'Config drifted',
+        'F9':  'Config rolled back',
+        'F10': 'Re-attempted bootstrap',
+        'F11': 'BPoS rotation stalled',
+        'F12': 'Producer marked Inactive',
+        'F13': 'Clock skew detected',
+        'F14': 'Re-downloaded missing binary',
+        'F15': 'Re-applied known-good binary',
+        'F16': 'Stash recovered (post-restart)',
+        'F17': 'Memory pressure',
+        'F18': 'No inbound peers',
+        'F19': 'Host port conflict',
+        // HTTP routes (normalised by the audit middleware). New
+        // routes added in beta.3.33+ for maintenance and beta.3.43+
+        // for identity.
+        'POST /chains/:chainId/start':          'Started chain',
+        'POST /chains/:chainId/stop':           'Stopped chain',
+        'POST /chains/:chainId/restart':        'Restarted chain',
+        'POST /chains/:chainId/bootstrap':      'Started bootstrap',
+        'DELETE /chains/:chainId/bootstrap':    'Cancelled bootstrap',
+        'POST /chains/:chainId/bpos/activate':  'Activated BPoS producer',
+        'PUT /config/general':              'Updated general settings',
+        'PUT /config/mainchain':            'Updated mainchain settings',
+        'PUT /config/network':              'Updated network settings',
+        'PUT /config/notifications':        'Updated alert thresholds',
+        'PUT /config/storage':              'Updated storage settings',
+        'POST /config/anti-snipe-password': 'Updated anti-snipe password',
+        'POST /config/rollback':            'Rolled back config',
+        'POST /maintenance/update':         'Started ENM update',
+        'POST /maintenance/chain-resync':   'Started chain resync',
+        'POST /maintenance/uninstall':      'Started app uninstall',
+        'POST /maintenance/nuke':           'Started nuclear wipe',
+        'POST /identity/unlock':            'Unlocked keystore',
+        'POST /identity/import':            'Imported keystore',
+        'POST /identity/reset':             'Reset keystore',
+        'POST /identity/integrity/rebaseline': 'Re-baselined integrity',
+        // Setup-wizard transitions (alpha era — kept for older rows).
+        'POST /setup/install/:chainId':     'Installed binary',
+        'POST /setup/binary':               'Confirmed binary',
+        'POST /setup/bootstrap':            'Chose bootstrap path',
+        'POST /setup/keystore':             'Generated keystore',
+        'POST /setup/network':              'Configured network',
+        'POST /setup/complete':             'Finished setup',
+    };
+    function friendlyAction(e) {
+        var rule = e.ruleId || e.rule_id;
+        if (rule && Object.prototype.hasOwnProperty.call(RULE_FRIENDLY, rule)) {
+            return RULE_FRIENDLY[rule];
+        }
+        // For CRITICAL-INFO rows where ruleId is null, the outcome
+        // field carries the descriptive text written by routes/*
+        // _audit() calls (e.g. "Identity reset: new pubkey 03d2…").
+        if (!rule && e.outcome) { return String(e.outcome); }
+        return rule || '—';
+    }
+
+    // Map tier codes to short friendly chip labels for both the table
+    // tier column and the filter chips. Falls back to the raw code for
+    // unknown tiers.
+    var TIER_FRIENDLY_KEYS = {
+        'AUTOMATED-SAFE':  'tier_label_AUTOMATED_SAFE',
+        'OWNER-CONFIRMS':  'tier_label_OWNER_CONFIRMS',
+        'CRITICAL-NOTIFY': 'tier_label_CRITICAL_NOTIFY',
+        'NEVER-AUTOMATIC': 'tier_label_NEVER_AUTOMATIC',
+        'HTTP-MUTATION':   'tier_label_HTTP_MUTATION',
+        'CRITICAL-INFO':   'tier_label_CRITICAL_INFO',
+    };
+    function friendlyTierLabel(tier) {
+        if (!tier) { return '—'; }
+        var key = TIER_FRIENDLY_KEYS[tier];
+        if (!key) { return tier; }
+        var t = root.enmTOrFallback;
+        var v = t('audit.' + key);
+        // enmTOrFallback returns [audit.x] for missing keys; if that
+        // happens (older strings.js), use the raw code as fallback.
+        if (v && v.charAt(0) === '[') { return tier; }
+        return v;
+    }
+
+    // Friendly outcome label — coarse "Done / Failed / Skipped /
+    // Notified" based on outcomeKind(). Used in the friendly Result
+    // column; the technical Outcome column still shows the raw
+    // "200 OK" / "412 Precondition Required" / etc.
+    function friendlyResult(e) {
+        var k = outcomeKind(e.outcome);
+        var t = root.enmTOrFallback;
+        var key = k === 'success' ? 'audit.outcome_friendly_done'
+                : k === 'error'   ? 'audit.outcome_friendly_failed'
+                : k === 'skip'    ? 'audit.outcome_friendly_skipped'
+                : k === 'warn'    ? 'audit.outcome_friendly_noted'
+                :                   'audit.outcome_friendly_pending';
+        var v = t(key);
+        return (v && v.charAt(0) === '[') ? '—' : v;
+    }
+
+    // Resolve a friendly "Who" label for the executor column. "You"
+    // when the executor wallet matches the current logged-in operator,
+    // "System" for system-driven events (healing rules fired without
+    // operator action), short hex for any other wallet.
+    function friendlyExecutor(e, ownerWallet) {
+        var w = e.executor || e.wallet_address || null;
+        var t = root.enmTOrFallback;
+        if (!w || w === 'system') { return t('audit.executor_system'); }
+        if (ownerWallet && String(w).toLowerCase() === String(ownerWallet).toLowerCase()) {
+            return t('audit.executor_you');
+        }
+        return shortenWallet(w);
+    }
+
+    // Read the currently-logged-in operator's wallet so friendlyExecutor
+    // can render "You" vs the short hex. Falls back to null if the
+    // wallet service hasn't resolved yet.
+    function getCurrentOperatorWallet() {
+        try {
+            if (typeof window !== 'undefined'
+                && window.__enmCurrentOperatorWallet) {
+                return window.__enmCurrentOperatorWallet;
+            }
+        } catch (_) { /* swallow */ }
+        return null;
     }
 
     /** Grouped ms display so a 2847 reads as "2,847 ms" in the drawer. */

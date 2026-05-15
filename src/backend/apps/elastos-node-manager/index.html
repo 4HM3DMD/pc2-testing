@@ -10,7 +10,7 @@
     <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
     <meta name="referrer" content="no-referrer">
     <title>Elastos Node Manager</title>
-    <link rel="stylesheet" href="css/styles.css?ts=20260516b346a">
+    <link rel="stylesheet" href="css/styles.css?ts=20260516b348a">
     <script>
         // Beta 3 — Phase 1c carried over. Dark-only. We hard-code data-theme=dark
         // on documentElement so any rule that still says [data-theme="dark"] keeps
@@ -108,7 +108,7 @@
                 <button type="button" class="enm-tab active" role="tab" id="enm-tab-dashboard" data-tab="dashboard" aria-selected="true"  aria-controls="enm-pane-dashboard" tabindex="0">Dashboard</button>
                 <button type="button" class="enm-tab"        role="tab" id="enm-tab-logs"      data-tab="logs"      aria-selected="false" aria-controls="enm-pane-logs"      tabindex="-1">Logs</button>
                 <button type="button" class="enm-tab"        role="tab" id="enm-tab-settings"  data-tab="settings"  aria-selected="false" aria-controls="enm-pane-settings"  tabindex="-1">Settings</button>
-                <button type="button" class="enm-tab"        role="tab" id="enm-tab-audit"     data-tab="audit"     aria-selected="false" aria-controls="enm-pane-audit"     tabindex="-1">Audit</button>
+                <button type="button" class="enm-tab"        role="tab" id="enm-tab-audit"     data-tab="audit"     aria-selected="false" aria-controls="enm-pane-audit"     tabindex="-1">Activity</button>
             </nav>
             <div class="enm-topbar-actions">
                 <button type="button" class="enm-icon-btn" id="enm-settings-toggle" title="Settings" aria-label="Open settings">
@@ -161,7 +161,7 @@
         mock-derived markup; their JS contracts (event listeners,
         lifecycle guards, ARIA wiring) stay intact.
     -->
-    <script defer src="js/strings.js?ts=20260516b346a"></script>
+    <script defer src="js/strings.js?ts=20260516b348a"></script>
     <script defer src="js/utils.js?ts=20260506g"></script>
     <script defer src="js/illustrations.js?ts=20260506g"></script>
     <script defer src="js/services/wallet.js?ts=20260506g"></script>
@@ -204,7 +204,7 @@
          set; the script reference is kept for future re-enable. -->
     <script>
       window.ENM_LAZY_SCRIPTS = window.ENM_LAZY_SCRIPTS || {};
-      window.ENM_LAZY_SCRIPTS.auditTab = 'js/components/audit-tab.js?ts=20260516b347a';
+      window.ENM_LAZY_SCRIPTS.auditTab = 'js/components/audit-tab.js?ts=20260516b348a';
       window.ENM_LAZY_SCRIPTS.evmTab   = 'js/components/evm-tab.js?ts=20260514a';
     </script>
     <!-- Beta 3 BP-B — settings-drawer.js dropped. Settings now lives in
