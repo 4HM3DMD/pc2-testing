@@ -78,10 +78,15 @@ const KEYSTORE_FILENAME = 'keystore.dat';
 
 const GITHUB_OWNER = '4HM3DMD';
 const GITHUB_REPO = 'pc2-testing';
-const PC2_LOCAL_URL = 'http://127.0.0.1:4202';
 const DEPLOY_SCRIPT = '/root/deploy-enm.sh';
-const PC2_ENV_FILE = '/etc/pc2.env';
 const SELF_DATA_DIR_DEFAULT = '/var/lib/pc2/data/extensions/elastos-node-manager';
+// beta.3.35 — operate on PC2 at the filesystem + sqlite layer rather
+// than through its HTTP API. We're already running as root inside
+// pc2-node; needing a self-auth token to delete our own files is
+// theatre. /etc/pc2.env may be unreadable on hardened hosts anyway.
+const PC2_SQLITE_PATH = '/var/lib/pc2/data/pc2-node.sqlite';
+const INSTALLED_APPS_DIR = '/var/lib/pc2/data/installed-apps/elastos-node-manager';
+const APP_NAME = 'elastos-node-manager';
 
 // In-process lock — only one destructive action at a time.
 let _busy = null; // { action, startedAtMs }
@@ -103,28 +108,17 @@ function _release() {
 }
 
 /**
- * Read PC2_OWNER_TOKEN from /etc/pc2.env (the same file the deploy
- * script reads). Memoized — file is set once at PC2 install time.
+ * beta.3.35 — uninstall + nuke no longer call pc2-node's HTTP API,
+ * so the owner-token reader is no longer needed by those paths.
+ * Kept as a stub returning null for backward compatibility with
+ * callers that may still import it (none in-tree).
  *
- * Returns null if unreadable; callers must handle that — the
- * `update / uninstall / nuke` paths all need it.
+ * Why the rewrite: operator complaint — "why do we even need this?"
+ * Reading /etc/pc2.env to authenticate to the same process tree we
+ * already live inside was theatre. We're root, we have shell, we
+ * have the sqlite file at a known path. Just do the work directly.
  */
-let _ownerTokenCache = null;
 function readOwnerToken() {
-    if (_ownerTokenCache !== null) {
-        return _ownerTokenCache || null;
-    }
-    try {
-        const txt = fs.readFileSync(PC2_ENV_FILE, 'utf8');
-        const m = txt.match(/^\s*PC2_OWNER_TOKEN\s*=\s*"?([a-fA-F0-9]{32,128})"?\s*$/m);
-        if (m && m[1]) {
-            _ownerTokenCache = m[1];
-            return m[1];
-        }
-    } catch (_) {
-        // ENOENT or permission denied — caller will surface a useful error.
-    }
-    _ownerTokenCache = '';
     return null;
 }
 
@@ -346,9 +340,20 @@ async function chainResync(opts) {
 
 /**
  * Uninstall the ENM extension from PC2 but preserve all extension data
- * on disk. Caller must respond to the HTTP client BEFORE awaiting this
- * (the spawn is detached so we don't block; but pc2-node will SIGKILL
- * us once it processes the DELETE).
+ * on disk. The script:
+ *   1. Sleeps 2s so Express flushes the 200 response.
+ *   2. Deletes the installed_apps sqlite row (pc2-node now considers us
+ *      uninstalled — won't restart us when our PID dies).
+ *   3. Kills ela children (the user's stake-bound process).
+ *   4. rm -rf the bundle dir.
+ *   5. SIGKILL our own PID.
+ *
+ * beta.3.35 — no HTTP call to pc2-node, no owner token. ENM runs as
+ * root inside pc2-node and has direct read/write on pc2-node.sqlite.
+ *
+ * Data dir (chain DB, keystore, audit, backups) at /var/lib/pc2/data/
+ * extensions/elastos-node-manager is left intact so a future reinstall
+ * can recover the operator's BPoS supernode.
  *
  * @param {{ log?: object }} opts
  * @returns {Promise<{ action: 'uninstall', logFile: string }>}
@@ -357,28 +362,16 @@ async function uninstall(opts) {
     _acquire('uninstall');
     const log = (opts && opts.log) || _noopLog();
     try {
-        const token = readOwnerToken();
-        if (!token) {
-            throw Object.assign(
-                new Error(`Owner token not readable from ${PC2_ENV_FILE}`),
-                { code: 'NO_TOKEN' },
-            );
-        }
-        const dataDir = _dataDirSafe();
-        const logFile = path.join(dataDir, `uninstall-${Date.now()}.log`);
-
-        // Use bash heredoc-style script so we can sleep briefly before
-        // firing the DELETE — that gives Express time to flush our 200
-        // response back to the operator before ENM gets SIGKILLed.
-        const sh =
-            `(\n`
-            + `  sleep 2\n`
-            + `  echo "[uninstall $(date -u +%FT%TZ)] DELETE elastos-node-manager purge=false"\n`
-            + `  curl -sS -X DELETE -H 'Authorization: Bearer ${_shellEscape(token)}' \\\n`
-            + `       '${PC2_LOCAL_URL}/api/installed-apps/elastos-node-manager?purge=false' || true\n`
-            + `  echo "[uninstall $(date -u +%FT%TZ)] done"\n`
-            + `) > '${_shellEscape(logFile)}' 2>&1 &\n`
-            + `disown\n`;
+        // Write the destructive script's log to /tmp so it survives a
+        // future nuke that would also wipe the data dir. /tmp is on
+        // tmpfs on this host — file lives until next reboot, which is
+        // enough for post-mortem.
+        const logFile = `/tmp/enm-uninstall-${Date.now()}.log`;
+        const sh = _buildTeardownScript({
+            label: 'uninstall',
+            logFile,
+            wipeDataDir: false,
+        });
         const child = spawn('bash', ['-c', sh], { detached: true, stdio: 'ignore' });
         child.unref();
         log.info(`${ENM_LOG_PREFIX} maintenance.uninstall queued (log → ${logFile})`);
@@ -405,33 +398,14 @@ async function nuke(opts) {
     _acquire('nuke');
     const log = (opts && opts.log) || _noopLog();
     try {
-        const token = readOwnerToken();
-        if (!token) {
-            throw Object.assign(
-                new Error(`Owner token not readable from ${PC2_ENV_FILE}`),
-                { code: 'NO_TOKEN' },
-            );
-        }
         const dataDir = _dataDirSafe();
-        // Capture the path BEFORE we rm it — we still write the log to
-        // /tmp instead of inside the doomed dir so the artifact survives.
         const logFile = `/tmp/enm-nuke-${Date.now()}.log`;
-        const sh =
-            `(\n`
-            + `  sleep 2\n`
-            + `  echo "[nuke $(date -u +%FT%TZ)] DELETE elastos-node-manager purge=true"\n`
-            + `  curl -sS -X DELETE -H 'Authorization: Bearer ${_shellEscape(token)}' \\\n`
-            + `       '${PC2_LOCAL_URL}/api/installed-apps/elastos-node-manager?purge=true' || true\n`
-            + `  echo "[nuke $(date -u +%FT%TZ)] waiting for ENM PID to die..."\n`
-            + `  for i in 1 2 3 4 5 6 7 8 9 10; do\n`
-            + `    if ! pgrep -f 'elastos-node-manager.*server.js' > /dev/null; then break; fi\n`
-            + `    sleep 1\n`
-            + `  done\n`
-            + `  echo "[nuke $(date -u +%FT%TZ)] rm -rf ${_shellEscape(dataDir)}"\n`
-            + `  rm -rf '${_shellEscape(dataDir)}' || true\n`
-            + `  echo "[nuke $(date -u +%FT%TZ)] done"\n`
-            + `) > '${_shellEscape(logFile)}' 2>&1 &\n`
-            + `disown\n`;
+        const sh = _buildTeardownScript({
+            label: 'nuke',
+            logFile,
+            wipeDataDir: true,
+            dataDir,
+        });
         const child = spawn('bash', ['-c', sh], { detached: true, stdio: 'ignore' });
         child.unref();
         log.info(`${ENM_LOG_PREFIX} maintenance.nuke queued (log → ${logFile}, data dir → ${dataDir})`);
@@ -460,6 +434,75 @@ function _dataDirSafe() {
     } catch (_) {
         return SELF_DATA_DIR_DEFAULT;
     }
+}
+
+/**
+ * Compose the detached bash script that ENM hands off to before it
+ * dies. The script always:
+ *   1. Sleeps 2s so the HTTP response flushes.
+ *   2. Kills any ela child processes ENM was supervising.
+ *   3. Removes the installed_apps sqlite row so pc2-node forgets us
+ *      (otherwise the boot sweeper's "manual:" cid override leaves
+ *       us in place — see project_session_resume_2026_05_13).
+ *   4. Removes the bundle install dir.
+ *   5. (nuke only) rm -rf the extension data dir + the
+ *      backups/elastos-node-manager dir.
+ *   6. SIGKILL our own PID. With the sqlite row gone, pc2-node won't
+ *      auto-restart us.
+ *
+ * @param {{label:'uninstall'|'nuke', logFile:string, wipeDataDir:boolean, dataDir?:string}} opts
+ * @returns {string} script text
+ */
+function _buildTeardownScript(opts) {
+    const label = opts.label;
+    const logFile = opts.logFile;
+    const wipe = !!opts.wipeDataDir;
+    const dataDir = opts.dataDir || SELF_DATA_DIR_DEFAULT;
+    // The pc2-node SQLite row removal. We try the sqlite3 CLI first
+    // (standard on Ubuntu); if it's missing, we fall back to invoking
+    // node with our own better-sqlite3 from node_modules. If both fail,
+    // the file disappears but the sqlite row stays — operator sees a
+    // ghost app on the dashboard until next pc2-node restart, at which
+    // point the boot sweeper reaps the rowless install. Worst case
+    // is cosmetic, not data-loss.
+    const sqliteCleanup =
+        `  echo "[${label} $(date -u +%FT%TZ)] removing installed_apps row"\n`
+        + `  if command -v sqlite3 >/dev/null 2>&1; then\n`
+        + `    sqlite3 '${_shellEscape(PC2_SQLITE_PATH)}' \\\n`
+        + `      "DELETE FROM installed_apps WHERE app_name='${_shellEscape(APP_NAME)}'" \\\n`
+        + `      && echo "  sqlite3 cli: row deleted" \\\n`
+        + `      || echo "  sqlite3 cli: failed"\n`
+        + `  else\n`
+        + `    node -e "try { const sq = require('${_shellEscape(INSTALLED_APPS_DIR)}/backend/node_modules/better-sqlite3'); const db = new sq('${_shellEscape(PC2_SQLITE_PATH)}'); db.prepare(\\"DELETE FROM installed_apps WHERE app_name='${_shellEscape(APP_NAME)}'\\").run(); db.close(); console.log('  better-sqlite3: row deleted'); } catch (e) { console.log('  fallback failed:', e.message); }" || echo "  no sqlite available; boot sweeper will reap on next pc2-node restart"\n`
+        + `  fi\n`;
+    const killEla =
+        `  echo "[${label} $(date -u +%FT%TZ)] killing ela children"\n`
+        + `  pkill -9 -f '/var/lib/pc2/data/extensions/elastos-node-manager/.*ela' && echo "  killed" || echo "  no ela process"\n`;
+    const removeBundle =
+        `  echo "[${label} $(date -u +%FT%TZ)] removing bundle dir"\n`
+        + `  rm -rf '${_shellEscape(INSTALLED_APPS_DIR)}' || true\n`;
+    const removeData = wipe
+        ? `  echo "[nuke $(date -u +%FT%TZ)] rm -rf data dir + backups"\n`
+          + `  rm -rf '${_shellEscape(dataDir)}' || true\n`
+          + `  # Backups live one level outside the extension dir per\n`
+          + `  # EnmStorageMaintenance convention.\n`
+          + `  rm -rf '/var/lib/pc2/data/backups/elastos-node-manager' || true\n`
+        : `  echo "[uninstall $(date -u +%FT%TZ)] preserving data dir at ${_shellEscape(dataDir)}"\n`;
+    const killSelf =
+        `  echo "[${label} $(date -u +%FT%TZ)] killing ENM"\n`
+        + `  pkill -9 -f 'elastos-node-manager.*server.js' || true\n`
+        + `  echo "[${label} $(date -u +%FT%TZ)] done"\n`;
+    return (
+        `(\n`
+        + `  sleep 2\n`
+        + killEla
+        + sqliteCleanup
+        + removeBundle
+        + removeData
+        + killSelf
+        + `) > '${_shellEscape(logFile)}' 2>&1 &\n`
+        + `disown\n`
+    );
 }
 
 /**
