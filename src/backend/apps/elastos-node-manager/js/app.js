@@ -786,14 +786,24 @@
         var self = this;
         if (!root.EnmWelcomeScreen) { return self._mountSetupConversation(); }
         this._clearPanes();
+        // beta.3.36 — welcome-screen.js internally builds an
+        // EnmSetupConversation in its mount() with whatever opts we
+        // pass through. Pre-beta.3.36 we only handed it { onContinue,
+        // announcer }; SetupConversation's constructor then threw
+        // "{ api, notifications, sse } required" because opts.api was
+        // null. Operators on an existing install never saw it (they
+        // skip the welcome and go straight to dashboard); fresh-install
+        // operators hit it the moment they opened the app.
+        //
+        // Fix: hand the welcome screen the same dependencies we'd
+        // hand SetupConversation directly. Welcome screen forwards
+        // them to its inner SetupConversation.
         var screen = new root.EnmWelcomeScreen({
+            api:           this.services.api,
+            notifications: this.services.notifications,
+            sse:           this.services.sse,
+            announcer:     this.services.announcer,
             onContinue: function () { self._mountSetupConversation(); },
-            // BP-E audit fix — inject announcer so welcome-screen.js can
-            // call this.announcer.polite() on transitions instead of
-            // silently no-oping past the constructor-time null. The
-            // singleton window.enmAnnouncer is the fallback path, but
-            // the dependency-injection contract is the canonical wire.
-            announcer: this.services.announcer,
         });
         screen.mount(this.els.paneDashboard);
     };
