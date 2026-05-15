@@ -2749,6 +2749,101 @@ body[data-app-size="compact"] .enm-form-label-block,
 .enm-app[data-app-size="compact"] .enm-form-label-block {
     padding-top: 0;
 }
+
+/* beta.3.28 — Phase B mobile polish. Six focused fixes flagged by
+   the deep mobile audit; B5 (tap-to-start caption) and B6 (audit
+   drawer slide) verified already correct on re-inspection so the
+   list is B1-B4, B7, B8. */
+
+/* B2 — section card padding at narrow (≤699px): the wide default
+   var(--sp-5)=24px each side leaves only 256px content width on a
+   304px container, which makes labels wrap aggressively and form
+   inputs cramp. Drop to sp-3 / sp-4 at narrow + compact. The compact
+   override at line 2752 only targets compact; this narrow override
+   was missing entirely. */
+body[data-app-size="narrow"] .enm-section-card-head,
+.enm-app[data-app-size="narrow"] .enm-section-card-head,
+body[data-app-size="narrow"] .enm-section-card-body,
+.enm-app[data-app-size="narrow"] .enm-section-card-body,
+body[data-app-size="narrow"] .enm-section-card-foot,
+.enm-app[data-app-size="narrow"] .enm-section-card-foot {
+    padding-left: var(--sp-4);
+    padding-right: var(--sp-4);
+}
+
+/* B1 — log toolbar at compact: the wide-mode .enm-log-search has
+   min-width:180px which dominates a 320px viewport and pushes the
+   severity chips + copy button into wrap chaos. Constrain at compact;
+   also ensure the toolbar's flex-wrap is friendly. */
+body[data-app-size="compact"] .enm-log-search,
+.enm-app[data-app-size="compact"] .enm-log-search {
+    min-width: 0;
+    max-width: 100%;
+    flex: 1 1 100%;
+}
+body[data-app-size="compact"] .enm-log-toolbar,
+.enm-app[data-app-size="compact"] .enm-log-toolbar {
+    gap: var(--sp-2);
+    align-items: stretch;
+}
+
+/* B3 — peer popover at compact: min-width:320px overflows a 320px
+   viewport by exactly the pane padding. Cap to viewport-minus-margin
+   so the popover never hides off the right edge. */
+body[data-app-size="compact"] .enm-peer-pop,
+.enm-app[data-app-size="compact"] .enm-peer-pop {
+    min-width: 0;
+    max-width: calc(100vw - 32px);
+    left: 0 !important;
+    right: auto;
+}
+
+/* B4 — icon button touch target at compact: existing rule shrunk it
+   to 28×28 (line 793-796), well below WCAG's 24px floor and far below
+   the 44px recommended target. Bump back to 36×36 — still fits the
+   44px topbar with room and meets the operator-friendly touch size
+   without making the topbar feel busy. */
+body[data-app-size="compact"] .enm-icon-btn,
+.enm-app[data-app-size="compact"] .enm-icon-btn {
+    width: 36px;
+    height: 36px;
+}
+body[data-app-size="compact"] .enm-icon-btn svg,
+.enm-app[data-app-size="compact"] .enm-icon-btn svg {
+    width: 18px;
+    height: 18px;
+}
+
+/* B7 — chain card hero at compact: the audit found 124px hero + stats
+   + actions consumed ~60% of an iPhone-SE class viewport. Shrink the
+   power circle a notch + tighten gaps so two cards fit on-screen. */
+body[data-app-size="compact"] .enm-hero-power-icon,
+.enm-app[data-app-size="compact"] .enm-hero-power-icon,
+body[data-app-size="compact"] .enm-hero-sync,
+.enm-app[data-app-size="compact"] .enm-hero-sync {
+    width: 68px;
+    height: 68px;
+}
+body[data-app-size="compact"] .enm-chain-hero-slot,
+.enm-app[data-app-size="compact"] .enm-chain-hero-slot {
+    width: 96px;
+    height: 96px;
+}
+body[data-app-size="compact"] .enm-chain-actions,
+.enm-app[data-app-size="compact"] .enm-chain-actions {
+    gap: var(--sp-2);
+    flex-wrap: wrap;
+}
+
+/* B8 — log line padding regression at compact: var(--sp-3)=12px each
+   side eats 24px on a 320px container, pushing the 1fr text column
+   into horizontal scroll on long lines. Drop to sp-2 (8px each =
+   16px total) so long log entries wrap rather than scroll. */
+body[data-app-size="compact"] .enm-log-line,
+.enm-app[data-app-size="compact"] .enm-log-line {
+    padding-left: var(--sp-2);
+    padding-right: var(--sp-2);
+}
 body[data-app-size="compact"] .enm-section-card-head,
 .enm-app[data-app-size="compact"] .enm-section-card-head,
 body[data-app-size="compact"] .enm-section-card-body,
