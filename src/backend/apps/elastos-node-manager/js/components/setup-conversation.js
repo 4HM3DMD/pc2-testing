@@ -724,8 +724,13 @@
         this._continueBtn.hidden = true;
         this._continueBtn.disabled = true;
         // Replace the existing Cancel handler with a bootstrap-abort.
+        // beta.3.37 — explicitly reset `disabled` on the clone. cloneNode
+        // preserves attributes, so a prior cancellation that disabled the
+        // button (or a stale state on reload) would carry through and the
+        // operator couldn't click Cancel a second time.
         var newCancel = this._cancelBtn.cloneNode(false);
         newCancel.hidden = false;
+        newCancel.disabled = false;
         newCancel.textContent = t('friendly.setup.card_b2.cancel');
         this._cancelBtn.parentNode.replaceChild(newCancel, this._cancelBtn);
         this._cancelBtn = newCancel;
@@ -741,8 +746,18 @@
         function applyStatus(s) {
             if (!s || done || self._destroyed) { return; }
             if (!self._stillRendering(seq)) { return; }
-            var pct = (s.bytesTotal && s.bytesDownloaded)
-                ? Math.min(100, Math.floor((s.bytesDownloaded / s.bytesTotal) * 100))
+            // beta.3.37 — SSE events publish { got, total } (see
+            // EnmBootstrapDownloader._emit), HTTP poll responses carry
+            // { bytesDownloaded, bytesTotal }. Pre-3.37 the wizard only
+            // looked at the HTTP shape, so every SSE chunk-progress
+            // event hit the fallback branch and re-snapped the bar
+            // back to 5%. Accept both shapes.
+            var got   = (typeof s.bytesDownloaded === 'number') ? s.bytesDownloaded
+                      : (typeof s.got === 'number') ? s.got : 0;
+            var total = (typeof s.bytesTotal === 'number') ? s.bytesTotal
+                      : (typeof s.total === 'number') ? s.total : 0;
+            var pct = (total && got)
+                ? Math.min(100, Math.floor((got / total) * 100))
                 : (s.phase === 'done' ? 100 : (s.phase === 'extracting' ? 95 : 5));
             els.bar.style.width = pct + '%';
             els.pct.textContent = pct + '%';
@@ -825,10 +840,16 @@
         els.title.textContent = t('friendly.setup.card_b2.title_failed');
         els.sub.textContent   = (s && s.error) || t('friendly.setup.card_b2.sub_failed');
         // Cancel→Back, Continue→Retry.
+        // beta.3.37 — explicitly reset `disabled` and `hidden`. The
+        // failure path is reached after the cancel button was disabled
+        // by its own click handler; cloneNode preserved that, so the
+        // operator's "skip and sync from scratch" button rendered but
+        // wasn't clickable.
         this._cancelBtn.hidden = false;
         this._cancelBtn.textContent = t('friendly.setup.card_b2.cta_fallback_genesis');
         var newCancel = this._cancelBtn.cloneNode(false);
         newCancel.hidden = false;
+        newCancel.disabled = false;
         newCancel.textContent = t('friendly.setup.card_b2.cta_fallback_genesis');
         this._cancelBtn.parentNode.replaceChild(newCancel, this._cancelBtn);
         this._cancelBtn = newCancel;
