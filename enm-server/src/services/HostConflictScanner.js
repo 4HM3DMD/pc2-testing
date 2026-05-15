@@ -102,6 +102,14 @@ async function scan(opts) {
     const log = o.logger || { warn() {}, debug() {} };
     const timeoutMs = Number.isInteger(o.timeoutMs) ? o.timeoutMs : DEFAULT_TIMEOUT_MS;
     const run = typeof o.runCmd === 'function' ? o.runCmd : defaultRun(timeoutMs);
+    // beta.3.27 — opts.ourPids is the set of PIDs ENM itself owns
+    // (typically the running ela child). scanPortBindings uses it to
+    // skip ports held by us — the previous shape fired F19 on every
+    // health tick because the port-conflict scanner didn't know its
+    // own children. Optional; when missing the scanner behaves as
+    // before.
+    const ourPids = (o.ourPids instanceof Set) ? o.ourPids
+        : new Set(Array.isArray(o.ourPids) ? o.ourPids.filter(Number.isInteger) : []);
 
     /** @type {Array<Conflict>} */
     const conflicts = [];
@@ -110,7 +118,7 @@ async function scan(opts) {
         scanLegacyConfig(conflicts, log),
         scanLegacyData(conflicts, log),
         scanRogueProcesses(conflicts, run, log),
-        scanPortBindings(conflicts, run, log),
+        scanPortBindings(conflicts, run, log, ourPids),
         scanSystemdUnits(conflicts, run, log),
         scanPermissions(conflicts, log),
         scanStalePidFiles(conflicts, log),
@@ -333,7 +341,7 @@ async function scanRogueProcesses(out, run, log) {
 }
 
 /** @private */
-async function scanPortBindings(out, run, log) {
+async function scanPortBindings(out, run, log, ourPids) {
     const platform = os.platform();
     if (platform !== 'linux' && platform !== 'darwin') {
         return;
@@ -359,8 +367,14 @@ async function scanPortBindings(out, run, log) {
             //     container's network namespace. Inside the container, ela can
             //     still bind the same port (different namespace). Flagging
             //     this as CRITICAL produced the F19 spam the operator hit.
-            //   - our own ela child PID: handled elsewhere (ROGUE_PROCESS only
-            //     fires for ela processes that aren't ours).
+            //   - beta.3.27: our own managed ela child PID. The previous
+            //     comment said "handled elsewhere" but that wasn't true —
+            //     port-binding scan didn't actually skip our PID, so F19
+            //     fired CRITICAL every health tick while ela ran normally.
+            //     ourPids is passed in by HealthChecker (the managed PID
+            //     from ProcessService.statusSync) plus the setup-time
+            //     caller passes an empty set so a stale ela that ENM
+            //     doesn't own still trips the conflict.
             //
             // The holder string from ss/lsof contains the process name + PID
             // and is sometimes multiline (long ss output, line-wrapped). The
@@ -377,6 +391,20 @@ async function scanPortBindings(out, run, log) {
                         + `benign (compose port mapping forwarding into container).`,
                     );
                     continue;
+                }
+                // Skip if any holder PID is one we manage. `ss -tlnp`
+                // emits `users:(("ela",pid=12345,fd=N))` and lsof
+                // emits the PID in column 2. Parse both forms.
+                if (ourPids && ourPids.size > 0) {
+                    const holderPids = parseHolderPids(inUse.holder);
+                    const ours = holderPids.find((pid) => ourPids.has(pid));
+                    if (ours) {
+                        log.debug(
+                            `${ENM_LOG_PREFIX} port ${port} held by our own `
+                            + `managed pid=${ours} — not a conflict.`,
+                        );
+                        continue;
+                    }
                 }
             }
 
@@ -401,6 +429,47 @@ async function scanPortBindings(out, run, log) {
 }
 
 /** @private */
+/**
+ * beta.3.27 — pull PIDs out of an `ss -tlnp` or `lsof -i` holder
+ * string. Both tools expose the PID in distinct shapes:
+ *
+ *   ss output examples:
+ *     users:(("ela",pid=12345,fd=18))
+ *     users:(("docker-proxy",pid=678,fd=4))
+ *
+ *   lsof output example (after the column header is dropped upstream):
+ *     ela     12345 root   18u  IPv4  ... TCP *:20336 (LISTEN)
+ *
+ * Returns an array of integer PIDs in the order they were found.
+ * Empty array on unparseable input.
+ */
+function parseHolderPids(holder) {
+    if (typeof holder !== 'string' || holder.length === 0) { return []; }
+    var pids = [];
+    // ss form: pid=NNNN
+    var ssRe = /pid=(\d+)/g;
+    var m;
+    while ((m = ssRe.exec(holder)) !== null) {
+        var n = parseInt(m[1], 10);
+        if (Number.isInteger(n)) { pids.push(n); }
+    }
+    if (pids.length > 0) { return pids; }
+    // lsof form: command name + whitespace + PID on each line. Look
+    // for tokens that are pure digits, taking the FIRST one per line
+    // since lsof's PID column comes right after the command name.
+    var lines = holder.split(/\r?\n/);
+    for (var i = 0; i < lines.length; i += 1) {
+        var tokens = lines[i].trim().split(/\s+/);
+        for (var j = 1; j < tokens.length; j += 1) {
+            if (/^\d+$/.test(tokens[j])) {
+                pids.push(parseInt(tokens[j], 10));
+                break; // first numeric token per line is the PID
+            }
+        }
+    }
+    return pids;
+}
+
 async function checkPortInUse(port, run) {
     // Prefer ss (Linux) — lighter than lsof. Fall back to lsof on macOS or
     // when ss isn't available.

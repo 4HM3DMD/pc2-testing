@@ -497,17 +497,51 @@ function detectF18(snap) {
     if (!firstNoInbound) return null;
     if (Date.now() - firstNoInbound < NO_INBOUND_GRACE_MS) return null;
 
+    // beta.3.27 — gate severity on whether the operator is actually a
+    // BPoS supernode. The "missed votes accumulate silently" framing
+    // only applies if the node is registered as a producer. On a
+    // follower / observer node the same condition is technically true
+    // (cloud hosters typically block inbound by default) but the
+    // consequence is just less peer diversity, not slashing risk.
+    // Operator on srv832310 (Hostinger, no BPoS registration) hit
+    // this as a CRITICAL alert with copy that didn't match their
+    // situation. Downgrade for non-BPoS; keep the urgent shape for
+    // BPoS operators where ports actually matter.
+    const isBpos = !!(snap.chainConfig && snap.chainConfig.dpos
+        && snap.chainConfig.dpos.enableArbiter);
+
+    if (isBpos) {
+        return {
+            ruleId: 'F18',
+            tier: HEALING_TIERS.CRITICAL_NOTIFY,
+            severity: 'CRITICAL',
+            summaryAction: `${snap.chainId}: no inbound peers — NAT/firewall blocking?`,
+            summaryReason:
+                'Outbound peers > 0 but inbound = 0. BPoS requires inbound on P2P (20338) '
+                + 'and DPoS p2p (20339) ports to receive consensus messages. Forward those '
+                + 'ports on your router or enable UPnP. Missed votes accumulate silently.',
+            payload: {
+                action: 'nat-forward',
+                chainId: snap.chainId,
+                ports: [20338, 20339],
+            },
+        };
+    }
+
     return {
         ruleId: 'F18',
-        tier: HEALING_TIERS.CRITICAL_NOTIFY,
-        severity: 'CRITICAL',
-        summaryAction: `${snap.chainId}: no inbound peers — NAT/firewall blocking?`,
+        tier: HEALING_TIERS.OWNER_CONFIRMS,
+        severity: 'INFO',
+        summaryAction: `${snap.chainId}: no inbound peers (cloud firewall blocking)`,
         summaryReason:
-            'Outbound peers > 0 but inbound = 0. BPoS requires inbound on P2P (20338) '
-            + 'and DPoS p2p (20339) ports to receive consensus messages. Forward those '
-            + 'ports on your router or enable UPnP. Missed votes accumulate silently.',
+            'Your node has outbound peers but isn’t reachable from the network. This is '
+            + 'normal for a hosted VM with default firewall rules — you’re only learning '
+            + 'about chain state from peers you reached, not ones reaching to you. Fine '
+            + 'for a follower / observer node. If you ever register as a BPoS supernode, '
+            + 'you’ll need to open ports 20338 (P2P) and 20339 (DPoS p2p) on your hoster’s '
+            + 'firewall, otherwise you’ll silently miss votes.',
         payload: {
-            action: 'nat-forward',
+            action: 'nat-forward-info',
             chainId: snap.chainId,
             ports: [20338, 20339],
         },

@@ -446,8 +446,26 @@ class HealthChecker {
             && (now - this._hostConflictsCache.fetchedAt) < 5 * 60 * 1000) {
             return this._hostConflictsCache.value;
         }
+        // beta.3.27 — collect the PIDs ENM manages so the port-binding
+        // scanner can exempt them. Without this, port 20336 (rpc) and
+        // 20338 (p2p) were tagged as conflicts on every health tick
+        // while ela was running normally, because the scanner saw
+        // those ports held by our own ela process and didn't know to
+        // skip them.
+        const ourPids = new Set();
         try {
-            const result = await HostConflictScanner.scan({ logger: this.extensionHandle.log });
+            for (const chainInfo of this.listChains()) {
+                const st = this.processService.statusSync(chainInfo.chainId);
+                if (st && Number.isInteger(st.pid) && st.pid > 0) {
+                    ourPids.add(st.pid);
+                }
+            }
+        } catch (_) { /* defensive — empty set is the safe fallback */ }
+        try {
+            const result = await HostConflictScanner.scan({
+                logger: this.extensionHandle.log,
+                ourPids,
+            });
             this._hostConflictsCache = { value: result, fetchedAt: now };
             return result;
         } catch (err) {
