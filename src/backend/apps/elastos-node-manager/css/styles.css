@@ -299,8 +299,14 @@ body {
     flex: 0 0 auto;
 }
 
-/* Tab strip */
+/* Tab strip — horizontally scrollable on overflow with a right-edge
+   fade gradient so the operator sees there's more content past the
+   visible edge. The fade is applied via a sibling overlay because
+   pseudo-elements on overflow:auto containers don't follow the
+   scroll viewport. Position is relative to the parent .enm-topbar
+   so the overlay can sit at the right of the scroll area. */
 .enm-tabs {
+    position: relative;
     display: flex;
     align-items: center;
     gap: var(--sp-1);
@@ -308,8 +314,18 @@ body {
     min-width: 0;
     overflow-x: auto;
     scrollbar-width: none;
+    /* Mask the right edge with a transparent-to-opaque gradient so
+       any clipped tab fades out instead of being abruptly cut. The
+       mask-image is purely visual; tabs scroll past it and remain
+       interactive when scrolled into view. */
+    mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+    /* Touch swipe friction — keep tabs aligned to start so a partial
+       scroll reveals the next tab head, not a fragment. */
+    scroll-snap-type: x proximity;
 }
 .enm-tabs::-webkit-scrollbar { display: none; }
+.enm-tab { scroll-snap-align: start; }
 
 .enm-tab {
     position: relative;
@@ -661,8 +677,12 @@ body[data-app-size="compact"] .enm-app .enm-brand-env {
 
 .enm-app[data-app-size="compact"] .enm-tab,
 body[data-app-size="compact"] .enm-app .enm-tab {
-    padding: 14px var(--sp-2) 12px;
-    font-size: var(--fs-caption);
+    /* beta.3.23 — tighter padding so 4 tabs fit on an iPhone-SE
+       class viewport (320 CSS-px) without forcing the operator
+       to discover horizontal scroll. */
+    padding: 14px 6px 12px;
+    font-size: 11px;
+    letter-spacing: -0.01em;
 }
 .enm-app[data-app-size="compact"] .enm-tab.active::after,
 .enm-app[data-app-size="compact"] .enm-tab[aria-selected="true"]::after,
@@ -1941,38 +1961,64 @@ body[data-app-size="compact"] .enm-storage-disk-grid,
     line-height: 1.5;
 }
 
-/* beta.3.21 — Phase 4 healing visibility panels in the Settings →
-   Security section. Two pieces:
-   1. .enm-healing-rules-host         "what auto-runs" rule list
-   2. .enm-healing-activity-host      recent-activity table
-   Both panels are read-only — the operator can see what the toggle
-   controls and what it has done, but per directive #4 there are no
-   buttons to trigger / disable individual rules. */
+/* beta.3.23 — Phase 4 healing visibility, compact rewrite.
+   Operator feedback: the previous 3-stacked-groups + verbose-card
+   layout was too tall on mobile. New shape is two collapsible
+   <details> panels (.enm-healing-details) — each closed by default
+   so the section header stays compact; tap to expand. Inside the
+   rules panel: a single flat list with a tier-dot prefix + rule-id
+   badge + title on ONE line. Each row is itself a small <details>
+   so the description hides unless the operator wants it. */
+
+.enm-healing-details {
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-md);
+    background: var(--bg-elevated);
+    margin: var(--sp-2) 0;
+    overflow: hidden;
+}
+.enm-healing-details + .enm-healing-details {
+    margin-top: var(--sp-2);
+}
+.enm-healing-details > summary.enm-healing-details-summary {
+    list-style: none;
+    cursor: pointer;
+    padding: var(--sp-2) var(--sp-3);
+    font-size: var(--fs-body);
+    font-weight: var(--fw-semibold);
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    user-select: none;
+}
+.enm-healing-details > summary.enm-healing-details-summary::-webkit-details-marker { display: none; }
+.enm-healing-details > summary.enm-healing-details-summary::before {
+    content: "▸";
+    color: var(--text-tertiary);
+    font-size: 10px;
+    transition: transform var(--motion-fast) var(--ease-out);
+    display: inline-block;
+}
+.enm-healing-details[open] > summary.enm-healing-details-summary::before {
+    transform: rotate(90deg);
+}
+.enm-healing-details > summary.enm-healing-details-summary:hover {
+    background: var(--bg-surface);
+}
+.enm-healing-details > summary.enm-healing-details-summary:focus-visible {
+    outline: none;
+    box-shadow: inset 0 0 0 2px var(--accent);
+}
 .enm-healing-rules-host,
 .enm-healing-activity-host {
     width: 100%;
     min-width: 0;
+    padding: var(--sp-2) var(--sp-3) var(--sp-3);
+    border-top: 1px solid var(--border-subtle);
+    background: var(--bg-surface);
 }
-.enm-healing-rules-group {
-    margin-bottom: var(--sp-3);
-    padding: var(--sp-3);
-    background: var(--bg-elevated);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--r-md);
-}
-.enm-healing-rules-group:last-child { margin-bottom: 0; }
-.enm-healing-rules-group-auto    { border-left: 3px solid var(--success); }
-.enm-healing-rules-group-owner   { border-left: 3px solid var(--accent); }
-.enm-healing-rules-group-critical{ border-left: 3px solid var(--warning); }
-.enm-healing-rules-group-head {
-    font-size: 10px;
-    font-weight: var(--fw-semibold);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--text-tertiary);
-    margin-bottom: var(--sp-1);
-}
-.enm-healing-rules-group-help {
+.enm-healing-rules-help {
     font-size: var(--fs-caption);
     color: var(--text-secondary);
     line-height: 1.5;
@@ -1984,52 +2030,98 @@ body[data-app-size="compact"] .enm-storage-disk-grid,
     padding: 0;
     display: flex;
     flex-direction: column;
-    gap: var(--sp-2);
+    gap: 4px;
 }
 .enm-healing-rules-item {
-    padding: var(--sp-2) var(--sp-3);
-    background: var(--bg-surface);
+    background: var(--bg-elevated);
     border: 1px solid var(--border-subtle);
+    border-left: 3px solid var(--border-subtle);
     border-radius: var(--r-sm);
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
+    overflow: hidden;
 }
-.enm-healing-rules-item-disabled {
-    opacity: 0.55;
+.enm-healing-rules-item-auto     { border-left-color: var(--success); }
+.enm-healing-rules-item-owner    { border-left-color: var(--accent); }
+.enm-healing-rules-item-critical { border-left-color: var(--warning); }
+.enm-healing-rules-item-disabled { opacity: 0.55; }
+
+.enm-healing-rules-row {
+    /* per-row <details>; closed state is single line */
 }
-.enm-healing-rules-item-title {
-    font-size: var(--fs-body);
-    color: var(--text-primary);
-    font-weight: var(--fw-medium);
+.enm-healing-rules-row > summary.enm-healing-rules-row-summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 6px var(--sp-3);
     display: flex;
     align-items: center;
     gap: var(--sp-2);
-    flex-wrap: wrap;
+    user-select: none;
+    min-height: 24px;
 }
-.enm-healing-rules-item-id {
+.enm-healing-rules-row > summary::-webkit-details-marker { display: none; }
+.enm-healing-rules-row > summary:hover { background: var(--bg-surface); }
+.enm-healing-rules-row > summary:focus-visible {
+    outline: none;
+    box-shadow: inset 0 0 0 2px var(--accent);
+}
+.enm-healing-rules-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex: 0 0 auto;
+}
+.enm-healing-rules-dot-auto     { background: var(--success); }
+.enm-healing-rules-dot-owner    { background: var(--accent); }
+.enm-healing-rules-dot-critical { background: var(--warning); }
+.enm-healing-rules-id {
     font-family: var(--font-mono);
     font-size: 10px;
-    background: var(--bg-elevated);
-    color: var(--text-secondary);
-    padding: 1px 6px;
-    border-radius: var(--r-xs);
+    color: var(--text-tertiary);
     font-weight: var(--fw-semibold);
     letter-spacing: 0.04em;
+    flex: 0 0 auto;
+    min-width: 26px;
 }
-.enm-healing-rules-item-off {
-    font-size: 10px;
+.enm-healing-rules-title {
+    font-size: var(--fs-caption);
+    color: var(--text-primary);
+    font-weight: var(--fw-medium);
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.enm-healing-rules-off {
+    flex: 0 0 auto;
+    font-size: 9px;
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: var(--text-tertiary);
     padding: 1px 6px;
     border-radius: var(--r-xs);
-    border: 1px solid var(--border-subtle);
+    background: var(--bg-elevated);
 }
-.enm-healing-rules-item-desc {
+.enm-healing-rules-desc {
+    padding: 0 var(--sp-3) var(--sp-2) calc(var(--sp-3) + 18px);
     font-size: var(--fs-caption);
     color: var(--text-secondary);
     line-height: 1.5;
+}
+
+/* Narrow / compact responsive overrides for the rule rows. Title
+   stops being ellipsis-truncated so the operator can see the full
+   name (wraps instead). Padding tightens. */
+body[data-app-size="narrow"]  .enm-healing-rules-title,
+.enm-app[data-app-size="narrow"]  .enm-healing-rules-title,
+body[data-app-size="compact"] .enm-healing-rules-title,
+.enm-app[data-app-size="compact"] .enm-healing-rules-title {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+}
+body[data-app-size="compact"] .enm-healing-details > summary.enm-healing-details-summary,
+.enm-app[data-app-size="compact"] .enm-healing-details > summary.enm-healing-details-summary {
+    font-size: var(--fs-caption);
 }
 
 /* Activity table — small, scannable. Keep it minimal; the Audit tab

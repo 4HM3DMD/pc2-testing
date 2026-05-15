@@ -831,7 +831,12 @@
             control: this._security.autoSafe.el,
         }));
 
-        // beta.3.21 — Phase 4 visibility. Two panels under the toggle:
+        // beta.3.21 — Phase 4 visibility. Two collapsible panels under
+        // the toggle (beta.3.23 — operator feedback: the previous
+        // shape ate too much vertical space on mobile). Both use a
+        // <details> element so they're closed by default; the
+        // <summary> shows a count breakdown at a glance, and the
+        // operator can expand for the full list / table.
         //   1. Rules list (what auto-runs, what asks first, what only
         //      raises alerts). Populated by GET /healing/rules.
         //   2. Recent activity table (last ~30 rows from
@@ -839,26 +844,35 @@
         //      operator can't toggle individual rules from here. Per
         //      directive #4 ("no manual"), the section just shows
         //      what the toggle controls and what it has done.
+        var rulesDetails = document.createElement('details');
+        rulesDetails.className = 'enm-healing-details';
+        var rulesSummary = document.createElement('summary');
+        rulesSummary.className = 'enm-healing-details-summary';
+        rulesSummary.textContent = t('settings.healing_rules_heading') + ' · …';
+        rulesDetails.appendChild(rulesSummary);
         var rulesHost = document.createElement('div');
         rulesHost.className = 'enm-healing-rules-host';
         rulesHost.setAttribute('aria-live', 'polite');
         rulesHost.textContent = '…';
+        rulesDetails.appendChild(rulesHost);
+        sec.body.appendChild(rulesDetails);
         this._security.rulesHost = rulesHost;
-        sec.body.appendChild(makeFormRow({
-            label: t('settings.healing_rules_heading'),
-            help: t('settings.healing_rules_help'),
-            control: rulesHost,
-        }));
+        this._security.rulesSummary = rulesSummary;
+
+        var activityDetails = document.createElement('details');
+        activityDetails.className = 'enm-healing-details';
+        var activitySummary = document.createElement('summary');
+        activitySummary.className = 'enm-healing-details-summary';
+        activitySummary.textContent = t('settings.healing_activity_heading') + ' · …';
+        activityDetails.appendChild(activitySummary);
         var activityHost = document.createElement('div');
         activityHost.className = 'enm-healing-activity-host';
         activityHost.setAttribute('aria-live', 'polite');
         activityHost.textContent = '…';
+        activityDetails.appendChild(activityHost);
+        sec.body.appendChild(activityDetails);
         this._security.activityHost = activityHost;
-        sec.body.appendChild(makeFormRow({
-            label: t('settings.healing_activity_heading'),
-            help: t('settings.healing_activity_help'),
-            control: activityHost,
-        }));
+        this._security.activitySummary = activitySummary;
 
         // Row 3 — Critical alerts require ack (with a callout).
         var ackCallout = document.createElement('div');
@@ -931,7 +945,17 @@
             });
     };
 
-    /** @private */
+    /**
+     * beta.3.23 — flat compact rule list. Previous shape (3 stacked
+     * groups, each with a help paragraph + per-rule card with title +
+     * description) ate too much vertical space on mobile. New shape:
+     * a single list with a tier-color dot prefix per rule. Each row
+     * is a <details> so the operator can tap to see the description
+     * if they care; collapsed rows are one line each. Summary on the
+     * containing details element gives the count breakdown so the
+     * operator knows what's behind the collapse before they tap.
+     * @private
+     */
     SettingsTab.prototype._paintHealingRules = function (host, rules) {
         var t = root.enmTOrFallback;
         host.innerHTML = '';
@@ -939,86 +963,99 @@
             host.textContent = t('settings.healing_rules_load_failed');
             return;
         }
-        var groups = {
-            AUTOMATED_SAFE:  { rules: [], heading: t('settings.healing_rules_heading') },
-            OWNER_CONFIRMS:  { rules: [], heading: t('settings.healing_rules_owner_heading') },
-            CRITICAL_NOTIFY: { rules: [], heading: t('settings.healing_rules_critical_heading') },
-            NEVER_AUTOMATIC: { rules: [], heading: t('settings.healing_rules_critical_heading') },
-        };
+        // Count per tier for the summary line.
+        var counts = { auto: 0, owner: 0, critical: 0 };
         for (var i = 0; i < rules.length; i += 1) {
             var r = rules[i];
-            var bucket = groups[r.tier] || groups.OWNER_CONFIRMS;
-            bucket.rules.push(r);
+            if (r.tier === 'AUTOMATED_SAFE') { counts.auto += 1; }
+            else if (r.tier === 'OWNER_CONFIRMS') { counts.owner += 1; }
+            else { counts.critical += 1; } // CRITICAL_NOTIFY + NEVER_AUTOMATIC
         }
-        // Merge CRITICAL_NOTIFY + NEVER_AUTOMATIC under one visual
-        // group — both surface alerts without taking action.
-        var critRules = (groups.CRITICAL_NOTIFY.rules || [])
-            .concat(groups.NEVER_AUTOMATIC.rules || []);
-        var orderedGroups = [
-            { key: 'AUTOMATED_SAFE',  heading: t('settings.healing_rules_heading'),
-              rules: groups.AUTOMATED_SAFE.rules,
-              help: t('settings.healing_rules_help'),
-              tone: 'auto' },
-            { key: 'OWNER_CONFIRMS',  heading: t('settings.healing_rules_owner_heading'),
-              rules: groups.OWNER_CONFIRMS.rules,
-              help: t('settings.healing_rules_owner_help'),
-              tone: 'owner' },
-            { key: 'CRITICAL_NOTIFY', heading: t('settings.healing_rules_critical_heading'),
-              rules: critRules,
-              help: t('settings.healing_rules_critical_help'),
-              tone: 'critical' },
-        ];
-        for (var g = 0; g < orderedGroups.length; g += 1) {
-            var grp = orderedGroups[g];
-            if (!grp.rules.length) { continue; }
-            var groupEl = document.createElement('div');
-            groupEl.className = 'enm-healing-rules-group enm-healing-rules-group-' + grp.tone;
-            // Group heading is duplicated from the form-row label only
-            // when there are multiple groups, so the operator can tell
-            // them apart. The first group's heading is in the row
-            // label already; subsequent groups need their own.
-            if (g > 0) {
-                var head = document.createElement('div');
-                head.className = 'enm-healing-rules-group-head';
-                head.textContent = grp.heading;
-                groupEl.appendChild(head);
-            }
-            var help = document.createElement('div');
-            help.className = 'enm-healing-rules-group-help';
-            help.textContent = grp.help;
-            groupEl.appendChild(help);
-            var list = document.createElement('ul');
-            list.className = 'enm-healing-rules-list';
-            for (var j = 0; j < grp.rules.length; j += 1) {
-                var rule = grp.rules[j];
-                var li = document.createElement('li');
-                li.className = 'enm-healing-rules-item';
-                if (!rule.currentlyEnabled) {
-                    li.classList.add('enm-healing-rules-item-disabled');
-                }
-                var title = document.createElement('div');
-                title.className = 'enm-healing-rules-item-title';
-                var ruleIdBadge = document.createElement('span');
-                ruleIdBadge.className = 'enm-healing-rules-item-id';
-                ruleIdBadge.textContent = rule.ruleId;
-                title.appendChild(ruleIdBadge);
-                title.appendChild(document.createTextNode(' ' + (rule.title || '')));
-                if (!rule.currentlyEnabled) {
-                    var off = document.createElement('span');
-                    off.className = 'enm-healing-rules-item-off';
-                    off.textContent = 'off';
-                    title.appendChild(off);
-                }
-                li.appendChild(title);
-                var desc = document.createElement('div');
-                desc.className = 'enm-healing-rules-item-desc';
-                desc.textContent = rule.description || '';
-                li.appendChild(desc);
-                list.appendChild(li);
-            }
-            groupEl.appendChild(list);
-            host.appendChild(groupEl);
+        // Update the outer <details> summary to show the breakdown.
+        if (this._security && this._security.rulesSummary) {
+            this._security.rulesSummary.textContent =
+                t('settings.healing_rules_heading') + ' · '
+                + counts.auto + ' ' + t('settings.healing_tier_auto') + ' · '
+                + counts.owner + ' ' + t('settings.healing_tier_owner') + ' · '
+                + counts.critical + ' ' + t('settings.healing_tier_critical');
         }
+
+        // Short help paragraph above the list.
+        var help = document.createElement('div');
+        help.className = 'enm-healing-rules-help';
+        help.textContent = t('settings.healing_rules_help');
+        host.appendChild(help);
+
+        // Order: AUTO first (most operator-relevant), then OWNER, then
+        // CRITICAL/NEVER. Within each tier, original declaration order
+        // (F1, F2, F3, …) is preserved by the backend so we don't
+        // re-sort.
+        var orderedRules = rules.slice().sort(function (a, b) {
+            var tierOrder = { AUTOMATED_SAFE: 0, OWNER_CONFIRMS: 1, CRITICAL_NOTIFY: 2, NEVER_AUTOMATIC: 3 };
+            var ta = tierOrder[a.tier] != null ? tierOrder[a.tier] : 9;
+            var tb = tierOrder[b.tier] != null ? tierOrder[b.tier] : 9;
+            if (ta !== tb) { return ta - tb; }
+            // Same tier → preserve backend order via numeric suffix
+            // on ruleId (F1, F2, F10, F19 …).
+            var na = parseInt(String(a.ruleId).replace(/[^0-9]/g, ''), 10) || 0;
+            var nb = parseInt(String(b.ruleId).replace(/[^0-9]/g, ''), 10) || 0;
+            return na - nb;
+        });
+
+        var list = document.createElement('ul');
+        list.className = 'enm-healing-rules-list';
+        for (var j = 0; j < orderedRules.length; j += 1) {
+            var rule = orderedRules[j];
+            var tone = (rule.tier === 'AUTOMATED_SAFE') ? 'auto'
+                : (rule.tier === 'OWNER_CONFIRMS') ? 'owner'
+                : 'critical';
+            var li = document.createElement('li');
+            li.className = 'enm-healing-rules-item enm-healing-rules-item-' + tone;
+            if (!rule.currentlyEnabled) {
+                li.classList.add('enm-healing-rules-item-disabled');
+            }
+
+            // Each rule is itself a tiny <details> so the description
+            // is hidden by default — operator taps the title row to
+            // expand. The closed state is single-line.
+            var ruleDetails = document.createElement('details');
+            ruleDetails.className = 'enm-healing-rules-row';
+            var ruleSummary = document.createElement('summary');
+            ruleSummary.className = 'enm-healing-rules-row-summary';
+
+            var dot = document.createElement('span');
+            dot.className = 'enm-healing-rules-dot enm-healing-rules-dot-' + tone;
+            dot.setAttribute('aria-hidden', 'true');
+            ruleSummary.appendChild(dot);
+
+            var idBadge = document.createElement('span');
+            idBadge.className = 'enm-healing-rules-id';
+            idBadge.textContent = rule.ruleId;
+            ruleSummary.appendChild(idBadge);
+
+            var titleEl = document.createElement('span');
+            titleEl.className = 'enm-healing-rules-title';
+            titleEl.textContent = rule.title || rule.ruleId;
+            ruleSummary.appendChild(titleEl);
+
+            if (!rule.currentlyEnabled) {
+                var off = document.createElement('span');
+                off.className = 'enm-healing-rules-off';
+                off.textContent = 'off';
+                ruleSummary.appendChild(off);
+            }
+
+            ruleDetails.appendChild(ruleSummary);
+
+            var desc = document.createElement('div');
+            desc.className = 'enm-healing-rules-desc';
+            desc.textContent = rule.description || '';
+            ruleDetails.appendChild(desc);
+
+            li.appendChild(ruleDetails);
+            list.appendChild(li);
+        }
+        host.appendChild(list);
     };
 
     /**
@@ -1053,6 +1090,16 @@
     SettingsTab.prototype._paintHealingActivity = function (host, rows) {
         var t = root.enmTOrFallback;
         host.innerHTML = '';
+        // beta.3.23 — update the outer <details> summary so the
+        // operator sees the count without expanding. Empty state is
+        // explicit so they're not left wondering whether it failed
+        // to load.
+        var n = Array.isArray(rows) ? rows.length : 0;
+        if (this._security && this._security.activitySummary) {
+            var noun = (n === 1) ? 'event' : 'events';
+            this._security.activitySummary.textContent =
+                t('settings.healing_activity_heading') + ' · ' + n + ' ' + noun;
+        }
         if (!rows || rows.length === 0) {
             var empty = document.createElement('div');
             empty.className = 'enm-healing-activity-empty';
