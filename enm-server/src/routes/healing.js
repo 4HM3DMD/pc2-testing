@@ -25,6 +25,7 @@ const { ENM_LOG_PREFIX, errorBody, successBody } = require('../services/EnmConst
 const { limit } = require('../services/EnmRateLimit');
 const { requireOwner, readActorWallet } = require('../auth/OwnerCheckMiddleware');
 const ProposalStore = require('../services/EnmProposalStore');
+const HealthRules = require('../services/HealthRules');
 
 /**
  * @param {object} deps
@@ -52,6 +53,28 @@ function build(deps) {
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} GET /healing/suggestions: ${err.message}`);
             return res.status(500).json(errorBody('Failed to list suggestions.'));
+        }
+    });
+
+    // beta.3.21 — GET /rules.
+    //
+    // Phase 4 visibility. Returns the static rule registry: rule ID,
+    // tier, operator-facing title + description, default-enabled
+    // flag, and the currently-effective enabled flag (overrides
+    // apply). Used by the Settings → Security section's "What auto-
+    // runs" panel so the operator can see exactly what the healing
+    // toggle controls. Read-only, authenticated, no rate-limit
+    // sensitivity beyond the standard `read` bucket.
+    router.get('/rules', limit('read'), async (req, res) => {
+        if (!readActorWallet(req)) {
+            return res.status(401).json(errorBody('Authentication required.'));
+        }
+        try {
+            const rules = HealthRules.listRulesMetadata();
+            return res.json(successBody({ rules }));
+        } catch (err) {
+            extensionHandle.log.error(`${ENM_LOG_PREFIX} GET /healing/rules: ${err.message}`);
+            return res.status(500).json(errorBody('Failed to list rules.'));
         }
     });
 

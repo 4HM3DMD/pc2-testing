@@ -684,6 +684,41 @@
             storage_relative_minutes:   '{n} min ago',
             storage_relative_hours:     '{n} h ago',
             storage_relative_days:      '{n} d ago',
+
+            // beta.3.21 — Phase 4: Healing visibility. Sits inside the
+            // Security section, below the auto-execute-safe-healing
+            // toggle. Two panels:
+            //   1. "What auto-runs" — list of AUTOMATED_SAFE rules.
+            //   2. "Recent activity" — last N rows from GET /healing/history.
+            // No manual-trigger buttons (operator directive #4 —
+            // everything stays automatic).
+            healing_rules_heading:        'What auto-runs',
+            healing_rules_help:           'These are the healing actions ENM is allowed to run on its own when the toggle above is on. Anything not on this list waits for the operator to confirm.',
+            healing_rules_load_failed:    'Couldn’t load the rule list.',
+            healing_rules_owner_heading:  'What needs your confirmation',
+            healing_rules_owner_help:     'Detected issues in this group surface as proposals on the dashboard — they never run without you saying yes. Auto-execute does not apply here.',
+            healing_rules_critical_heading: 'Critical alerts (notify only)',
+            healing_rules_critical_help:    'These detectors raise an alert but never propose an automatic fix. Action is always operator-driven.',
+            healing_activity_heading:     'Recent healing activity',
+            healing_activity_help:        'What ENM did or proposed across the last 30 days. Loaded from the audit log; expires automatically per your retention setting.',
+            healing_activity_empty:       'No healing activity yet. The list will populate as ENM detects and acts on issues.',
+            healing_activity_load_failed: 'Couldn’t load activity. Retrying.',
+            healing_activity_col_when:    'When',
+            healing_activity_col_rule:    'Rule',
+            healing_activity_col_action:  'Action',
+            healing_activity_col_outcome: 'Outcome',
+            // Status badges on the activity rows.
+            healing_status_executed:      'executed',
+            healing_status_approved:      'approved',
+            healing_status_rejected:      'rejected',
+            healing_status_expired:       'expired',
+            healing_status_pending:       'pending',
+            healing_status_failed:        'failed',
+            // Tier badges (matches the chain’s tier names).
+            healing_tier_auto:            'auto',
+            healing_tier_owner:           'owner',
+            healing_tier_critical:        'critical',
+            healing_tier_manual:          'manual',
         },
 
         validator_card: {

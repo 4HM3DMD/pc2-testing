@@ -566,6 +566,49 @@ function detectF19(snap) {
  * code or hit the per-rule enable endpoint. The detection logic stays
  * intact — we only gate which detectors actually run.
  */
+/**
+ * beta.3.21 — static metadata for the Settings → Security "What
+ * auto-runs" panel. The detect functions construct tier + summary
+ * at runtime when they fire, but the UI needs to list the rules
+ * BEFORE any of them fires so the operator can see what the toggle
+ * actually controls. The tier here MUST match what each detect
+ * function returns; the description is operator-facing copy.
+ */
+const RULE_METADATA = Object.freeze({
+    F1:  { tier: 'AUTOMATED_SAFE',  title: 'Auto-restart on crash',
+           description: 'If the ela process exits unexpectedly (non-zero or SIGKILL) and the operator didn’t manually stop it, restart it.' },
+    F2:  { tier: 'AUTOMATED_SAFE',  title: 'Restart on stuck RPC',
+           description: 'If the chain’s RPC stops responding for over 2 minutes while the process is alive, restart it.' },
+    F3:  { tier: 'AUTOMATED_SAFE',  title: 'Restart on peer-zero',
+           description: 'If peer count stays at 0 longer than your alert threshold, restart so ela reseeds peers from DNS.' },
+    F4:  { tier: 'OWNER_CONFIRMS',  title: 'Restart on sync stall',
+           description: 'If block height hasn’t advanced for over your sync-stall threshold despite peers, ask the operator before restarting.' },
+    F5:  { tier: 'OWNER_CONFIRMS',  title: 'Disk space low',
+           description: 'Surface a notice when free disk drops below the warn / critical thresholds in the Alerts section. Action stays operator-driven (ENM never deletes operator data).' },
+    F6:  { tier: 'OWNER_CONFIRMS',  title: 'Process killed by OOM',
+           description: 'If ela was SIGKILL’d (Linux OOM), suggest raising the memory limit instead of just restarting blindly.' },
+    F7:  { tier: 'OWNER_CONFIRMS',  title: 'Binary version drift',
+           description: 'Notice when the binary on disk differs from the last-known-good version recorded at install.' },
+    F8:  { tier: 'OWNER_CONFIRMS',  title: 'Height regression',
+           description: 'If the chain rolls back blocks (rare; reorg or DB corruption), surface a notice for owner attention.' },
+    F9:  { tier: 'OWNER_CONFIRMS',  title: 'Config drift on disk',
+           description: 'Notice when ela.conf on disk has been edited outside of ENM (manual operator change).' },
+    F10: { tier: 'OWNER_CONFIRMS',  title: 'RPC password rotation reminder',
+           description: 'Periodic suggestion to rotate the RPC password.' },
+    F11: { tier: 'CRITICAL_NOTIFY', title: 'BPoS deposit drift',
+           description: 'On-chain locked deposit no longer matches the original 2,000 ELA stake — surface a critical alert.' },
+    F12: { tier: 'NEVER_AUTOMATIC', title: 'Producer inactiveRounds rising',
+           description: 'Producer is missing rounds and approaching the forced-inactive penalty at 1,440. Manual investigation only.' },
+    F13: { tier: 'OWNER_CONFIRMS',  title: 'Clock skew',
+           description: 'NTP skew above 2 s — close to ela’s 4.2 s tolerance for block validation. Suggest fixing systemd-timesyncd.' },
+    F16: { tier: 'CRITICAL_NOTIFY', title: 'Peer-zero fallback',
+           description: 'Promotes a peer-zero condition to a fallback peer suggestion when restart-by-restart hasn’t helped.' },
+    F18: { tier: 'CRITICAL_NOTIFY', title: 'BPoS no-inbound',
+           description: 'BPoS needs inbound peers to publish proposals. Surface a critical alert if there have been none for 5 minutes.' },
+    F19: { tier: 'CRITICAL_NOTIFY', title: 'Host port conflict',
+           description: 'Another process on this host is bound to a port ela needs (20338 / 20339 / 20336). Surface critical for operator triage.' },
+});
+
 const DEFAULT_ENABLED = Object.freeze({
     F1: true,   // process exited unexpectedly → auto-restart
     F2: false,  // RPC unreachable
@@ -604,6 +647,29 @@ function listRuleStates() {
 }
 
 /**
+ * beta.3.21 — full metadata + state per rule for the Settings →
+ * Security visibility panel. Combines RULE_METADATA (static
+ * description + tier) with DEFAULT_ENABLED + override state so the
+ * UI can render the operator-facing "what would auto-run" list in
+ * one round trip.
+ */
+function listRulesMetadata() {
+    const all = Object.keys(DEFAULT_ENABLED);
+    return all.map((ruleId) => {
+        const meta = RULE_METADATA[ruleId] || {};
+        return {
+            ruleId,
+            tier: meta.tier || 'OWNER_CONFIRMS',
+            title: meta.title || ruleId,
+            description: meta.description || '',
+            defaultEnabled: !!DEFAULT_ENABLED[ruleId],
+            currentlyEnabled: isRuleEnabled(ruleId),
+            overridden: _enabledOverrides.has(ruleId),
+        };
+    });
+}
+
+/**
  * Run F1-F19 in declaration order. Engine consumes the array as a queue —
  * higher-priority rules (F1 process-dead) appear first so a single tick
  * doesn't propose conflicting actions.
@@ -636,6 +702,8 @@ module.exports = {
     setRuleEnabled,
     isRuleEnabled,
     listRuleStates,
+    listRulesMetadata,
+    RULE_METADATA,
     // beta.3.19 — operator-tunable thresholds (Phase 2 Alerts section).
     setThresholds,
     getThresholds,

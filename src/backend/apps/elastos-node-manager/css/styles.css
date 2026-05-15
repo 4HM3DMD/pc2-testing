@@ -1941,6 +1941,190 @@ body[data-app-size="compact"] .enm-storage-disk-grid,
     line-height: 1.5;
 }
 
+/* beta.3.21 — Phase 4 healing visibility panels in the Settings →
+   Security section. Two pieces:
+   1. .enm-healing-rules-host         "what auto-runs" rule list
+   2. .enm-healing-activity-host      recent-activity table
+   Both panels are read-only — the operator can see what the toggle
+   controls and what it has done, but per directive #4 there are no
+   buttons to trigger / disable individual rules. */
+.enm-healing-rules-host,
+.enm-healing-activity-host {
+    width: 100%;
+    min-width: 0;
+}
+.enm-healing-rules-group {
+    margin-bottom: var(--sp-3);
+    padding: var(--sp-3);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-md);
+}
+.enm-healing-rules-group:last-child { margin-bottom: 0; }
+.enm-healing-rules-group-auto    { border-left: 3px solid var(--success); }
+.enm-healing-rules-group-owner   { border-left: 3px solid var(--accent); }
+.enm-healing-rules-group-critical{ border-left: 3px solid var(--warning); }
+.enm-healing-rules-group-head {
+    font-size: 10px;
+    font-weight: var(--fw-semibold);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-tertiary);
+    margin-bottom: var(--sp-1);
+}
+.enm-healing-rules-group-help {
+    font-size: var(--fs-caption);
+    color: var(--text-secondary);
+    line-height: 1.5;
+    margin-bottom: var(--sp-2);
+}
+.enm-healing-rules-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+}
+.enm-healing-rules-item {
+    padding: var(--sp-2) var(--sp-3);
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-sm);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.enm-healing-rules-item-disabled {
+    opacity: 0.55;
+}
+.enm-healing-rules-item-title {
+    font-size: var(--fs-body);
+    color: var(--text-primary);
+    font-weight: var(--fw-medium);
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    flex-wrap: wrap;
+}
+.enm-healing-rules-item-id {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+    padding: 1px 6px;
+    border-radius: var(--r-xs);
+    font-weight: var(--fw-semibold);
+    letter-spacing: 0.04em;
+}
+.enm-healing-rules-item-off {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-tertiary);
+    padding: 1px 6px;
+    border-radius: var(--r-xs);
+    border: 1px solid var(--border-subtle);
+}
+.enm-healing-rules-item-desc {
+    font-size: var(--fs-caption);
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+
+/* Activity table — small, scannable. Keep it minimal; the Audit tab
+   is the deep-dive surface. */
+.enm-healing-activity-empty {
+    padding: var(--sp-3) var(--sp-4);
+    background: var(--bg-elevated);
+    border: 1px dashed var(--border-subtle);
+    border-radius: var(--r-md);
+    font-size: var(--fs-caption);
+    color: var(--text-tertiary);
+    text-align: center;
+    line-height: 1.6;
+}
+.enm-healing-activity-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-md);
+    overflow: hidden;
+    table-layout: fixed;
+}
+.enm-healing-activity-table thead th {
+    background: var(--bg-surface);
+    color: var(--text-tertiary);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: var(--fw-semibold);
+    text-align: left;
+    padding: 6px var(--sp-3);
+    border-bottom: 1px solid var(--border-subtle);
+    white-space: nowrap;
+}
+.enm-healing-activity-table tbody tr {
+    border-bottom: 1px solid var(--border-subtle);
+}
+.enm-healing-activity-table tbody tr:last-child { border-bottom: none; }
+.enm-healing-activity-table tbody tr:hover { background: var(--bg-surface); }
+.enm-healing-activity-table td {
+    padding: 6px var(--sp-3);
+    font-size: var(--fs-caption);
+    color: var(--text-secondary);
+    vertical-align: top;
+    word-break: break-word;
+}
+.enm-healing-activity-when {
+    color: var(--text-tertiary);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    width: 70px;
+}
+.enm-healing-activity-rule {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-primary);
+    width: 50px;
+    white-space: nowrap;
+}
+.enm-healing-activity-outcome {
+    width: 90px;
+    white-space: nowrap;
+    text-align: right;
+}
+.enm-healing-activity-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 8px;
+    border-radius: var(--r-pill);
+    font-size: 10px;
+    font-weight: var(--fw-semibold);
+    text-transform: lowercase;
+    letter-spacing: 0.04em;
+    background: var(--bg-elevated);
+    color: var(--text-tertiary);
+}
+.enm-healing-activity-badge-executed { background: var(--success-bg); color: var(--success); }
+.enm-healing-activity-badge-approved { background: var(--accent-soft); color: var(--accent); }
+.enm-healing-activity-badge-rejected { background: var(--error-bg);    color: var(--error); }
+.enm-healing-activity-badge-failed   { background: var(--error-bg);    color: var(--error); }
+.enm-healing-activity-badge-expired  { background: var(--bg-elevated); color: var(--text-tertiary); }
+.enm-healing-activity-badge-pending  { background: var(--warning-bg);  color: var(--warning); }
+
+/* Narrow-mode: drop the When column padding + let action column flex.
+   On compact also collapse the table to a tighter font. */
+body[data-app-size="narrow"]  .enm-healing-activity-when,
+.enm-app[data-app-size="narrow"]  .enm-healing-activity-when {
+    width: 50px;
+}
+body[data-app-size="compact"] .enm-healing-activity-table,
+.enm-app[data-app-size="compact"] .enm-healing-activity-table {
+    font-size: 11px;
+}
+
 /* (3) Restart modal. Reuses the .enm-modal-scrim + .enm-modal-card
    chrome from phase-06 (already shipped by proposal-card + tools-
    update-card). This rule just sizes the restart variant — the

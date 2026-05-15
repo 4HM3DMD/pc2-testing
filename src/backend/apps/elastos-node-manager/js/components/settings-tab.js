@@ -346,6 +346,18 @@
         if (key === 'storage' && typeof this._refreshStorageUsage === 'function') {
             this._refreshStorageUsage();
         }
+        // beta.3.21 — same for Security: refresh the rules list +
+        // activity table on every section activation. Cheap (two
+        // small GETs) and operators expect "what just ran" to be
+        // current when they look.
+        if (key === 'security') {
+            if (typeof this._refreshHealingRules === 'function') {
+                this._refreshHealingRules();
+            }
+            if (typeof this._refreshHealingActivity === 'function') {
+                this._refreshHealingActivity();
+            }
+        }
     };
 
     // -----------------------------------------------------------------
@@ -819,6 +831,35 @@
             control: this._security.autoSafe.el,
         }));
 
+        // beta.3.21 — Phase 4 visibility. Two panels under the toggle:
+        //   1. Rules list (what auto-runs, what asks first, what only
+        //      raises alerts). Populated by GET /healing/rules.
+        //   2. Recent activity table (last ~30 rows from
+        //      GET /healing/history). Both panels are read-only —
+        //      operator can't toggle individual rules from here. Per
+        //      directive #4 ("no manual"), the section just shows
+        //      what the toggle controls and what it has done.
+        var rulesHost = document.createElement('div');
+        rulesHost.className = 'enm-healing-rules-host';
+        rulesHost.setAttribute('aria-live', 'polite');
+        rulesHost.textContent = '…';
+        this._security.rulesHost = rulesHost;
+        sec.body.appendChild(makeFormRow({
+            label: t('settings.healing_rules_heading'),
+            help: t('settings.healing_rules_help'),
+            control: rulesHost,
+        }));
+        var activityHost = document.createElement('div');
+        activityHost.className = 'enm-healing-activity-host';
+        activityHost.setAttribute('aria-live', 'polite');
+        activityHost.textContent = '…';
+        this._security.activityHost = activityHost;
+        sec.body.appendChild(makeFormRow({
+            label: t('settings.healing_activity_heading'),
+            help: t('settings.healing_activity_help'),
+            control: activityHost,
+        }));
+
         // Row 3 — Critical alerts require ack (with a callout).
         var ackCallout = document.createElement('div');
         ackCallout.className = 'enm-security-callout';
@@ -853,7 +894,239 @@
         sec.saveBtn.addEventListener('click', function () { self._saveSecurity(); });
         sec.revertBtn.addEventListener('click', function () { self.refresh('security'); });
 
+        // beta.3.21 — initial load for the two visibility panels.
+        // They also re-load whenever the operator opens the Security
+        // tab (hooked in _activate).
+        this._refreshHealingRules();
+        this._refreshHealingActivity();
+
         return sec.card;
+    };
+
+    /**
+     * beta.3.21 — fetch GET /healing/rules and render the grouped
+     * rule list under the auto-execute toggle. Three groups by tier:
+     * AUTOMATED_SAFE (what auto-runs), OWNER_CONFIRMS (what asks
+     * first), CRITICAL_NOTIFY + NEVER_AUTOMATIC (alert-only). Each
+     * row shows the rule's title + description + a small tier badge.
+     * @private
+     */
+    SettingsTab.prototype._refreshHealingRules = function () {
+        var self = this;
+        var t = root.enmTOrFallback;
+        if (!this._security || !this._security.rulesHost) { return; }
+        var host = this._security.rulesHost;
+        host.textContent = '…';
+        this.api.get('/healing/rules', { skipCache: true })
+            .then(function (env) {
+                if (self._destroyed) { return; }
+                var data = (env && env.result) || env || {};
+                var rules = Array.isArray(data.rules) ? data.rules : [];
+                self._paintHealingRules(host, rules);
+            })
+            .catch(function (err) {
+                if (self._destroyed) { return; }
+                if (err && err.status === 401) { return; }
+                host.textContent = t('settings.healing_rules_load_failed');
+            });
+    };
+
+    /** @private */
+    SettingsTab.prototype._paintHealingRules = function (host, rules) {
+        var t = root.enmTOrFallback;
+        host.innerHTML = '';
+        if (!rules || rules.length === 0) {
+            host.textContent = t('settings.healing_rules_load_failed');
+            return;
+        }
+        var groups = {
+            AUTOMATED_SAFE:  { rules: [], heading: t('settings.healing_rules_heading') },
+            OWNER_CONFIRMS:  { rules: [], heading: t('settings.healing_rules_owner_heading') },
+            CRITICAL_NOTIFY: { rules: [], heading: t('settings.healing_rules_critical_heading') },
+            NEVER_AUTOMATIC: { rules: [], heading: t('settings.healing_rules_critical_heading') },
+        };
+        for (var i = 0; i < rules.length; i += 1) {
+            var r = rules[i];
+            var bucket = groups[r.tier] || groups.OWNER_CONFIRMS;
+            bucket.rules.push(r);
+        }
+        // Merge CRITICAL_NOTIFY + NEVER_AUTOMATIC under one visual
+        // group — both surface alerts without taking action.
+        var critRules = (groups.CRITICAL_NOTIFY.rules || [])
+            .concat(groups.NEVER_AUTOMATIC.rules || []);
+        var orderedGroups = [
+            { key: 'AUTOMATED_SAFE',  heading: t('settings.healing_rules_heading'),
+              rules: groups.AUTOMATED_SAFE.rules,
+              help: t('settings.healing_rules_help'),
+              tone: 'auto' },
+            { key: 'OWNER_CONFIRMS',  heading: t('settings.healing_rules_owner_heading'),
+              rules: groups.OWNER_CONFIRMS.rules,
+              help: t('settings.healing_rules_owner_help'),
+              tone: 'owner' },
+            { key: 'CRITICAL_NOTIFY', heading: t('settings.healing_rules_critical_heading'),
+              rules: critRules,
+              help: t('settings.healing_rules_critical_help'),
+              tone: 'critical' },
+        ];
+        for (var g = 0; g < orderedGroups.length; g += 1) {
+            var grp = orderedGroups[g];
+            if (!grp.rules.length) { continue; }
+            var groupEl = document.createElement('div');
+            groupEl.className = 'enm-healing-rules-group enm-healing-rules-group-' + grp.tone;
+            // Group heading is duplicated from the form-row label only
+            // when there are multiple groups, so the operator can tell
+            // them apart. The first group's heading is in the row
+            // label already; subsequent groups need their own.
+            if (g > 0) {
+                var head = document.createElement('div');
+                head.className = 'enm-healing-rules-group-head';
+                head.textContent = grp.heading;
+                groupEl.appendChild(head);
+            }
+            var help = document.createElement('div');
+            help.className = 'enm-healing-rules-group-help';
+            help.textContent = grp.help;
+            groupEl.appendChild(help);
+            var list = document.createElement('ul');
+            list.className = 'enm-healing-rules-list';
+            for (var j = 0; j < grp.rules.length; j += 1) {
+                var rule = grp.rules[j];
+                var li = document.createElement('li');
+                li.className = 'enm-healing-rules-item';
+                if (!rule.currentlyEnabled) {
+                    li.classList.add('enm-healing-rules-item-disabled');
+                }
+                var title = document.createElement('div');
+                title.className = 'enm-healing-rules-item-title';
+                var ruleIdBadge = document.createElement('span');
+                ruleIdBadge.className = 'enm-healing-rules-item-id';
+                ruleIdBadge.textContent = rule.ruleId;
+                title.appendChild(ruleIdBadge);
+                title.appendChild(document.createTextNode(' ' + (rule.title || '')));
+                if (!rule.currentlyEnabled) {
+                    var off = document.createElement('span');
+                    off.className = 'enm-healing-rules-item-off';
+                    off.textContent = 'off';
+                    title.appendChild(off);
+                }
+                li.appendChild(title);
+                var desc = document.createElement('div');
+                desc.className = 'enm-healing-rules-item-desc';
+                desc.textContent = rule.description || '';
+                li.appendChild(desc);
+                list.appendChild(li);
+            }
+            groupEl.appendChild(list);
+            host.appendChild(groupEl);
+        }
+    };
+
+    /**
+     * beta.3.21 — fetch GET /healing/history and render the recent-
+     * activity table. Compact 4-column shape (When / Rule / Action /
+     * Outcome). Max ~30 rows; no pagination — the table is meant for
+     * a glance, not a deep dive. The full audit log lives in the
+     * Audit tab.
+     * @private
+     */
+    SettingsTab.prototype._refreshHealingActivity = function () {
+        var self = this;
+        var t = root.enmTOrFallback;
+        if (!this._security || !this._security.activityHost) { return; }
+        var host = this._security.activityHost;
+        host.textContent = '…';
+        this.api.get('/healing/history?limit=30', { skipCache: true })
+            .then(function (env) {
+                if (self._destroyed) { return; }
+                var data = (env && env.result) || env || {};
+                var rows = Array.isArray(data.proposals) ? data.proposals : [];
+                self._paintHealingActivity(host, rows);
+            })
+            .catch(function (err) {
+                if (self._destroyed) { return; }
+                if (err && err.status === 401) { return; }
+                host.textContent = t('settings.healing_activity_load_failed');
+            });
+    };
+
+    /** @private */
+    SettingsTab.prototype._paintHealingActivity = function (host, rows) {
+        var t = root.enmTOrFallback;
+        host.innerHTML = '';
+        if (!rows || rows.length === 0) {
+            var empty = document.createElement('div');
+            empty.className = 'enm-healing-activity-empty';
+            empty.textContent = t('settings.healing_activity_empty');
+            host.appendChild(empty);
+            return;
+        }
+        var table = document.createElement('table');
+        table.className = 'enm-healing-activity-table';
+        var thead = document.createElement('thead');
+        var headRow = document.createElement('tr');
+        ['healing_activity_col_when', 'healing_activity_col_rule',
+         'healing_activity_col_action', 'healing_activity_col_outcome'].forEach(function (k) {
+            var th = document.createElement('th');
+            th.textContent = t('settings.' + k);
+            headRow.appendChild(th);
+        });
+        thead.appendChild(headRow);
+        table.appendChild(thead);
+        var tbody = document.createElement('tbody');
+        for (var i = 0; i < rows.length; i += 1) {
+            var r = rows[i];
+            var tr = document.createElement('tr');
+            // When — use executedAt if present, else approvedAt, else proposedAt.
+            var when = r.executed_at || r.executedAt
+                    || r.approved_at || r.approvedAt
+                    || r.rejected_at || r.rejectedAt
+                    || r.proposed_at || r.proposedAt;
+            var whenTd = document.createElement('td');
+            whenTd.className = 'enm-healing-activity-when';
+            whenTd.textContent = when ? relativeTime(toMs(when)) : '—';
+            tr.appendChild(whenTd);
+            // Rule.
+            var ruleTd = document.createElement('td');
+            ruleTd.className = 'enm-healing-activity-rule';
+            ruleTd.textContent = r.rule_id || r.ruleId || '—';
+            tr.appendChild(ruleTd);
+            // Action.
+            var actionTd = document.createElement('td');
+            actionTd.className = 'enm-healing-activity-action';
+            actionTd.textContent = r.summary_action || r.summaryAction || '—';
+            tr.appendChild(actionTd);
+            // Outcome — coarse badge derived from status + outcome.
+            var outcomeTd = document.createElement('td');
+            outcomeTd.className = 'enm-healing-activity-outcome';
+            var status = (r.status || '').toLowerCase();
+            var outcomeKind = 'pending';
+            var outcomeLabel = t('settings.healing_status_pending');
+            if (r.executed_at || r.executedAt) {
+                outcomeKind = 'executed';
+                outcomeLabel = t('settings.healing_status_executed');
+                if (r.outcome === 'failed') {
+                    outcomeKind = 'failed';
+                    outcomeLabel = t('settings.healing_status_failed');
+                }
+            } else if (r.rejected_at || r.rejectedAt || status === 'rejected') {
+                outcomeKind = 'rejected';
+                outcomeLabel = t('settings.healing_status_rejected');
+            } else if (r.approved_at || r.approvedAt || status === 'approved') {
+                outcomeKind = 'approved';
+                outcomeLabel = t('settings.healing_status_approved');
+            } else if (status === 'expired') {
+                outcomeKind = 'expired';
+                outcomeLabel = t('settings.healing_status_expired');
+            }
+            var badge = document.createElement('span');
+            badge.className = 'enm-healing-activity-badge enm-healing-activity-badge-' + outcomeKind;
+            badge.textContent = outcomeLabel;
+            outcomeTd.appendChild(badge);
+            tr.appendChild(outcomeTd);
+            tbody.appendChild(tr);
+        }
+        table.appendChild(tbody);
+        host.appendChild(table);
     };
 
     // -----------------------------------------------------------------
@@ -2797,6 +3070,17 @@
         var d = Math.floor(deltaMs / 86_400_000);
         return t('settings.storage_relative_days', { n: d });
     }
+    // beta.3.21 — coerce mixed ISO/epoch values to epoch-ms. Backend
+    // serializes proposed_at / executed_at / etc. as either ISO strings
+    // (newer rows) or epoch-ms numbers (legacy rows from beta.3.7-).
+    // relativeTime() needs epoch-ms.
+    function toMs(v) {
+        if (v == null) { return 0; }
+        if (typeof v === 'number') { return Number.isFinite(v) ? v : 0; }
+        var parsed = Date.parse(String(v));
+        return Number.isFinite(parsed) ? parsed : 0;
+    }
+
     function escapeHtml(s) {
         return String(s == null ? '' : s)
             .replace(/&/g, '&amp;')
