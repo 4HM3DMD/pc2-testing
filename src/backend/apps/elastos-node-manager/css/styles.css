@@ -4815,41 +4815,54 @@ body[data-app-size="compact"] .enm-bpos-head-chip,
 /* ============================================================================
  * Settings → Danger Zone (beta.3.33)
  *
- * Distinct red-accented styling so an operator who lands on this tab
- * by accident knows immediately that what's here is destructive. Each
- * sub-card has its own kind (info / warn / critical) which adjusts
- * the accent intensity.
+ * Reuses ENM design tokens end-to-end so the section reads "on-brand"
+ * in dark mode (the default) while staying legible on a future light
+ * mode. Each sub-card picks an accent variant (info / warn / critical)
+ * which maps to the existing --accent / --warning / --danger tokens.
  * ============================================================================ */
 
-.enm-section-card.enm-section-danger {
-    border-color: var(--enm-danger-border, #f59e9e);
-}
+/* Outer section: same shape as every other Settings section, but the
+ * icon and title pick up a warning palette so the operator can't miss
+ * that they're on the destructive tab. */
 .enm-section-card.enm-section-danger .enm-section-card-icon {
-    color: #b91c1c;
+    background: var(--warning-bg);
+    color: var(--warning);
 }
-
-/* The danger-zone body stacks its sub-cards with a small gap; no
- * makeFormRow controls live here. */
 .enm-section-card.enm-section-danger .enm-section-card-body {
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: var(--sp-4);
+    /* Restore the section's vertical padding the body normally provides;
+     * we override the parent's default padding-bottom to give the last
+     * sub-card breathing room before the section border. */
+    padding-top: var(--sp-4);
+    padding-bottom: var(--sp-5);
 }
 
-/* A single destructive sub-card (Update / Resync / Remove / Nuke).
- * Default shape; kind-specific accents below. */
+/* One destructive sub-card. Mirrors the existing .enm-advanced-warning
+ * pattern (warning banner inside the Advanced section) so the visual
+ * grammar is consistent. */
 .enm-danger-card {
-    border: 1px solid var(--border-color, #d4d4d4);
-    border-radius: 8px;
-    padding: 14px 16px;
-    background: var(--bg-elevated, #fff);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-md);
+    padding: var(--sp-4);
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: var(--sp-3);
 }
-.enm-danger-info     { border-left: 4px solid #2563eb; }
-.enm-danger-warn     { border-left: 4px solid #d97706; }
-.enm-danger-critical { border-left: 4px solid #b91c1c; background: rgba(185, 28, 28, 0.04); }
+.enm-danger-card.enm-danger-info {
+    border-color: var(--border-subtle);
+}
+.enm-danger-card.enm-danger-warn {
+    border-color: var(--warning-soft);
+    background: linear-gradient(0deg, var(--bg-elevated), var(--bg-elevated)),
+                var(--warning-bg);
+}
+.enm-danger-card.enm-danger-critical {
+    border-color: var(--danger);
+    background: var(--error-bg);
+}
 
 .enm-danger-card-head {
     display: flex;
@@ -4857,105 +4870,120 @@ body[data-app-size="compact"] .enm-bpos-head-chip,
     gap: 4px;
 }
 .enm-danger-card-title {
-    font-weight: 600;
-    font-size: 14px;
-    color: var(--text-color, #111);
+    font-size: var(--fs-h3);
+    font-weight: var(--fw-semibold);
+    color: var(--text-primary);
+    line-height: 1.3;
+}
+.enm-danger-card.enm-danger-critical .enm-danger-card-title {
+    color: var(--danger);
 }
 .enm-danger-card-help {
-    font-size: 13px;
+    font-size: var(--fs-caption);
+    color: var(--text-secondary);
     line-height: 1.5;
-    color: var(--text-muted, #555);
 }
 
 .enm-danger-card-body {
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: var(--sp-3);
 }
+
 .enm-danger-card-foot {
     display: flex;
     align-items: center;
     justify-content: flex-end;
-    gap: 12px;
+    gap: var(--sp-3);
     flex-wrap: wrap;
+    padding-top: var(--sp-2);
+    border-top: 1px solid var(--border-subtle);
 }
 
-/* Version row inside the Update card. Two equal-width cells:
- * current vs latest. */
+/* Update card: two equal-width version cells (current / latest). */
 .enm-danger-versionrow {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 12px;
+    gap: var(--sp-3);
 }
 .enm-danger-versioncell {
-    border: 1px solid var(--border-color, #e5e5e5);
-    border-radius: 6px;
-    padding: 8px 12px;
-    background: var(--bg-base, #fafafa);
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-sm);
+    padding: var(--sp-2) var(--sp-3);
 }
 .enm-danger-versionlabel {
-    font-size: 11px;
+    font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    color: var(--text-muted, #777);
-    margin-bottom: 4px;
+    color: var(--text-tertiary);
+    font-weight: var(--fw-medium);
+    margin-bottom: 2px;
 }
 .enm-danger-versionval {
-    font-family: var(--font-mono, ui-monospace, monospace);
-    font-size: 13px;
-    color: var(--text-color, #111);
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono, var(--fs-caption));
+    color: var(--text-primary);
+    word-break: break-all;
 }
 
-/* Typed-confirmation row. Label sits above input on narrow screens,
- * inline on wide. */
+/* Typed-confirmation row. Label above input — never inline (the
+ * extra vertical space is worth the readability for a destructive
+ * gate). */
 .enm-danger-typedconfirm {
     display: flex;
     flex-direction: column;
     gap: 6px;
 }
 .enm-danger-typedconfirm-label {
-    font-size: 13px;
-    color: var(--text-color, #111);
-    font-weight: 500;
+    font-size: var(--fs-caption);
+    color: var(--text-secondary);
+    font-weight: var(--fw-medium);
 }
 .enm-danger-typedconfirm-input {
-    font-family: var(--font-mono, ui-monospace, monospace);
-    font-size: 14px;
-    padding: 8px 10px;
+    font-family: var(--font-mono);
+    font-size: var(--fs-body);
+    padding: var(--sp-2) var(--sp-3);
     width: 100%;
-    max-width: 340px;
-    border: 1px solid var(--border-color, #d4d4d4);
-    border-radius: 6px;
-    background: var(--bg-base, #fff);
-    color: var(--text-color, #111);
+    max-width: 360px;
+    background: var(--bg-input);
+    border: 1px solid var(--border-color);
+    border-radius: var(--r-sm);
+    color: var(--text-primary);
+    transition: border-color var(--motion-fast, 120ms) var(--ease-out, ease);
+}
+.enm-danger-typedconfirm-input::placeholder {
+    color: var(--text-tertiary);
 }
 .enm-danger-typedconfirm-input:focus {
-    outline: 2px solid #b91c1c;
-    outline-offset: 1px;
-    border-color: #b91c1c;
+    outline: none;
+    border-color: var(--danger);
+    box-shadow: 0 0 0 3px var(--error-bg);
 }
 
-/* The big "this deletes your keystore" callout inside the Nuke card. */
+/* Nuke-card heavy callout. Uses --danger palette but stays inside the
+ * card (no bleed). */
 .enm-danger-warning {
-    background: rgba(185, 28, 28, 0.08);
-    border: 1px solid rgba(185, 28, 28, 0.35);
-    color: #7f1d1d;
-    border-radius: 6px;
-    padding: 10px 12px;
-    font-size: 13px;
+    background: var(--error-bg);
+    border: 1px solid var(--danger);
+    color: var(--text-primary);
+    border-radius: var(--r-sm);
+    padding: var(--sp-3) var(--sp-3);
+    font-size: var(--fs-caption);
     line-height: 1.5;
 }
 
-/* Inline status under each action card. Reuses .ok/.err palette
- * from the broader status convention. */
+/* Inline status line under each action button. Matches the existing
+ * .enm-section-card-foot-status palette so success/error reads
+ * consistent with the rest of Settings. */
 .enm-danger-status {
     flex: 1 1 200px;
-    font-size: 12px;
-    color: var(--text-muted, #666);
     min-width: 0;
+    font-size: var(--fs-caption);
+    color: var(--text-tertiary);
 }
-.enm-danger-status.ok  { color: #047857; }
-.enm-danger-status.err { color: #b91c1c; }
+.enm-danger-status.ok  { color: var(--success); }
+.enm-danger-status.err { color: var(--danger); }
 
 /* Narrow viewport — stack the version cells, full-width inputs. */
 .enm-app[data-app-size="narrow"] .enm-danger-versionrow,
@@ -4965,4 +4993,12 @@ body[data-app-size="compact"] .enm-bpos-head-chip,
 .enm-app[data-app-size="narrow"] .enm-danger-typedconfirm-input,
 .enm-app[data-app-size="compact"] .enm-danger-typedconfirm-input {
     max-width: none;
+}
+.enm-app[data-app-size="narrow"] .enm-danger-card-foot,
+.enm-app[data-app-size="compact"] .enm-danger-card-foot {
+    justify-content: stretch;
+}
+.enm-app[data-app-size="narrow"] .enm-danger-card-foot .enm-btn,
+.enm-app[data-app-size="compact"] .enm-danger-card-foot .enm-btn {
+    flex: 1 1 100%;
 }
