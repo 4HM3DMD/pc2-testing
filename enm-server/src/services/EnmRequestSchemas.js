@@ -203,6 +203,44 @@ const maintenanceNukeBody = Joi.object({
     confirm: Joi.string().required(),  // route validates exact match
 }).unknown(false).label('POST /maintenance/nuke body');
 
+// beta.3.43 — Settings → Identity tab bodies.
+//
+// Passwords aren't bounded by length here beyond a sanity 256 cap —
+// the operator's existing wizard generates 32-char passwords, but a
+// human-chosen password may be shorter or longer. Routes themselves
+// reject empty strings.
+const identityUnlockBody = Joi.object({
+    password: Joi.string().min(1).max(256).required()
+        .messages({ 'any.required': 'Password is required.' }),
+}).unknown(false).label('POST /identity/unlock body');
+
+// POST /identity/reset — typed confirm + optional anti-snipe password.
+// Frontend gates "reset keystore" exactly (case-sensitive); we re-
+// check server-side as defence in depth.
+const identityResetBody = Joi.object({
+    confirm: Joi.string().required(),
+    // Optional — required only if cfg.global.antiSnipePasswordHash is
+    // set. The route does the conditional check.
+    antiSnipePassword: Joi.string().min(1).max(256).optional(),
+    // force=true allows reset even when the producer state is Active —
+    // operator must opt in explicitly via the slashing-risk modal.
+    force: Joi.boolean().optional(),
+}).unknown(false).label('POST /identity/reset body');
+
+// POST /identity/import — typed confirm + password. The file itself
+// arrives as raw bytes in the request body (Content-Type: application/
+// octet-stream); we don't multipart-parse because that pulls in
+// formidable/busboy and the keystore is just <10 KB. Password +
+// confirm come as headers so we don't have to mix concerns.
+//
+// The route reads body bytes directly via Buffer concat; this schema
+// validates the metadata header values only.
+const identityImportHeaders = Joi.object({
+    password: Joi.string().min(1).max(256).required(),
+    confirm: Joi.string().required(),
+    force: Joi.boolean().optional(),
+}).unknown(true).label('POST /identity/import headers');
+
 // POST /config/anti-snipe-password
 const antiSnipeBody = Joi.object({
     // `password` is the ONLY field. Empty string = explicit clear.
@@ -265,5 +303,8 @@ module.exports = {
     maintenanceChainResyncBody,
     maintenanceUninstallBody,
     maintenanceNukeBody,
+    identityUnlockBody,
+    identityResetBody,
+    identityImportHeaders,
     validateBody,
 };

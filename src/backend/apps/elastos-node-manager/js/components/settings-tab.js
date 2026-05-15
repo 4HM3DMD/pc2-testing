@@ -201,6 +201,12 @@
         //              "don't change unless you know why" banner).
         var nav = [
             { key: 'access',   glyph: '⇆', label: t('settings.heading_access'),   build: this._buildAccessSection },
+            // beta.3.43 — Identity tab. Sits between Access and
+            // Security since it's identity-related but contains
+            // destructive ops; placing it adjacent to Security so the
+            // operator's attention is already on "this is sensitive"
+            // when they land on it.
+            { key: 'identity', glyph: '◉', label: t('settings.heading_identity'), build: this._buildIdentitySection },
             { key: 'security', glyph: '◈', label: t('settings.heading_security'), build: this._buildSecuritySection },
             { key: 'network',  glyph: '⇄', label: t('settings.heading_network'),  build: this._buildNetworkSection },
             // beta.3.19 — Alerts (Phase 2). Drives when the dashboard
@@ -284,7 +290,7 @@
     // beta.3.19 — Alerts section inserted between Network and Storage
     // (it's about when-to-notify, sits between the access/network and
     // the data-at-rest sections).
-    var SECTION_KEYS = ['access', 'security', 'network', 'alerts', 'storage', 'advanced', 'danger'];
+    var SECTION_KEYS = ['access', 'identity', 'security', 'network', 'alerts', 'storage', 'advanced', 'danger'];
     SettingsTab.prototype._sectionRef = function (key) {
         return this['_' + key];
     };
@@ -368,6 +374,12 @@
         // "no update available" while one's actually published.
         if (key === 'danger' && typeof this._refreshUpdateInfo === 'function') {
             this._refreshUpdateInfo();
+        }
+        // beta.3.43 — Identity tab: refresh /identity (current cached
+        // pubkey + address, producer state, keystore-exists flag) so the
+        // operator sees current info on every entry.
+        if (key === 'identity' && typeof this._refreshIdentity === 'function') {
+            this._refreshIdentity();
         }
     };
 
@@ -1083,6 +1095,555 @@
             .replace(/</g, '&lt;')
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;');
+    }
+
+    // -----------------------------------------------------------------
+    // Section: Identity (beta.3.43 — NEW)
+    //
+    //   Cards in this section:
+    //     1. Current identity — pubkey + address + producer chip
+    //     2. Unlock — visible only when keystoreExists && !identity
+    //                 (operator entered password recovers cache)
+    //     3. Backup — one-click download of keystore.dat
+    //     4. Import — file picker + password + typed "import"
+    //                 (slashing-risk modal if producer locked-in)
+    //     5. Reset  — typed "reset keystore" + anti-snipe (if set)
+    //                 (slashing-risk modal if producer locked-in;
+    //                 password reveal inline after success)
+    //
+    //   Refreshes via GET /identity on every section activation. No
+    //   chain restart needed at the section level — destructive ops
+    //   handle chain stop/start themselves server-side.
+    // -----------------------------------------------------------------
+    SettingsTab.prototype._buildIdentitySection = function (t) {
+        var self = this;
+        var card = document.createElement('section');
+        card.className = 'enm-section-card enm-section-identity';
+
+        // Head — same shape as Danger Zone.
+        var head = document.createElement('div');
+        head.className = 'enm-section-card-head';
+        var icon = document.createElement('div');
+        icon.className = 'enm-section-card-icon';
+        icon.setAttribute('aria-hidden', 'true');
+        icon.textContent = '◉';
+        head.appendChild(icon);
+        var headbody = document.createElement('div');
+        headbody.className = 'enm-section-card-headbody';
+        var title = document.createElement('div');
+        title.className = 'enm-section-card-title';
+        title.id = 'enm-section-h-identity';
+        title.textContent = t('settings.heading_identity');
+        headbody.appendChild(title);
+        var help = document.createElement('div');
+        help.className = 'enm-section-card-help';
+        help.textContent = t('settings.identity_intro');
+        headbody.appendChild(help);
+        head.appendChild(headbody);
+        card.appendChild(head);
+
+        var body = document.createElement('div');
+        body.className = 'enm-section-card-body';
+        card.appendChild(body);
+
+        this._identity = {
+            card: card,
+            body: body,
+            setDirty: function () {},  // identity actions don't dirty-track
+        };
+
+        // ----- Card 1: Current identity (always shown) ----------------
+        var currentCard = _buildDangerCard({
+            kind: 'info',
+            title: t('settings.identity_current_title'),
+            help:  t('settings.identity_current_help'),
+        });
+        body.appendChild(currentCard.el);
+        var idGrid = document.createElement('div');
+        idGrid.className = 'enm-identity-grid';
+        idGrid.innerHTML =
+            '<div class="enm-identity-grid-row">'
+              + '<div class="enm-identity-grid-label">'
+                + _h(t('settings.identity_pubkey_label'))
+              + '</div>'
+              + '<code class="enm-identity-grid-value enm-mono" data-fill="pubkey">—</code>'
+              + '<span class="enm-identity-grid-copy" data-copy="pubkey"></span>'
+            + '</div>'
+            + '<div class="enm-identity-grid-row">'
+              + '<div class="enm-identity-grid-label">'
+                + _h(t('settings.identity_address_label'))
+              + '</div>'
+              + '<code class="enm-identity-grid-value enm-mono" data-fill="address">—</code>'
+              + '<span class="enm-identity-grid-copy" data-copy="address"></span>'
+            + '</div>'
+            + '<div class="enm-identity-grid-row">'
+              + '<div class="enm-identity-grid-label">'
+                + _h(t('settings.identity_producer_label'))
+              + '</div>'
+              + '<span class="enm-identity-grid-value" data-fill="producer">—</span>'
+            + '</div>';
+        currentCard.body.appendChild(idGrid);
+        this._identity.currentCard = currentCard.el;
+        this._identity.pubkeyEl = idGrid.querySelector('[data-fill="pubkey"]');
+        this._identity.addressEl = idGrid.querySelector('[data-fill="address"]');
+        this._identity.producerEl = idGrid.querySelector('[data-fill="producer"]');
+        this._identity.pubkeyCopySlot = idGrid.querySelector('[data-copy="pubkey"]');
+        this._identity.addressCopySlot = idGrid.querySelector('[data-copy="address"]');
+
+        // ----- Card 2: Unlock (shown when cache missing) --------------
+        var unlockCard = _buildDangerCard({
+            kind: 'warn',
+            title: t('settings.identity_unlock_title'),
+            help:  t('settings.identity_unlock_help'),
+        });
+        unlockCard.el.hidden = true;
+        body.appendChild(unlockCard.el);
+        var unlockInput = document.createElement('input');
+        unlockInput.type = 'password';
+        unlockInput.className = 'enm-input enm-danger-typedconfirm-input';
+        unlockInput.autocomplete = 'current-password';
+        unlockInput.placeholder = t('settings.identity_unlock_placeholder');
+        unlockCard.body.appendChild(_wrapLabel(t('settings.identity_unlock_label'), unlockInput));
+        var unlockBtn = document.createElement('button');
+        unlockBtn.type = 'button';
+        unlockBtn.className = 'enm-btn enm-btn-primary';
+        unlockBtn.textContent = t('settings.identity_unlock_btn');
+        var unlockStatus = _statusEl();
+        unlockCard.foot.appendChild(unlockStatus);
+        unlockCard.foot.appendChild(unlockBtn);
+        unlockBtn.addEventListener('click', function () {
+            self._doIdentityUnlock(unlockInput, unlockStatus);
+        });
+        this._identity.unlockCard = unlockCard.el;
+        this._identity.unlockInput = unlockInput;
+        this._identity.unlockBtn = unlockBtn;
+        this._identity.unlockStatus = unlockStatus;
+
+        // ----- Card 3: Backup (always shown) --------------------------
+        var backupCard = _buildDangerCard({
+            kind: 'info',
+            title: t('settings.identity_backup_title'),
+            help:  t('settings.identity_backup_help'),
+        });
+        body.appendChild(backupCard.el);
+        var backupBtn = document.createElement('button');
+        backupBtn.type = 'button';
+        backupBtn.className = 'enm-btn enm-btn-primary';
+        backupBtn.textContent = t('settings.identity_backup_btn');
+        var backupStatus = _statusEl();
+        backupCard.foot.appendChild(backupStatus);
+        backupCard.foot.appendChild(backupBtn);
+        backupBtn.addEventListener('click', function () {
+            self._doIdentityBackup(backupBtn, backupStatus);
+        });
+        this._identity.backupCard = backupCard.el;
+        this._identity.backupBtn = backupBtn;
+        this._identity.backupStatus = backupStatus;
+
+        // ----- Card 4: Import -----------------------------------------
+        var importCard = _buildDangerCard({
+            kind: 'warn',
+            title: t('settings.identity_import_title'),
+            help:  t('settings.identity_import_help'),
+        });
+        body.appendChild(importCard.el);
+        var importWarn = document.createElement('div');
+        importWarn.className = 'enm-danger-warning';
+        importWarn.hidden = true;
+        importWarn.textContent = t('settings.identity_slashing_warning');
+        importCard.body.appendChild(importWarn);
+        var importFile = document.createElement('input');
+        importFile.type = 'file';
+        importFile.accept = '.dat,application/octet-stream';
+        importFile.className = 'enm-input';
+        importCard.body.appendChild(_wrapLabel(t('settings.identity_import_file_label'), importFile));
+        var importPassword = document.createElement('input');
+        importPassword.type = 'password';
+        importPassword.className = 'enm-input enm-danger-typedconfirm-input';
+        importPassword.autocomplete = 'current-password';
+        importPassword.placeholder = t('settings.identity_import_password_placeholder');
+        importCard.body.appendChild(_wrapLabel(t('settings.identity_import_password_label'), importPassword));
+        var importConfirm = _buildTypedConfirm({
+            label: t('settings.identity_import_confirm_label'),
+            placeholder: 'import',
+            expected: 'import',
+            caseSensitive: false,
+        });
+        importCard.body.appendChild(importConfirm.el);
+        var importBtn = document.createElement('button');
+        importBtn.type = 'button';
+        importBtn.className = 'enm-btn enm-btn-danger';
+        importBtn.textContent = t('settings.identity_import_btn');
+        importBtn.disabled = true;
+        var importStatus = _statusEl();
+        importCard.foot.appendChild(importStatus);
+        importCard.foot.appendChild(importBtn);
+        function refreshImportBtn() {
+            importBtn.disabled = !(importFile.files && importFile.files.length > 0
+                && importPassword.value.length > 0
+                && importConfirm.matches());
+        }
+        importFile.addEventListener('change', refreshImportBtn);
+        importPassword.addEventListener('input', refreshImportBtn);
+        importConfirm.input.addEventListener('input', refreshImportBtn);
+        importBtn.addEventListener('click', function () {
+            self._doIdentityImport(importFile, importPassword, importBtn, importStatus, importWarn);
+        });
+        this._identity.importCard = importCard.el;
+        this._identity.importFile = importFile;
+        this._identity.importPassword = importPassword;
+        this._identity.importConfirm = importConfirm;
+        this._identity.importBtn = importBtn;
+        this._identity.importStatus = importStatus;
+        this._identity.importWarn = importWarn;
+
+        // ----- Card 5: Reset -----------------------------------------
+        var resetCard = _buildDangerCard({
+            kind: 'critical',
+            title: t('settings.identity_reset_title'),
+            help:  t('settings.identity_reset_help'),
+        });
+        body.appendChild(resetCard.el);
+        var resetWarn = document.createElement('div');
+        resetWarn.className = 'enm-danger-warning';
+        resetWarn.hidden = true;
+        resetWarn.textContent = t('settings.identity_slashing_warning');
+        resetCard.body.appendChild(resetWarn);
+        var resetConfirm = _buildTypedConfirm({
+            label: t('settings.identity_reset_confirm_label'),
+            placeholder: 'reset keystore',
+            expected: 'reset keystore',
+            caseSensitive: false,
+        });
+        resetCard.body.appendChild(resetConfirm.el);
+        var resetBtn = document.createElement('button');
+        resetBtn.type = 'button';
+        resetBtn.className = 'enm-btn enm-btn-danger';
+        resetBtn.textContent = t('settings.identity_reset_btn');
+        resetBtn.disabled = true;
+        var resetStatus = _statusEl();
+        resetCard.foot.appendChild(resetStatus);
+        resetCard.foot.appendChild(resetBtn);
+        resetConfirm.input.addEventListener('input', function () {
+            resetBtn.disabled = !resetConfirm.matches();
+        });
+        resetBtn.addEventListener('click', function () {
+            self._doIdentityReset(resetBtn, resetStatus, resetWarn, resetConfirm);
+        });
+        // Reveal area for the new password — populated inline on success.
+        var resetReveal = document.createElement('div');
+        resetReveal.className = 'enm-identity-reset-reveal';
+        resetReveal.hidden = true;
+        resetCard.body.appendChild(resetReveal);
+        this._identity.resetCard = resetCard.el;
+        this._identity.resetConfirm = resetConfirm;
+        this._identity.resetBtn = resetBtn;
+        this._identity.resetStatus = resetStatus;
+        this._identity.resetWarn = resetWarn;
+        this._identity.resetReveal = resetReveal;
+
+        return card;
+    };
+
+    /**
+     * Refresh /identity state. Populates the Current identity grid;
+     * shows/hides the Unlock card based on identityCacheMissing;
+     * shows/hides the slashing-risk warning on Import + Reset based
+     * on producer state.
+     */
+    SettingsTab.prototype._refreshIdentity = function () {
+        var self = this;
+        var t = root.enmTOrFallback;
+        if (!self._identity) { return; }
+        self.api.get('/identity', { skipCache: true })
+            .then(function (resp) {
+                if (self._destroyed) { return; }
+                var r = (resp && resp.result) || resp || {};
+                self._identityState = r;
+                var id = r.identity || {};
+                self._identity.pubkeyEl.textContent = id.publicKey || '—';
+                self._identity.addressEl.textContent = id.address || '—';
+                // Producer chip: "Active · Rank #N" / "Pending" / "Inactive" /
+                // "Not registered yet" if no record.
+                var p = r.producer || null;
+                var prodText = (p && p.state)
+                    ? (p.rank != null ? (p.state + ' · Rank #' + p.rank) : p.state)
+                    : t('settings.identity_producer_unregistered');
+                self._identity.producerEl.textContent = prodText;
+                // Unlock card is visible only when keystore exists but
+                // we don't have its identity cached yet.
+                self._identity.unlockCard.hidden = !r.identityCacheMissing;
+                // Slashing-risk callouts on destructive cards.
+                var lockedIn = !!(p && (p.state === 'Active' || p.state === 'Pending'));
+                self._identity.importWarn.hidden = !lockedIn;
+                self._identity.resetWarn.hidden = !lockedIn;
+                // Wire copy buttons (idempotent).
+                self._wireIdentityCopyButtons(id);
+            })
+            .catch(function (err) {
+                if (self._destroyed) { return; }
+                if (err && err.status === 401) { return; }
+                self._identity.pubkeyEl.textContent = '—';
+                self._identity.addressEl.textContent = '—';
+                self._identity.producerEl.textContent =
+                    (err && err.message) || 'Identity unavailable.';
+            });
+    };
+
+    /** Mount copy buttons for the current identity rows. */
+    SettingsTab.prototype._wireIdentityCopyButtons = function (id) {
+        var slots = [
+            { slot: this._identity.pubkeyCopySlot, value: id.publicKey, key: 'pubkey' },
+            { slot: this._identity.addressCopySlot, value: id.address, key: 'address' },
+        ];
+        var t = root.enmTOrFallback;
+        for (var i = 0; i < slots.length; i++) {
+            (function (s) {
+                if (!s.slot) { return; }
+                // Clear any prior content (re-renders on refresh).
+                while (s.slot.firstChild) { s.slot.removeChild(s.slot.firstChild); }
+                if (!s.value) { return; }
+                if (typeof root.enmCopyButton === 'function') {
+                    var btn = root.enmCopyButton({
+                        value: s.value,
+                        label: 'Copy',
+                        copiedLabel: 'Copied!',
+                        ariaLabel: 'Copy ' + s.key,
+                        notifications: null,
+                        className: 'enm-identity-copy-btn',
+                    });
+                    s.slot.appendChild(btn);
+                }
+            })(slots[i]);
+        }
+    };
+
+    /** POST /identity/unlock with the operator's password. */
+    SettingsTab.prototype._doIdentityUnlock = function (input, status) {
+        var self = this;
+        var t = root.enmTOrFallback;
+        var pw = input.value;
+        if (!pw) {
+            status.textContent = t('settings.identity_password_required');
+            status.classList.remove('ok');
+            status.classList.add('err');
+            return;
+        }
+        status.textContent = t('common.saving') || 'Saving…';
+        status.classList.remove('ok', 'err');
+        return root.enmRunOnce(this._identity.unlockBtn,
+            t('common.saving') || 'Saving…',
+            function () {
+                return self.api.post('/identity/unlock', { password: pw })
+                    .then(function () {
+                        if (self._destroyed) { return; }
+                        input.value = '';
+                        status.textContent = t('settings.identity_unlock_ok');
+                        status.classList.add('ok');
+                        self._refreshIdentity();
+                    })
+                    .catch(function (err) {
+                        if (self._destroyed) { return; }
+                        status.textContent = (err && err.message) || 'Unlock failed.';
+                        status.classList.add('err');
+                    });
+            });
+    };
+
+    /** GET /identity/backup as a blob and trigger a download. */
+    SettingsTab.prototype._doIdentityBackup = function (btn, status) {
+        var self = this;
+        var t = root.enmTOrFallback;
+        status.textContent = t('settings.identity_backup_running');
+        status.classList.remove('ok', 'err');
+        return root.enmRunOnce(btn,
+            t('settings.identity_backup_running'),
+            function () {
+                // self.api.get returns parsed JSON — for a binary file
+                // we use fetch directly, with the same Bearer header
+                // the API client builds.
+                var base = (self.api && self.api.base) || '';
+                var token = self.api && self.api.token;
+                var headers = { 'Accept': 'application/octet-stream' };
+                if (token) { headers['Authorization'] = 'Bearer ' + token; }
+                return fetch(base + '/identity/backup', { headers: headers })
+                    .then(function (r) {
+                        if (!r.ok) {
+                            return r.text().then(function (txt) {
+                                throw new Error(txt || ('HTTP ' + r.status));
+                            });
+                        }
+                        var dispo = r.headers.get('Content-Disposition') || '';
+                        var m = /filename="([^"]+)"/.exec(dispo);
+                        var name = m ? m[1] : 'keystore-backup.dat';
+                        return r.blob().then(function (blob) { return { blob: blob, name: name }; });
+                    })
+                    .then(function (d) {
+                        var url = URL.createObjectURL(d.blob);
+                        var a = document.createElement('a');
+                        a.href = url; a.download = d.name;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+                        status.textContent = t('settings.identity_backup_ok')
+                            .replace('{name}', d.name);
+                        status.classList.add('ok');
+                    })
+                    .catch(function (err) {
+                        status.textContent = (err && err.message) || 'Backup failed.';
+                        status.classList.add('err');
+                    });
+            });
+    };
+
+    /** POST /identity/import with the picked file + password + force. */
+    SettingsTab.prototype._doIdentityImport = function (fileInput, pwInput, btn, status, warnEl) {
+        var self = this;
+        var t = root.enmTOrFallback;
+        var file = fileInput.files && fileInput.files[0];
+        if (!file) {
+            status.textContent = t('settings.identity_import_no_file');
+            status.classList.remove('ok'); status.classList.add('err');
+            return;
+        }
+        if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
+            if (!window.confirm(t('settings.identity_import_confirm_dialog'))) { return; }
+        }
+        status.textContent = t('settings.identity_import_running');
+        status.classList.remove('ok', 'err');
+        // Whether to force = whether the slashing-risk warning is visible
+        // (operator is acknowledging by clicking even after the warning).
+        var force = !warnEl.hidden;
+        return root.enmRunOnce(btn,
+            t('settings.identity_import_running'),
+            function () {
+                return file.arrayBuffer().then(function (ab) {
+                    var base = (self.api && self.api.base) || '';
+                    var token = self.api && self.api.token;
+                    var headers = {
+                        'Content-Type': 'application/octet-stream',
+                        'X-Keystore-Password': pwInput.value,
+                        'X-Keystore-Confirm': 'import',
+                    };
+                    if (force) { headers['X-Keystore-Force'] = 'true'; }
+                    if (token) { headers['Authorization'] = 'Bearer ' + token; }
+                    return fetch(base + '/identity/import', {
+                        method: 'POST',
+                        headers: headers,
+                        body: ab,
+                    }).then(function (r) {
+                        return r.json().then(function (j) { return { ok: r.ok, status: r.status, body: j }; });
+                    });
+                }).then(function (res) {
+                    if (self._destroyed) { return; }
+                    if (!res.ok) {
+                        var msg = (res.body && res.body.error) || ('HTTP ' + res.status);
+                        status.textContent = msg;
+                        status.classList.add('err');
+                        return;
+                    }
+                    pwInput.value = '';
+                    fileInput.value = '';
+                    status.textContent = t('settings.identity_import_ok');
+                    status.classList.add('ok');
+                    self._refreshIdentity();
+                }).catch(function (err) {
+                    if (self._destroyed) { return; }
+                    status.textContent = (err && err.message) || 'Import failed.';
+                    status.classList.add('err');
+                });
+            });
+    };
+
+    /** POST /identity/reset with the typed confirm + optional anti-snipe. */
+    SettingsTab.prototype._doIdentityReset = function (btn, status, warnEl, confirmObj) {
+        var self = this;
+        var t = root.enmTOrFallback;
+        if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
+            if (!window.confirm(t('settings.identity_reset_confirm_dialog'))) { return; }
+        }
+        status.textContent = t('settings.identity_reset_running');
+        status.classList.remove('ok', 'err');
+        var force = !warnEl.hidden;
+        var body = { confirm: confirmObj.input.value };
+        if (force) { body.force = true; }
+        return root.enmRunOnce(btn,
+            t('settings.identity_reset_running'),
+            function () {
+                return self.api.post('/identity/reset', body)
+                    .then(function (resp) {
+                        if (self._destroyed) { return; }
+                        var r = (resp && resp.result) || resp || {};
+                        // Inline password reveal — same pattern as Card C.
+                        self._identity.resetReveal.hidden = false;
+                        self._identity.resetReveal.innerHTML =
+                            '<div class="enm-password-warning" role="alert">'
+                              + '<span class="enm-password-warning-icon" aria-hidden="true">⚠</span>'
+                              + '<span class="enm-password-warning-body">'
+                                + _h(t('settings.identity_reset_password_warning'))
+                              + '</span>'
+                            + '</div>'
+                            + '<div class="enm-password-reveal">'
+                              + '<div class="enm-password-label">'
+                                + _h(t('friendly.setup.card_c.password_label'))
+                              + '</div>'
+                              + '<code class="enm-password-value">'
+                                + _h(r.generatedPassword || '')
+                              + '</code>'
+                              + '<div class="enm-password-actions">'
+                                + '<span class="enm-password-copy-slot"></span>'
+                              + '</div>'
+                            + '</div>';
+                        // Wire copy button on the password.
+                        var pwEl = self._identity.resetReveal.querySelector('.enm-password-value');
+                        if (typeof root.enmCopyButton === 'function' && r.generatedPassword) {
+                            var copyBtn = root.enmCopyButton({
+                                value: r.generatedPassword,
+                                label: t('friendly.setup.card_c.cta_copy') || 'Copy',
+                                copiedLabel: t('friendly.setup.card_c.cta_copied') || 'Copied!',
+                                ariaLabel: 'Copy new password',
+                                resetMs: 1500,
+                                notifications: self.notifications,
+                                getDisplayEl: function () { return pwEl; },
+                            });
+                            copyBtn.classList.add('enm-password-copy');
+                            var slot = self._identity.resetReveal.querySelector('.enm-password-copy-slot');
+                            if (slot && slot.parentNode) {
+                                slot.parentNode.replaceChild(copyBtn, slot);
+                            }
+                        }
+                        status.textContent = t('settings.identity_reset_ok');
+                        status.classList.add('ok');
+                        confirmObj.input.value = '';
+                        btn.disabled = true;
+                        self._refreshIdentity();
+                    })
+                    .catch(function (err) {
+                        if (self._destroyed) { return; }
+                        status.textContent = (err && err.message) || 'Reset failed.';
+                        status.classList.add('err');
+                    });
+            });
+    };
+
+    /** Build a labelled control row used inside Identity sub-cards. */
+    function _wrapLabel(labelText, control) {
+        var row = document.createElement('div');
+        row.className = 'enm-identity-row';
+        var lbl = document.createElement('label');
+        lbl.className = 'enm-identity-row-label-form';
+        lbl.textContent = labelText;
+        row.appendChild(lbl);
+        row.appendChild(control);
+        return row;
+    }
+    function _statusEl() {
+        var el = document.createElement('div');
+        el.className = 'enm-danger-status';
+        el.setAttribute('role', 'status');
+        el.setAttribute('aria-live', 'polite');
+        return el;
     }
 
     // -----------------------------------------------------------------

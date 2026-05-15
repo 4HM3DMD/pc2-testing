@@ -565,6 +565,7 @@
             // matters to a BPoS supernode operator, not just WHAT it
             // writes. See project_settings_phase_plan in memory.
             heading_access:   'Access',
+            heading_identity: 'Identity',
             heading_security: 'Security',
             heading_storage:  'Storage',
             // Per-section one-line intros rendered as help under the heading.
@@ -774,6 +775,54 @@
             danger_nuke_confirm_dialog:     'This will DELETE your keystore. There is no undo. Continue?',
             danger_nuke_in_progress:        'Wiping everything in a few seconds…',
             danger_nuke_queued:             '✓ Nuclear wipe queued. ENM and all its data will be removed shortly.',
+
+            // beta.3.43 — Identity tab. Five cards: current identity
+            // view, unlock-and-cache, backup, import, reset.
+            identity_intro:                 'Your node’s consensus-signing identity (the keystore) and the on-chain producer it’s bound to. Reset, restore, or back up here.',
+
+            identity_current_title:         'Current identity',
+            identity_current_help:          'What this node signs DPoS messages with. Share the public key with Essentials; never share the keystore.',
+            identity_pubkey_label:          'Node public key',
+            identity_address_label:         'Node signing address',
+            identity_producer_label:        'On-chain status',
+            identity_producer_unregistered: 'Not registered yet',
+
+            identity_unlock_title:          'Unlock & cache identity',
+            identity_unlock_help:           'A keystore exists on disk but we can’t see its public key without the password. Enter the password you saved during setup to refresh the cached identity — the password is not stored.',
+            identity_unlock_label:          'Keystore password',
+            identity_unlock_placeholder:    'enter password',
+            identity_unlock_btn:            'Unlock',
+            identity_unlock_ok:             '✓ Identity cache refreshed.',
+
+            identity_backup_title:          'Backup keystore',
+            identity_backup_help:           'Download the encrypted keystore.dat. Keep this off the server with the password you saved — together they’re the only way to recover this producer if the server dies.',
+            identity_backup_btn:            'Download backup',
+            identity_backup_running:        'Preparing download…',
+            identity_backup_ok:             '✓ Downloaded {name}',
+
+            identity_import_title:          'Restore from backup',
+            identity_import_help:           'Replace the current keystore with one you backed up earlier. We validate the password before swapping.',
+            identity_import_file_label:     'Backup file (keystore.dat)',
+            identity_import_password_label: 'Backup password',
+            identity_import_password_placeholder: 'password for the file above',
+            identity_import_confirm_label:  'Type "import" to confirm:',
+            identity_import_btn:            'Restore keystore',
+            identity_import_no_file:        'Pick a backup file first.',
+            identity_import_confirm_dialog: 'Replace the current keystore with this backup? The current one is auto-archived.',
+            identity_import_running:        'Validating and swapping keystore…',
+            identity_import_ok:             '✓ Keystore restored from backup.',
+
+            identity_reset_title:           'Reset keystore (new identity)',
+            identity_reset_help:            'Generate a fresh keystore with a new password. The current one is auto-archived. The new public key will NOT match any existing on-chain producer registration.',
+            identity_reset_confirm_label:   'Type "reset keystore" to confirm:',
+            identity_reset_btn:             'Reset keystore',
+            identity_reset_confirm_dialog:  'This generates a new keystore and shows a new password ONCE. Continue?',
+            identity_reset_running:         'Stopping chain, generating new keystore, restarting…',
+            identity_reset_ok:              '✓ New keystore generated.',
+            identity_reset_password_warning:'Save this password somewhere safe — it’s shown only once and unlocks the new keystore.',
+
+            identity_password_required:     'Password is required.',
+            identity_slashing_warning:      '⚠ This node is registered as an Active/Pending BPoS producer. Changing the keystore here orphans the on-chain registration — you’ll miss on-duty rounds until you sign DPoSV2UpdateProducer in Essentials swapping NodePublicKey to the new one. Failing that you risk slashing. Clicking the action below acknowledges this risk.',
         },
 
         // beta.3.40 — Dashboard BPoS supernode card. Two visual variants

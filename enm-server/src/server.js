@@ -84,6 +84,9 @@ const evmRouter = require('./routes/evm');
 // beta.3.33 — Settings → Danger Zone backend (update / chain-resync /
 // uninstall / nuke). Mounted at /api/enm/maintenance/* below.
 const maintenanceRouter = require('./routes/maintenance');
+// beta.3.43 — Settings → Identity tab backend (unlock / backup /
+// import / reset). Mounted at /api/enm/identity/* below.
+const identityRouter = require('./routes/identity');
 
 const PORT = parseInt(process.env.PORT || '4180', 10);
 // Single source of truth for ENM's data location: DataDir.enmDataDir().
@@ -230,6 +233,10 @@ async function main() {
     // check-update + status. Audit middleware (skips GETs) attached
     // above already covers the destructive POSTs.
     api.use('/maintenance', maintenanceRouter.build({ extensionHandle, getDb }));
+    // beta.3.43 — Settings → Identity tab (unlock keystore, download
+    // backup, import, full reset). All routes owner-gated; destructive
+    // ones check producer state + audit-log.
+    api.use('/identity', identityRouter.build({ extensionHandle, getDb }));
 
     // EVM placeholder (v0.5+). Reserves /api/enm/evm/* so future cross-chain
     // routes can land without naming collisions. Returns 501 today.

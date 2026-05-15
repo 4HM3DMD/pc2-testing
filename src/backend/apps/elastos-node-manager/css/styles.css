@@ -4897,6 +4897,95 @@ body[data-app-size="compact"] .enm-bpos-head-chip,
 }
 
 /* ============================================================================
+ * Settings → Identity tab (beta.3.43)
+ *
+ * Reuses the Danger Zone sub-card primitives (.enm-danger-card with
+ * info/warn/critical variants) — Identity is identity-related but
+ * uses the same destructive-action chrome since its bottom three
+ * cards (Import/Reset) ARE destructive. Adds a grid layout for the
+ * "Current identity" row block and a form-row label for the input
+ * controls inside the action cards.
+ * ============================================================================ */
+
+.enm-section-card.enm-section-identity .enm-section-card-icon {
+    background: var(--accent-soft);
+    color: var(--accent);
+}
+.enm-section-card.enm-section-identity .enm-section-card-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-4);
+    padding-top: var(--sp-4);
+    padding-bottom: var(--sp-5);
+}
+
+/* Current-identity 3-row grid: label / value / copy-button. */
+.enm-identity-grid {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-3);
+}
+.enm-identity-grid-row {
+    display: grid;
+    grid-template-columns: 160px 1fr auto;
+    align-items: center;
+    gap: var(--sp-3);
+}
+.enm-identity-grid-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-tertiary);
+    font-weight: var(--fw-medium);
+}
+.enm-identity-grid-value {
+    font-family: var(--font-mono);
+    font-size: var(--fs-caption);
+    color: var(--text-primary);
+    background: var(--bg-input);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-sm);
+    padding: var(--sp-2) var(--sp-3);
+    word-break: break-all;
+    min-width: 0;
+}
+.enm-identity-grid-copy:empty { display: none; }
+
+/* Form row inside Unlock / Import cards — label above input. */
+.enm-section-card.enm-section-identity .enm-identity-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    background: transparent;
+    border: 0;
+    padding: 0;
+}
+.enm-identity-row-label-form {
+    font-size: var(--fs-caption);
+    color: var(--text-secondary);
+    font-weight: var(--fw-medium);
+}
+
+/* Inline password reveal block at the bottom of the Reset card. */
+.enm-identity-reset-reveal {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-3);
+    margin-top: var(--sp-3);
+}
+
+/* Narrow viewport — collapse the 3-col grid to stacked rows. */
+.enm-app[data-app-size="narrow"] .enm-identity-grid-row,
+.enm-app[data-app-size="compact"] .enm-identity-grid-row {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+}
+.enm-app[data-app-size="narrow"] .enm-identity-grid-copy,
+.enm-app[data-app-size="compact"] .enm-identity-grid-copy {
+    justify-self: end;
+}
+
+/* ============================================================================
  * Setup wizard — Card C keystore password reveal (beta.3.38)
  *
  * Pre-beta.3.38 the password reveal used raw <code> + a Copy button with no

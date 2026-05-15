@@ -40,6 +40,8 @@ const configRouter = require('./config');
 const updatesRouter = require('./updates');
 // beta.3.33 — Settings → Danger Zone backend.
 const maintenanceRouter = require('./maintenance');
+// beta.3.43 — Settings → Identity tab backend.
+const identityRouter = require('./identity');
 const ChainRegistry = require('../services/ChainRegistry');
 
 /**
@@ -121,6 +123,8 @@ function mountRoutes(app, extensionHandle) {
     api.use('/audit', auditRouter.build({ extensionHandle, getDb }));
     // beta.3.33 — Settings → Danger Zone.
     api.use('/maintenance', maintenanceRouter.build({ extensionHandle, getDb }));
+    // beta.3.43 — Identity tab.
+    api.use('/identity', identityRouter.build({ extensionHandle, getDb }));
 
     app.use(ENM_API_PREFIX, api);
 
