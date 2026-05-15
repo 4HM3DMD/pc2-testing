@@ -185,7 +185,15 @@ function build(deps) {
         }
         try {
             const r = await MaintenanceManager.chainResync({
-                chainId, log: extensionHandle.log,
+                chainId,
+                log: extensionHandle.log,
+                // beta.3.42 — extensionHandle lets the resync reach into
+                // enm_setup_state and reset current_step='bootstrap' so
+                // the wizard reappears for the operator to choose
+                // bootstrap-vs-genesis again. Without this, the resync
+                // just silently wipes data and the dashboard sits at
+                // "syncing from 0" forever.
+                extensionHandle,
             });
             await _audit(getDb, extensionHandle.log, {
                 walletAddress: wallet,

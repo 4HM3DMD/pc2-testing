@@ -291,15 +291,26 @@ async function chainResync(opts) {
             return null;
         });
 
-        // Resolve the chain data dir. DataDir.chainDir is the per-
-        // chain root; ela's leveldb + peers files live under data/.
+        // beta.3.42 — ela's working directory is <chainDir>/elastos/,
+        // NOT <chainDir>/ directly. The leveldb + peers + dpos state
+        // live under <chainDir>/elastos/data/, peers.json/dpos/logs at
+        // <chainDir>/elastos/*. Pre-3.42 we targeted <chainDir>/data
+        // which didn't exist — so the rm -rf silently no-op'd and
+        // operators wondered why "Chain Resync" didn't actually
+        // resync. Confirmed against the bootstrap-apply code at the
+        // top of EnmBootstrapDownloader._run.
         const cdir = DataDir.chainDir(chainId);
+        const elastosDir = path.join(cdir, 'elastos');
         const removed = [];
         const candidates = [
-            path.join(cdir, 'data'),
-            path.join(cdir, 'peers.json'),
-            path.join(cdir, 'dpos'),
-            path.join(cdir, 'logs', 'node'),  // chain logs from ela
+            path.join(elastosDir, 'data'),
+            path.join(elastosDir, 'peers.json'),
+            path.join(elastosDir, 'dpos'),
+            path.join(elastosDir, 'logs', 'node'),  // chain logs from ela
+            // Also nuke the .tmp/bootstrap/<chainId>/ partial download
+            // dir so a resync forces the next bootstrap to start fresh
+            // instead of resuming from a possibly-corrupt .partial.
+            path.join(DataDir.enmDataDir(), '.tmp', 'bootstrap', chainId),
         ];
         for (const p of candidates) {
             try {
@@ -311,31 +322,77 @@ async function chainResync(opts) {
             }
         }
 
-        // Restart chain. ChainAdapter.start needs the chain config from
-        // ConfigStore — same path the route handler walks.
-        log.info(`${ENM_LOG_PREFIX} maintenance.chainResync(${chainId}) — restarting chain`);
-        const ConfigStore = require('./ConfigStore');
-        const cfg = await ConfigStore.load();
-        const chainCfg = cfg && cfg.chains && cfg.chains[chainId];
-        if (!chainCfg) {
-            throw Object.assign(
-                new Error(`Chain config for "${chainId}" missing after resync`),
-                { code: 'NO_CFG' },
-            );
-        }
-        try {
-            await adapter.start(chainCfg);
-        } catch (err) {
-            // Surface but don't swallow — the data wipe still happened.
-            throw Object.assign(
-                new Error(`Resync wiped data but chain restart failed: ${err.message}`),
-                { code: 'RESTART_FAILED' },
-            );
-        }
-        return { action: 'chain-resync', chainId, removedPaths: removed, keystoreBackup };
+        // beta.3.42 — instead of auto-restarting the chain (which would
+        // just begin a silent re-sync), reset the setup_state so the
+        // wizard re-appears at Card B2 (bootstrap-vs-genesis). Keystore
+        // stays preserved (keystore_imported=1) so the operator doesn't
+        // walk Card C again. The operator explicitly asked for this:
+        // "Chain resync should bring back the wizard while understanding
+        // what is saved so things don't duplicate".
+        const setupStateReset = await _resetSetupStateForResync(opts).catch((err) => {
+            log.warn(`${ENM_LOG_PREFIX} maintenance.chainResync: setup_state reset failed: ${err.message}`);
+            return { ok: false, error: err.message };
+        });
+
+        log.info(`${ENM_LOG_PREFIX} maintenance.chainResync(${chainId}) — data wiped, wizard will reappear at bootstrap step`);
+        return {
+            action: 'chain-resync',
+            chainId,
+            removedPaths: removed,
+            keystoreBackup,
+            setupStateReset,
+            wizardReturns: true,
+        };
     } finally {
         _release();
     }
+}
+
+/**
+ * Reset rows in enm_setup_state so the wizard reappears at the
+ * bootstrap-vs-genesis step. Keeps keystore_imported + binary_path
+ * (operator has these on disk; making them walk through generation
+ * again would clobber the existing keystore.dat). Wipes
+ * config_generated + completed.
+ *
+ * We don't know which wallet_address rows to touch (there may be
+ * multiple operators sharing a node). Reset every row — chain
+ * data is shared between operators, so a chain resync invalidates
+ * everyone's wizard state.
+ *
+ * @returns {Promise<{ok: boolean, rowsAffected?: number, error?: string}>}
+ */
+async function _resetSetupStateForResync(opts) {
+    const extensionHandle = opts && opts.extensionHandle;
+    // Falls back to require()ing ChainRegistry to grab the engine's
+    // DB handle if the caller didn't pass one.
+    let db;
+    if (extensionHandle && typeof extensionHandle.import === 'function') {
+        try { db = extensionHandle.import('data').db; } catch (_) { /* fall through */ }
+    }
+    if (!db) {
+        // ChainRegistry caches the DB handle too — works inside ENM's
+        // own process without needing the route layer to pass it.
+        try {
+            const cr = require('./ChainRegistry');
+            const eng = cr.getEngine && cr.getEngine();
+            db = eng && eng.getDb && eng.getDb();
+        } catch (_) { /* swallow */ }
+    }
+    if (!db || typeof db.write !== 'function') {
+        return { ok: false, error: 'no DB handle' };
+    }
+    const r = await db.write(
+        `UPDATE enm_setup_state SET
+            current_step = 'bootstrap',
+            config_generated = 0,
+            completed = 0,
+            completed_at = NULL,
+            updated_at = ?
+         WHERE 1=1`,
+        [Date.now()],
+    );
+    return { ok: true, rowsAffected: (r && (r.changes || r.rowsAffected)) || 0 };
 }
 
 /**

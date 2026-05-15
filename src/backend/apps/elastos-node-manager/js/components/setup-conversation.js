@@ -1046,6 +1046,51 @@
         var t = root.enmT;
         var heading = t('friendly.setup.card_c.title_initial');
         this.root.setAttribute('aria-label', heading);
+        // beta.3.42 — auto-skip Card C when a keystore already exists.
+        // Operators reaching this card via Chain Resync or a restored
+        // install would otherwise see "Generate my password" again,
+        // clicking which would overwrite the existing keystore.dat
+        // (and erase the on-chain pubkey they registered with). We
+        // probe /setup/keystore/account first; on exists=true we
+        // _goto('d') immediately without rendering Card C's body.
+        var self = this;
+        this.api.get('/setup/keystore/account', { skipCache: true }).then(function (resp) {
+            if (self._destroyed || !self._stillRendering(seq)) { return; }
+            var r = (resp && resp.result) || resp || {};
+            if (r.exists) {
+                // Keystore already on disk — mark setup_state and jump
+                // to Card D. We POST /setup/keystore with body unset so
+                // the route's beta.3.42 "reuse existing" branch fires,
+                // which upserts setup_state.keystore_imported=1 +
+                // current_step='network'.
+                self.api.post('/setup/keystore', { enableArbiter: true })
+                    .then(function () {
+                        if (self._destroyed) { return; }
+                        self._goto('d');
+                    })
+                    .catch(function () {
+                        // If the reuse call fails, fall back to the
+                        // generate flow so the operator isn't stuck.
+                        if (self._destroyed) { return; }
+                        self._renderCardCGenerate(seq);
+                    });
+                return;
+            }
+            self._renderCardCGenerate(seq);
+        }).catch(function () {
+            if (self._destroyed || !self._stillRendering(seq)) { return; }
+            self._renderCardCGenerate(seq);
+        });
+    };
+
+    /**
+     * Render the "Generate my password" body of Card C. Split out from
+     * _renderCardC so the auto-skip path can short-circuit cleanly.
+     * @private
+     */
+    SetupConversation.prototype._renderCardCGenerate = function (seq) {
+        var t = root.enmT;
+        var heading = t('friendly.setup.card_c.title_initial');
         this._body.innerHTML =
             '<h2 class="enm-wiz-heading" id="enm-wiz-heading-c">' + escapeHtml(heading) + '</h2>'
             + '<p class="enm-wiz-para" id="enm-wiz-c-para">' + escapeHtml(t('friendly.setup.card_c.sub_initial')) + '</p>'
