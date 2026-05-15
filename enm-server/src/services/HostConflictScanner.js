@@ -474,7 +474,18 @@ async function checkPortInUse(port, run) {
     // Prefer ss (Linux) — lighter than lsof. Fall back to lsof on macOS or
     // when ss isn't available.
     if (os.platform() === 'linux') {
-        const { stdout } = await run('ss', ['-tlnH', `sport = :${port}`])
+        // beta.3.32 — add `-p` so ss emits the `users:(("ela",pid=N,fd=N))`
+        // block. Without it, the holder string is just the bare socket
+        // tuple (LISTEN 0 4096 0.0.0.0:20336 0.0.0.0:*) and parseHolderPids
+        // returns []. That meant the "skip our own managed pid" exemption
+        // at lines 398-407 silently never matched, F19 fired CRITICAL on
+        // every 5-min health tick while ela was running normally. `-p`
+        // requires root to expose other processes' PIDs; ENM runs as
+        // root, so this works. On hosts where root privileges are absent
+        // ss just shows '-' in the pid column, parseHolderPids harmlessly
+        // returns [] (same behavior as today) and the conflict is
+        // surfaced — that's the conservative path.
+        const { stdout } = await run('ss', ['-tlnHp', `sport = :${port}`])
             .catch(() => ({ stdout: '' }));
         if (stdout && stdout.trim().length > 0) {
             return { bound: true, holder: stdout.trim().split('\n')[0] };
