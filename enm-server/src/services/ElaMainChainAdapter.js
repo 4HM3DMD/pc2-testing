@@ -30,6 +30,7 @@ const { getRpcPassword } = require('./ConfigStore');
 const { decrypt } = require('./EnmEncryption');
 const ChainState = require('./ChainState');
 const ExtIpResolver = require('./ExtIpResolver');
+const EnmFirewallManager = require('./EnmFirewallManager');
 
 const KEYSTORE_FILENAME = 'keystore.dat';
 const KEYSTORE_PASSWORD_FILE = 'keystore-password.txt';
@@ -180,6 +181,61 @@ class ElaMainChainAdapter extends ChainAdapter {
             throw new Error(
                 `BPoS mode requires keystore at ${keystoreFile}. Import it via the setup wizard.`,
             );
+        }
+
+        // 4.5. beta.3.30 — auto-open host firewall (UFW) for the chain's
+        // P2P inbound ports. No-op when UFW isn't installed or isn't
+        // active. When active with default-deny inbound, this is the
+        // ONLY thing preventing peers from dialling us back — the bound
+        // socket is up, but UFW silently drops every SYN at INPUT. The
+        // symptom is: outbound peers form, inbound count stays 0
+        // forever, F18 fires (correctly) but the alert misled operators
+        // to look at NAT / router. Verified fix on srv832310 (Hostinger,
+        // 2026-05-15). Now baked in so every install gets reachable
+        // inbound P2P out of the box.
+        //
+        // RPC port (cfg.ports.rpc) intentionally not opened — ela's
+        // RpcConfiguration.WhiteIPList=["127.0.0.1"] already keeps RPC
+        // loopback-only inside ela; no reason to expose it to the
+        // network even if the operator's firewall would permit it.
+        try {
+            const fwReport = await EnmFirewallManager.ensureAllowed(
+                [cfg.ports.nodePort, cfg.ports.dpos],
+                {
+                    comment: `ela ${this.chainId} P2P (ENM auto)`,
+                    logger: this.extensionHandle && this.extensionHandle.log,
+                },
+            );
+            if (fwReport.skipped) {
+                // Operator either doesn't have UFW or has it disabled —
+                // either way, ENM can't (and shouldn't) act. The chain
+                // will run; if there's a different firewall blocking,
+                // F18 will surface it with the updated remediation copy.
+            } else if (fwReport.added.length > 0 && this.extensionHandle && this.extensionHandle.log) {
+                this.extensionHandle.log.info(
+                    `${ENM_LOG_PREFIX} firewall: opened ufw allow `
+                    + fwReport.added.map((p) => `${p}/tcp`).join(', ')
+                    + ` for ${this.chainId} P2P/DPoS inbound`,
+                );
+            }
+            if (fwReport.errors.length > 0 && this.extensionHandle && this.extensionHandle.log) {
+                this.extensionHandle.log.warn(
+                    `${ENM_LOG_PREFIX} firewall: failed to open `
+                    + fwReport.errors.map((e) => `${e.port}/tcp (${e.message})`).join('; ')
+                    + ` — chain will start anyway, but inbound peers may stay 0. `
+                    + `Resolve manually: sudo ufw allow ${cfg.ports.nodePort}/tcp && `
+                    + `sudo ufw allow ${cfg.ports.dpos}/tcp`,
+                );
+            }
+        } catch (err) {
+            // Firewall management failure is non-fatal — ela can still
+            // start. Just log and continue; the operator may see F18
+            // later if the firewall is in fact blocking.
+            if (this.extensionHandle && this.extensionHandle.log) {
+                this.extensionHandle.log.warn(
+                    `${ENM_LOG_PREFIX} firewall preflight failed: ${err.message}`,
+                );
+            }
         }
 
         // 5. Spawn via the process service (also acquires the chain lock).
