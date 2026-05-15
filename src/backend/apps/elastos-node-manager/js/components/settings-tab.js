@@ -1440,6 +1440,14 @@
                         input.value = '';
                         status.textContent = t('settings.identity_unlock_ok');
                         status.classList.add('ok');
+                        // beta.3.44 — invalidate the dashboard's Node
+                        // Identity card cache so it picks up the just-
+                        // unlocked pubkey on its next poll without
+                        // needing a full page reload.
+                        if (typeof self.api.invalidate === 'function') {
+                            try { self.api.invalidate('/system/identity'); }
+                            catch (_) { /* api client may not expose invalidate */ }
+                        }
                         self._refreshIdentity();
                     })
                     .catch(function (err) {
@@ -1547,6 +1555,10 @@
                     fileInput.value = '';
                     status.textContent = t('settings.identity_import_ok');
                     status.classList.add('ok');
+                    if (typeof self.api.invalidate === 'function') {
+                        try { self.api.invalidate('/system/identity'); }
+                        catch (_) { /* ignore */ }
+                    }
                     self._refreshIdentity();
                 }).catch(function (err) {
                     if (self._destroyed) { return; }
@@ -1617,6 +1629,10 @@
                         status.classList.add('ok');
                         confirmObj.input.value = '';
                         btn.disabled = true;
+                        if (typeof self.api.invalidate === 'function') {
+                            try { self.api.invalidate('/system/identity'); }
+                            catch (_) { /* ignore */ }
+                        }
                         self._refreshIdentity();
                     })
                     .catch(function (err) {
