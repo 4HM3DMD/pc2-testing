@@ -308,6 +308,57 @@ function build(extensionHandle) {
         }
     });
 
+    // beta.3.20 — PUT /config/storage.
+    //
+    // Phase 3 Storage section. Knobs for the EnmStorageMaintenance
+    // service:
+    //   logGzipAfterDays  — gzip closed *.log files past this age
+    //   logRetentionDays  — delete *.log.gz past this age
+    //   keystoreIntervalDays  — how often the auto-backup runs
+    //   keystoreKeepCount     — how many backup files to retain
+    //
+    // No chain restart needed — EnmStorageMaintenance reads from
+    // cfg.global.{logRotation,backup} on every 24h tick, picking up
+    // the new values on its next fire.
+    router.put('/storage', limit('admin'), requireOwner, async (req, res) => {
+        const { value, details } = RequestSchemas.validateBody(
+            RequestSchemas.storageBody, req.body,
+        );
+        if (details) {
+            return res.status(400).json({
+                ...errorBody('Invalid request body.'),
+                details,
+            });
+        }
+        const body = value;
+        try {
+            const cfg = await ConfigStore.load();
+            cfg.global = cfg.global || {};
+            cfg.global.logRotation = cfg.global.logRotation || {};
+            cfg.global.backup = cfg.global.backup || {};
+            if (body.logGzipAfterDays != null) {
+                cfg.global.logRotation.gzipAfterDays = body.logGzipAfterDays;
+            }
+            if (body.logRetentionDays != null) {
+                cfg.global.logRotation.purgeAfterDays = body.logRetentionDays;
+            }
+            if (body.keystoreIntervalDays != null) {
+                cfg.global.backup.keystoreIntervalDays = body.keystoreIntervalDays;
+            }
+            if (body.keystoreKeepCount != null) {
+                cfg.global.backup.keystoreKeepCount = body.keystoreKeepCount;
+            }
+            await ConfigStore.save(cfg, { logger: extensionHandle.log });
+            return res.json(successBody({
+                logRotation: cfg.global.logRotation,
+                backup: cfg.global.backup,
+            }));
+        } catch (err) {
+            extensionHandle.log.error(`${ENM_LOG_PREFIX} PUT /config/storage: ${err.message}`);
+            return res.status(500).json(errorBody(err.message));
+        }
+    });
+
     // beta.3.19 — PUT /config/notifications.
     //
     // Phase 2 Alerts section. Operator-tunable thresholds that drive

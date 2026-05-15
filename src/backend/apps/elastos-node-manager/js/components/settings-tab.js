@@ -340,6 +340,12 @@
             this._pills[k].classList.toggle('active', active);
             this._pills[k].setAttribute('aria-selected', active ? 'true' : 'false');
         }, this);
+        // beta.3.20 — refresh disk usage when the operator opens the
+        // Storage section so they see current sizes + the latest auto-
+        // backup time without having to reload the whole tab.
+        if (key === 'storage' && typeof this._refreshStorageUsage === 'function') {
+            this._refreshStorageUsage();
+        }
     };
 
     // -----------------------------------------------------------------
@@ -874,6 +880,65 @@
             setDirty: sec.setDirty,
         };
 
+        // ----- Disk usage panel (read-only, top of section) -----------
+        // beta.3.20 — surfaces a live breakdown of where disk is going.
+        // Hydrated by _refreshStorageUsage() via GET /system/storage on
+        // section mount + on section activation. Operator never has to
+        // ssh + du.
+        var diskPanel = document.createElement('div');
+        diskPanel.className = 'enm-storage-disk-panel';
+        var diskHead = document.createElement('div');
+        diskHead.className = 'enm-storage-disk-head';
+        var diskHeadLabel = document.createElement('div');
+        diskHeadLabel.className = 'enm-storage-disk-head-label';
+        diskHeadLabel.textContent = t('settings.storage_disk_label');
+        var diskHeadHelp = document.createElement('div');
+        diskHeadHelp.className = 'enm-storage-disk-head-help';
+        diskHeadHelp.textContent = t('settings.storage_disk_help');
+        diskHead.appendChild(diskHeadLabel);
+        diskHead.appendChild(diskHeadHelp);
+        diskPanel.appendChild(diskHead);
+        // Four-cell grid: chain data, logs, audit, backups. Plus a
+        // total row at the bottom. Values fill in via _refreshStorageUsage.
+        var diskGrid = document.createElement('div');
+        diskGrid.className = 'enm-storage-disk-grid';
+        var diskKeys = [
+            { key: 'chainData', label: t('settings.storage_disk_chain_data') },
+            { key: 'logs',      label: t('settings.storage_disk_logs') },
+            { key: 'auditDb',   label: t('settings.storage_disk_audit') },
+            { key: 'backups',   label: t('settings.storage_disk_backups') },
+        ];
+        this._storage.diskCells = {};
+        diskKeys.forEach(function (item) {
+            var cell = document.createElement('div');
+            cell.className = 'enm-storage-disk-cell';
+            var label = document.createElement('div');
+            label.className = 'enm-storage-disk-cell-label';
+            label.textContent = item.label;
+            var value = document.createElement('div');
+            value.className = 'enm-storage-disk-cell-value';
+            value.textContent = '—';
+            cell.appendChild(label);
+            cell.appendChild(value);
+            diskGrid.appendChild(cell);
+            self._storage.diskCells[item.key] = value;
+        });
+        diskPanel.appendChild(diskGrid);
+        var diskTotal = document.createElement('div');
+        diskTotal.className = 'enm-storage-disk-total';
+        var diskTotalLabel = document.createElement('span');
+        diskTotalLabel.className = 'enm-storage-disk-total-label';
+        diskTotalLabel.textContent = t('settings.storage_disk_total');
+        var diskTotalValue = document.createElement('span');
+        diskTotalValue.className = 'enm-storage-disk-total-value';
+        diskTotalValue.textContent = '—';
+        diskTotal.appendChild(diskTotalLabel);
+        diskTotal.appendChild(diskTotalValue);
+        diskPanel.appendChild(diskTotal);
+        this._storage.diskTotal = diskTotalValue;
+        sec.body.appendChild(diskPanel);
+
+        // ----- Audit retention (existing knob) ------------------------
         this._storage.auditRetention = makeInputSuffix({
             type: 'number',
             value: '365',
@@ -893,12 +958,200 @@
             control: this._storage.auditRetention.el,
         }));
 
+        // ----- Log retention policy (NEW Phase 3) ---------------------
+        this._storage.logGzip = makeInputSuffix({
+            type: 'number',
+            value: '7',
+            min: 1,
+            max: 365,
+            step: 1,
+            mono: true,
+            suffix: 'days',
+            ariaLabel: 'Log compress age in days',
+            describedById: 'enm-storage-status',
+        });
+        sec.body.appendChild(makeFormRow({
+            label: t('settings.storage_log_gzip_label'),
+            help: t('settings.storage_log_gzip_help'),
+            control: this._storage.logGzip.el,
+        }));
+
+        this._storage.logRetention = makeInputSuffix({
+            type: 'number',
+            value: '30',
+            min: 1,
+            max: 3650,
+            step: 1,
+            mono: true,
+            suffix: 'days',
+            ariaLabel: 'Log retention in days',
+            describedById: 'enm-storage-status',
+        });
+        sec.body.appendChild(makeFormRow({
+            label: t('settings.storage_log_retention_label'),
+            help: t('settings.storage_log_retention_help'),
+            control: this._storage.logRetention.el,
+        }));
+
+        // ----- Keystore backup section (NEW Phase 3) -----------------
+        var backupCallout = document.createElement('div');
+        backupCallout.className = 'enm-storage-backup-callout';
+        var backupCalloutHead = document.createElement('div');
+        backupCalloutHead.className = 'enm-storage-backup-callout-head';
+        backupCalloutHead.textContent = t('settings.storage_backup_section_label');
+        var backupCalloutBody = document.createElement('div');
+        backupCalloutBody.className = 'enm-storage-backup-callout-body';
+        backupCalloutBody.textContent = t('settings.storage_backup_section_help');
+        backupCallout.appendChild(backupCalloutHead);
+        backupCallout.appendChild(backupCalloutBody);
+        sec.body.appendChild(backupCallout);
+
+        this._storage.backupInterval = makeInputSuffix({
+            type: 'number',
+            value: '7',
+            min: 1,
+            max: 90,
+            step: 1,
+            mono: true,
+            suffix: 'days',
+            ariaLabel: 'Keystore backup interval in days',
+            describedById: 'enm-storage-status',
+        });
+        sec.body.appendChild(makeFormRow({
+            label: t('settings.storage_backup_interval_label'),
+            help: t('settings.storage_backup_interval_help'),
+            control: this._storage.backupInterval.el,
+        }));
+
+        this._storage.backupKeep = makeInputSuffix({
+            type: 'number',
+            value: '4',
+            min: 1,
+            max: 50,
+            step: 1,
+            mono: true,
+            suffix: 'copies',
+            ariaLabel: 'Keystore backup keep count',
+            describedById: 'enm-storage-status',
+        });
+        sec.body.appendChild(makeFormRow({
+            label: t('settings.storage_backup_keep_label'),
+            help: t('settings.storage_backup_keep_help'),
+            control: this._storage.backupKeep.el,
+        }));
+
+        // Read-only status row showing last backup + path.
+        this._storage.backupStatusEl = document.createElement('div');
+        this._storage.backupStatusEl.className = 'enm-storage-backup-status';
+        this._storage.backupStatusEl.innerHTML = '—';
+        sec.body.appendChild(makeFormRow({
+            label: t('settings.storage_backup_status_label'),
+            help: '',
+            control: this._storage.backupStatusEl,
+        }));
+
         sec.statusEl.id = 'enm-storage-status';
 
         sec.saveBtn.addEventListener('click', function () { self._saveStorage(); });
         sec.revertBtn.addEventListener('click', function () { self.refresh('storage'); });
 
+        // Initial fetch of /system/storage to fill disk panel + backup
+        // status. Quiet failure — the section is still useful with the
+        // form fields alone.
+        this._refreshStorageUsage();
+
         return sec.card;
+    };
+
+    /**
+     * beta.3.20 — fetch /system/storage and paint the disk-usage
+     * panel + backup-status line. Safe to call repeatedly; the
+     * section is hydrated on mount and on every activation, so the
+     * data is fresh whenever the operator opens this tab.
+     * @private
+     */
+    SettingsTab.prototype._refreshStorageUsage = function () {
+        var self = this;
+        if (!this._storage || !this._storage.diskCells) { return; }
+        // Show a loading placeholder while the GET resolves.
+        Object.keys(this._storage.diskCells).forEach(function (k) {
+            self._storage.diskCells[k].textContent = '…';
+        });
+        this._storage.diskTotal.textContent = '…';
+        this.api.get('/system/storage', { skipCache: true })
+            .then(function (env) {
+                if (self._destroyed) { return; }
+                var data = (env && env.result) || env || {};
+                var mb = data.diskMb || {};
+                self._storage.diskCells.chainData.textContent = fmtMb(mb.chainData);
+                self._storage.diskCells.logs.textContent      = fmtMb(mb.logs);
+                self._storage.diskCells.auditDb.textContent   = fmtMb(mb.auditDb);
+                self._storage.diskCells.backups.textContent   = fmtMb(mb.backups);
+                self._storage.diskTotal.textContent           = fmtMb(mb.total);
+                // Hydrate the backup-status line.
+                self._paintBackupStatus(data.backup);
+                // Mirror server-current rotation values into the inputs
+                // so they don't desync with /system/storage (which
+                // reads cfg.global.logRotation directly).
+                var lr = data.logRotation || {};
+                if (Number.isFinite(lr.gzipAfterDays)) {
+                    self._storage.logGzip.input.value = String(lr.gzipAfterDays);
+                }
+                if (Number.isFinite(lr.purgeAfterDays)) {
+                    self._storage.logRetention.input.value = String(lr.purgeAfterDays);
+                }
+                var b = data.backup || {};
+                if (Number.isFinite(b.intervalDays)) {
+                    self._storage.backupInterval.input.value = String(b.intervalDays);
+                }
+                if (Number.isFinite(b.keepCount)) {
+                    self._storage.backupKeep.input.value = String(b.keepCount);
+                }
+            })
+            .catch(function (err) {
+                if (self._destroyed) { return; }
+                if (err && err.status === 401) { return; }
+                Object.keys(self._storage.diskCells).forEach(function (k) {
+                    self._storage.diskCells[k].textContent = '—';
+                });
+                self._storage.diskTotal.textContent = '—';
+            });
+    };
+
+    /** @private */
+    SettingsTab.prototype._paintBackupStatus = function (b) {
+        var t = root.enmTOrFallback;
+        if (!this._storage || !this._storage.backupStatusEl) { return; }
+        var el = this._storage.backupStatusEl;
+        if (!b) {
+            el.textContent = '—';
+            return;
+        }
+        if (!b.keystorePresent) {
+            el.innerHTML = '';
+            el.textContent = t('settings.storage_backup_no_keystore');
+            return;
+        }
+        if (Number.isFinite(b.lastAt) && b.lastAt > 0) {
+            var when = relativeTime(b.lastAt);
+            var pathStr = b.lastPath || '?';
+            // Caller-supplied HTML uses <strong> and <code> — pass via
+            // innerHTML but with escaped substitutions.
+            el.innerHTML = t('settings.storage_backup_last', {
+                when: escapeHtml(when),
+                path: escapeHtml(pathStr),
+            });
+            if (b.backupDir) {
+                var hint = document.createElement('div');
+                hint.className = 'enm-storage-backup-dir-hint';
+                hint.innerHTML = t('settings.storage_backup_dir_hint',
+                    { dir: escapeHtml(b.backupDir) });
+                el.appendChild(hint);
+            }
+            return;
+        }
+        el.innerHTML = '';
+        el.textContent = t('settings.storage_backup_last_never');
     };
 
     // -----------------------------------------------------------------
@@ -1505,39 +1758,103 @@
     };
 
     /**
-     * beta.3.18 — save Storage section (auditRetentionDays only in
-     * Phase 1; Phase 3 will add log retention + keystore backup).
-     * Backend: PUT /config/general; same endpoint as Security's save.
+     * beta.3.20 — save Storage section. Phase 3 expanded this from a
+     * single audit-retention field to four operator-tunable policies
+     * across two backend endpoints. We send both in parallel: audit
+     * retention goes to PUT /config/general (where it's lived since
+     * beta.3.18); the log-retention + keystore-backup policies go to
+     * PUT /config/storage (new in 3.20). Both endpoints are owner-
+     * gated, Joi-validated, idempotent. EnmStorageMaintenance picks
+     * up the new values on its next 24h tick.
      * @private
      */
     SettingsTab.prototype._saveStorage = function () {
         var t = root.enmTOrFallback;
         var self = this;
-        this._storage.auditRetention.input.removeAttribute('aria-invalid');
+        var s = this._storage;
+        s.auditRetention.input.removeAttribute('aria-invalid');
+        s.logGzip.input.removeAttribute('aria-invalid');
+        s.logRetention.input.removeAttribute('aria-invalid');
+        s.backupInterval.input.removeAttribute('aria-invalid');
+        s.backupKeep.input.removeAttribute('aria-invalid');
 
-        var retention = parseInt(this._storage.auditRetention.input.value, 10);
+        var retention   = parseInt(s.auditRetention.input.value, 10);
+        var logGzip     = parseInt(s.logGzip.input.value, 10);
+        var logRetention = parseInt(s.logRetention.input.value, 10);
+        var bkInterval  = parseInt(s.backupInterval.input.value, 10);
+        var bkKeep      = parseInt(s.backupKeep.input.value, 10);
+
+        // Inline validation matching the backend Joi bounds.
         if (!Number.isInteger(retention) || retention < 0 || retention > 3650) {
-            setStatus(this._storage.statusEl, 'error',
+            setStatus(s.statusEl, 'error',
                 t('settings.save_failed', { error: t('settings.err_retention') }));
-            this._storage.auditRetention.input.setAttribute('aria-invalid', 'true');
-            try { this._storage.auditRetention.input.focus({ preventScroll: true }); }
-            catch (e) { this._storage.auditRetention.input.focus(); }
+            s.auditRetention.input.setAttribute('aria-invalid', 'true');
+            try { s.auditRetention.input.focus({ preventScroll: true }); }
+            catch (e) { s.auditRetention.input.focus(); }
             return;
         }
-        var body = { auditRetentionDays: retention };
+        if (!Number.isInteger(logGzip) || logGzip < 1 || logGzip > 365) {
+            setStatus(s.statusEl, 'error',
+                t('settings.save_failed', { error: t('settings.storage_err_log_gzip') }));
+            s.logGzip.input.setAttribute('aria-invalid', 'true');
+            try { s.logGzip.input.focus({ preventScroll: true }); }
+            catch (e) { s.logGzip.input.focus(); }
+            return;
+        }
+        if (!Number.isInteger(logRetention) || logRetention < 1 || logRetention > 3650
+            || logRetention <= logGzip) {
+            setStatus(s.statusEl, 'error',
+                t('settings.save_failed', { error: t('settings.storage_err_log_retention') }));
+            s.logRetention.input.setAttribute('aria-invalid', 'true');
+            try { s.logRetention.input.focus({ preventScroll: true }); }
+            catch (e) { s.logRetention.input.focus(); }
+            return;
+        }
+        if (!Number.isInteger(bkInterval) || bkInterval < 1 || bkInterval > 90) {
+            setStatus(s.statusEl, 'error',
+                t('settings.save_failed', { error: t('settings.storage_err_backup_interval') }));
+            s.backupInterval.input.setAttribute('aria-invalid', 'true');
+            try { s.backupInterval.input.focus({ preventScroll: true }); }
+            catch (e) { s.backupInterval.input.focus(); }
+            return;
+        }
+        if (!Number.isInteger(bkKeep) || bkKeep < 1 || bkKeep > 50) {
+            setStatus(s.statusEl, 'error',
+                t('settings.save_failed', { error: t('settings.storage_err_backup_keep') }));
+            s.backupKeep.input.setAttribute('aria-invalid', 'true');
+            try { s.backupKeep.input.focus({ preventScroll: true }); }
+            catch (e) { s.backupKeep.input.focus(); }
+            return;
+        }
+
         var savingLabel = t('common.saving') || 'Saving…';
-        setStatus(this._storage.statusEl, '', t('common.loading') || 'Saving…');
-        return root.enmRunOnce(this._storage.saveBtn, savingLabel, function () {
-            return self.api.put('/config/general', body)
+        setStatus(s.statusEl, '', t('common.loading') || 'Saving…');
+        return root.enmRunOnce(s.saveBtn, savingLabel, function () {
+            // Fire both PUTs in parallel. They write to different
+            // config slots so they don't conflict; refresh + status
+            // wait on Promise.all so the operator sees one success/
+            // failure result.
+            return Promise.all([
+                self.api.put('/config/general', { auditRetentionDays: retention }),
+                self.api.put('/config/storage', {
+                    logGzipAfterDays: logGzip,
+                    logRetentionDays: logRetention,
+                    keystoreIntervalDays: bkInterval,
+                    keystoreKeepCount: bkKeep,
+                }),
+            ])
                 .then(function () {
                     if (self._destroyed) { return; }
-                    setStatus(self._storage.statusEl, 'success', '✓ ' + t('settings.saved'));
+                    setStatus(s.statusEl, 'success', '✓ ' + t('settings.saved'));
                     self.refresh('storage');
+                    // Refresh disk usage so the operator sees updated
+                    // backup status / usage right away.
+                    self._refreshStorageUsage();
                 })
                 .catch(function (err) {
                     if (self._destroyed) { return; }
                     if (err && err.status === 401) { return; }
-                    setStatus(self._storage.statusEl, 'error',
+                    setStatus(s.statusEl, 'error',
                         t('settings.save_failed', { error: err.message || String(err) }));
                 });
         });
@@ -1626,12 +1943,28 @@
         }
     };
 
-    /** beta.3.18 — Storage section (audit retention only in Phase 1). */
+    /**
+     * beta.3.20 — Storage section (Phase 3 expansion). Hydrates the
+     * audit-retention input from cfg.global.audit and the new log /
+     * keystore-backup inputs from cfg.global.{logRotation,backup}.
+     * Disk-usage + last-backup line are populated separately by
+     * _refreshStorageUsage which hits GET /system/storage.
+     */
     SettingsTab.prototype._fillStorage = function (cfg) {
         if (!this._storage) { return; }
         var g = (cfg && cfg.global) || {};
         this._storage.auditRetention.input.value =
             String((g.audit && g.audit.retentionDays) || 365);
+        var lr = g.logRotation || {};
+        this._storage.logGzip.input.value =
+            String(Number.isFinite(lr.gzipAfterDays) ? lr.gzipAfterDays : 7);
+        this._storage.logRetention.input.value =
+            String(Number.isFinite(lr.purgeAfterDays) ? lr.purgeAfterDays : 30);
+        var b = g.backup || {};
+        this._storage.backupInterval.input.value =
+            String(Number.isFinite(b.keystoreIntervalDays) ? b.keystoreIntervalDays : 7);
+        this._storage.backupKeep.input.value =
+            String(Number.isFinite(b.keystoreKeepCount) ? b.keystoreKeepCount : 4);
     };
 
     /**
@@ -2439,6 +2772,40 @@
      * 'error' | ''). Toggles role between status (info/success) and
      * alert (error) so AT announces errors with higher priority.
      */
+    // beta.3.20 — helpers used by the Storage section's disk-usage
+    // panel + last-backup status line.
+    function fmtMb(mb) {
+        if (!Number.isFinite(mb) || mb <= 0) { return '0 MB'; }
+        if (mb >= 1024) { return (mb / 1024).toFixed(2) + ' GB'; }
+        if (mb >= 10)   { return Math.round(mb) + ' MB'; }
+        return mb.toFixed(1) + ' MB';
+    }
+    function relativeTime(epochMs) {
+        if (!Number.isFinite(epochMs) || epochMs <= 0) { return '—'; }
+        var t = root.enmTOrFallback;
+        var deltaMs = Date.now() - epochMs;
+        if (deltaMs < 0) { deltaMs = 0; }
+        if (deltaMs < 60_000) { return t('settings.storage_relative_just_now') || 'just now'; }
+        if (deltaMs < 3_600_000) {
+            var min = Math.floor(deltaMs / 60_000);
+            return t('settings.storage_relative_minutes', { n: min });
+        }
+        if (deltaMs < 86_400_000) {
+            var h = Math.floor(deltaMs / 3_600_000);
+            return t('settings.storage_relative_hours', { n: h });
+        }
+        var d = Math.floor(deltaMs / 86_400_000);
+        return t('settings.storage_relative_days', { n: d });
+    }
+    function escapeHtml(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
     function setStatus(el, kind, text) {
         if (!el) { return; }
         el.classList.remove('success', 'warn', 'error');

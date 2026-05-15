@@ -132,6 +132,44 @@ const notificationsBody = Joi.object({
         'any.invalid': '{{#message}}',
     });
 
+// beta.3.20 — Phase 3 Storage section. Operator-tunable storage
+// policies. All three knobs run on the EnmStorageMaintenance 24h
+// cron; no chain restart needed.
+//
+//   logRetentionDays   maps to cfg.global.logRotation.purgeAfterDays
+//                      (older *.log.gz files are deleted past this)
+//   logGzipAfterDays   maps to cfg.global.logRotation.gzipAfterDays
+//                      (closed *.log files are gzipped past this)
+//   keystoreIntervalDays  how often the auto-backup task runs
+//   keystoreKeepCount     how many backup copies to retain
+//
+// Bounds chosen so the operator can't lock the system into a state
+// where logs never rotate (gzipAfterDays must precede purgeAfterDays
+// — enforced as a cross-field check below) and backups happen often
+// enough to be useful (≤ 90 days) but not so often they churn disk
+// for an effectively-static file (≥ 1 day).
+const storageBody = Joi.object({
+    logGzipAfterDays: Joi.number().integer().min(1).max(365).optional(),
+    logRetentionDays: Joi.number().integer().min(1).max(3650).optional(),
+    keystoreIntervalDays: Joi.number().integer().min(1).max(90).optional(),
+    keystoreKeepCount: Joi.number().integer().min(1).max(50).optional(),
+})
+    .unknown(false)
+    .label('PUT /config/storage body')
+    .custom((value, helpers) => {
+        if (Number.isFinite(value.logGzipAfterDays)
+            && Number.isFinite(value.logRetentionDays)
+            && value.logGzipAfterDays >= value.logRetentionDays) {
+            return helpers.error('any.invalid', {
+                message: 'logGzipAfterDays must be less than logRetentionDays',
+            });
+        }
+        return value;
+    })
+    .messages({
+        'any.invalid': '{{#message}}',
+    });
+
 // POST /config/anti-snipe-password
 const antiSnipeBody = Joi.object({
     // `password` is the ONLY field. Empty string = explicit clear.
@@ -188,6 +226,7 @@ module.exports = {
     mainchainBody,
     generalBody,
     notificationsBody,
+    storageBody,
     antiSnipeBody,
     validateBody,
 };

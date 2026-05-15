@@ -641,6 +641,49 @@
             alerts_err_disk_critical: 'Disk-critical threshold must be between 1 and 10,000 GB and strictly less than the warn threshold.',
             alerts_err_peer_grace:    'Peer-zero grace must be between 1 and 120 minutes.',
             alerts_err_sync_grace:    'Sync-stall grace must be between 1 and 240 minutes.',
+
+            // beta.3.20 — Phase 3 Storage section expansion. Two
+            // operator-tunable policies (log retention + keystore
+            // backup interval) drive the EnmStorageMaintenance 24h
+            // cron. No manual buttons (operator directive #4 — "no
+            // manual, everything automatic"). The section also shows
+            // a read-only disk-usage breakdown + last-backup info.
+            storage_disk_label:       'Disk usage on this server',
+            storage_disk_help:        'Live snapshot. Auto-refreshes when you open this section.',
+            storage_disk_chain_data:  'Chain data',
+            storage_disk_logs:        'Logs',
+            storage_disk_audit:       'Audit log',
+            storage_disk_backups:     'Backups',
+            storage_disk_total:       'Total',
+            storage_disk_loading:     'Reading disk usage…',
+            storage_disk_failed:      'Couldn’t read disk usage. Retrying.',
+            // Log retention.
+            storage_log_gzip_label:   'Compress old logs after',
+            storage_log_gzip_help:    'Closed log files older than this get gzipped in place. Default 7 days.',
+            storage_log_retention_label: 'Delete old logs after',
+            storage_log_retention_help:  'Compressed *.log.gz files older than this are removed automatically. Must be greater than the compress-age. Default 30 days.',
+            // Keystore backup.
+            storage_backup_section_label: 'Keystore auto-backup',
+            storage_backup_section_help:  'ENM copies your keystore.dat to a separate backup directory on a fixed schedule. No action needed — restore is just copying the .dat back into place if the install is ever lost.',
+            storage_backup_interval_label: 'Backup every',
+            storage_backup_interval_help:  'Auto-backup cadence. The job runs on a 24-hour timer; it backs up only when this many days have passed since the last copy. Default 7 days.',
+            storage_backup_keep_label:   'Keep latest',
+            storage_backup_keep_help:    'How many backup copies to retain. Older copies are deleted automatically. Default 4.',
+            storage_backup_status_label: 'Status',
+            storage_backup_last:         'Last backup: <strong>{when}</strong> at <code>{path}</code>',
+            storage_backup_last_never:   'No automatic backup yet. The next 24-hour cycle will create one.',
+            storage_backup_no_keystore:  'No keystore on disk yet. Auto-backup will start once you finish the setup wizard.',
+            storage_backup_dir_hint:     'All backups live in <code>{dir}</code>. Restore by copying a .dat back into the keystore path.',
+            // Validation errors.
+            storage_err_log_gzip:       'Log compress-age must be between 1 and 365 days.',
+            storage_err_log_retention:  'Log retention must be between 1 and 3,650 days and greater than the compress-age.',
+            storage_err_backup_interval:'Backup interval must be between 1 and 90 days.',
+            storage_err_backup_keep:    'Backup keep-count must be between 1 and 50.',
+            // Time-ago.
+            storage_relative_just_now:  'just now',
+            storage_relative_minutes:   '{n} min ago',
+            storage_relative_hours:     '{n} h ago',
+            storage_relative_days:      '{n} d ago',
         },
 
         validator_card: {

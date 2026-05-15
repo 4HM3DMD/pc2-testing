@@ -1799,6 +1799,148 @@ body[data-app-size="compact"] .enm-sys-cell:last-child,
     line-height: 1.5;
 }
 
+/* beta.3.20 — Storage section additions. Phase 3 added a disk-usage
+   panel + a keystore-backup status block + a callout-style heading
+   for the backup section. */
+.enm-storage-disk-panel {
+    margin-bottom: var(--sp-3);
+    padding: var(--sp-3) var(--sp-4);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-md);
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-3);
+}
+.enm-storage-disk-head {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.enm-storage-disk-head-label {
+    font-size: var(--fs-body);
+    font-weight: var(--fw-semibold);
+    color: var(--text-primary);
+}
+.enm-storage-disk-head-help {
+    font-size: var(--fs-caption);
+    color: var(--text-tertiary);
+    line-height: 1.5;
+}
+.enm-storage-disk-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: var(--sp-3);
+}
+.enm-storage-disk-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: var(--sp-2) var(--sp-3);
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-sm);
+    min-width: 0;
+}
+.enm-storage-disk-cell-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-tertiary);
+    font-weight: var(--fw-semibold);
+}
+.enm-storage-disk-cell-value {
+    font-family: var(--font-mono);
+    font-size: var(--fs-body);
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+    font-weight: var(--fw-semibold);
+    word-break: break-word;
+}
+.enm-storage-disk-total {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-top: var(--sp-2);
+    border-top: 1px dashed var(--border-subtle);
+}
+.enm-storage-disk-total-label {
+    font-size: var(--fs-caption);
+    color: var(--text-tertiary);
+    font-weight: var(--fw-semibold);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+.enm-storage-disk-total-value {
+    font-family: var(--font-mono);
+    font-size: var(--fs-body);
+    color: var(--accent);
+    font-weight: var(--fw-semibold);
+    font-variant-numeric: tabular-nums;
+}
+/* Narrow-mode: stack the 4-col grid to 2-col, compact stacks to 1-col.
+   Mirror the .enm-identity-producer-grid responsive treatment. */
+body[data-app-size="narrow"]  .enm-storage-disk-grid,
+.enm-app[data-app-size="narrow"]  .enm-storage-disk-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+body[data-app-size="compact"] .enm-storage-disk-grid,
+.enm-app[data-app-size="compact"] .enm-storage-disk-grid {
+    grid-template-columns: 1fr;
+}
+
+/* Keystore backup callout — same shape as .enm-security-callout but
+   themed with the success palette so it reads as "this is a feature
+   that protects you, no action needed". */
+.enm-storage-backup-callout {
+    background: var(--success-bg);
+    border-left: 3px solid var(--success);
+    border-radius: 0 var(--r-sm) var(--r-sm) 0;
+    padding: var(--sp-2) var(--sp-3);
+    margin: var(--sp-3) 0 var(--sp-1);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.enm-storage-backup-callout-head {
+    font-size: 10px;
+    font-weight: var(--fw-semibold);
+    color: var(--success);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+.enm-storage-backup-callout-body {
+    font-size: var(--fs-caption);
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+
+.enm-storage-backup-status {
+    font-size: var(--fs-caption);
+    color: var(--text-secondary);
+    line-height: 1.55;
+    word-break: break-word;
+}
+.enm-storage-backup-status strong {
+    color: var(--text-primary);
+    font-weight: var(--fw-semibold);
+}
+.enm-storage-backup-status code {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    background: var(--bg-elevated);
+    padding: 1px 5px;
+    border-radius: var(--r-xs);
+    color: var(--accent);
+    word-break: break-all;
+}
+.enm-storage-backup-dir-hint {
+    margin-top: 4px;
+    font-size: var(--fs-caption);
+    color: var(--text-tertiary);
+    line-height: 1.5;
+}
+
 /* (3) Restart modal. Reuses the .enm-modal-scrim + .enm-modal-card
    chrome from phase-06 (already shipped by proposal-card + tools-
    update-card). This rule just sizes the restart variant — the

@@ -248,6 +248,22 @@ async function main() {
         log('error', `healing init failed: ${err.message}`);
     }
 
+    // beta.3.20 (Phase 3) — periodic storage maintenance. Compacts
+    // chain logs every 24h (gzip+purge per cfg.global.logRotation) and
+    // auto-backs-up the keystore every N days (default 7) per
+    // cfg.global.backup.keystoreIntervalDays. Operator never has to
+    // run a manual rotate or backup; both are scheduled and idempotent.
+    try {
+        const { EnmStorageMaintenance } = require('./services/EnmStorageMaintenance');
+        const storageMaintenance = new EnmStorageMaintenance({
+            extensionHandle,
+            listChains: () => ChainRegistry.listChains(),
+        });
+        storageMaintenance.start();
+    } catch (err) {
+        log('error', `storage maintenance init failed: ${err.message}`);
+    }
+
     // 0.2.0-beta.3.8 — wire AuditLog → SseHub bridge. Every audit row
     // inserted via EnmAuditLog.append() now also publishes on the
     // `audit` topic (scoped to the row's wallet via publishToWallet

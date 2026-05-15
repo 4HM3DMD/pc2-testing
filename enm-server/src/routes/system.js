@@ -13,8 +13,54 @@
 
 const express = require('express');
 const os = require('node:os');
+const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
+
+// beta.3.20 — synchronous fs used for the existsSync probe in
+// GET /system/storage. Wrapped in a function so the module can be
+// loaded in environments that mock `fs` (the test-server build).
+function fsSync() { return fs; }
+
+/**
+ * beta.3.20 — recursive directory size in bytes. Catches every
+ * stat/readdir error and returns 0 for that branch so a single
+ * unreadable file doesn't fail the whole walk. Bounded depth (32)
+ * to defeat symlink loops; bounded entries (50k) to keep the walk
+ * cheap on pathological dirs.
+ */
+async function dirSizeSafe(p, depth) {
+    if (typeof p !== 'string' || p.length === 0) { return 0; }
+    if ((depth || 0) > 32) { return 0; }
+    let stat;
+    try { stat = await fsp.stat(p); }
+    catch (_) { return 0; }
+    if (stat.isFile()) { return stat.size; }
+    if (!stat.isDirectory()) { return 0; }
+    let entries;
+    try { entries = await fsp.readdir(p); }
+    catch (_) { return 0; }
+    let total = 0;
+    let count = 0;
+    for (const name of entries) {
+        if (++count > 50_000) { break; }
+        total += await dirSizeSafe(path.join(p, name), (depth || 0) + 1);
+    }
+    return total;
+}
+
+async function fileSizeSafe(p) {
+    if (typeof p !== 'string' || p.length === 0) { return 0; }
+    try {
+        const s = await fsp.stat(p);
+        return s.isFile() ? s.size : 0;
+    } catch (_) { return 0; }
+}
+
+function bytesToMb(bytes) {
+    if (!Number.isFinite(bytes) || bytes <= 0) { return 0; }
+    return Math.round((bytes / 1024 / 1024) * 100) / 100;
+}
 
 const { ENM_LOG_PREFIX, errorBody, successBody } = require('../services/EnmConstants');
 const { limit } = require('../services/EnmRateLimit');
@@ -192,6 +238,95 @@ function build(extensionHandle) {
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} /system/identity error: ${err.message}`);
             return res.status(500).json(errorBody('Failed to read node identity.'));
+        }
+    });
+
+    /**
+     * GET /system/storage
+     *
+     * beta.3.20 (Phase 3) — disk-usage breakdown + auto-backup
+     * status for the Settings Storage section. Read-only; aggregates
+     * directory sizes from the chain data dir, log subdirs, the ENM
+     * SQLite DB, and the keystore-backup root.
+     *
+     * Output shape:
+     * {
+     *   diskMb: {
+     *     chainData: number,   // chains/<id>/elastos minus logs
+     *     logs:      number,   // chains/<id>/elastos/logs
+     *     auditDb:   number,   // enm.db
+     *     backups:   number,   // backups/elastos-node-manager
+     *     total:     number,
+     *   },
+     *   backup: {
+     *     lastAt:        number|null,   // epoch ms
+     *     lastPath:      string|null,
+     *     intervalDays:  number,
+     *     keepCount:     number,
+     *     keystorePresent: boolean,     // true iff chains/<id>/keystore.dat exists
+     *   },
+     *   logRotation: { gzipAfterDays, purgeAfterDays },
+     * }
+     */
+    router.get('/storage', limit('read'), async (req, res) => {
+        const wallet = readActorWallet(req);
+        if (!wallet) {
+            return res.status(401).json(errorBody('Authentication required.'));
+        }
+        try {
+            const cfg = await ConfigStore.load();
+            const chainsDir = path.join(enmDataDir(), 'chains');
+            const mainchainRoot = chainDir('mainchain');
+            const elastosRoot = path.join(mainchainRoot, 'elastos');
+            const logsRoot = path.join(elastosRoot, 'logs');
+            const dbPath = path.join(enmDataDir(), 'enm.db');
+            const pc2Data = process.env.PC2_DATA_DIR
+                || path.dirname(path.dirname(enmDataDir()));
+            const backupRoot = path.join(pc2Data, 'backups', 'elastos-node-manager');
+
+            // Walk sizes in parallel. Each walk catches its own errors
+            // so a missing dir (pre-setup) returns 0 instead of
+            // throwing the whole request.
+            const [elastosBytes, logsBytes, dbBytes, backupsBytes] = await Promise.all([
+                dirSizeSafe(elastosRoot),
+                dirSizeSafe(logsRoot),
+                fileSizeSafe(dbPath),
+                dirSizeSafe(backupRoot),
+            ]);
+            // Chain data = elastos minus logs (don't double-count).
+            const chainDataBytes = Math.max(0, elastosBytes - logsBytes);
+
+            const keystoreSrc = path.join(mainchainRoot, 'keystore.dat');
+            const keystorePresent = fsSync().existsSync(keystoreSrc);
+
+            const g = (cfg && cfg.global) || {};
+            const b = (g.backup) || {};
+            const lr = (g.logRotation) || {};
+
+            const diskMb = {
+                chainData: bytesToMb(chainDataBytes),
+                logs:      bytesToMb(logsBytes),
+                auditDb:   bytesToMb(dbBytes),
+                backups:   bytesToMb(backupsBytes),
+                total:     bytesToMb(chainDataBytes + logsBytes + dbBytes + backupsBytes),
+            };
+            const backup = {
+                lastAt:          Number.isFinite(b.lastKeystoreBackupAt) ? b.lastKeystoreBackupAt : null,
+                lastPath:        typeof b.lastKeystoreBackupPath === 'string' ? b.lastKeystoreBackupPath : null,
+                intervalDays:    Number.isFinite(b.keystoreIntervalDays) ? b.keystoreIntervalDays : 7,
+                keepCount:       Number.isFinite(b.keystoreKeepCount) ? b.keystoreKeepCount : 4,
+                keystorePresent,
+                backupDir:       backupRoot,
+            };
+            const logRotation = {
+                gzipAfterDays:  Number.isFinite(lr.gzipAfterDays) ? lr.gzipAfterDays : 7,
+                purgeAfterDays: Number.isFinite(lr.purgeAfterDays) ? lr.purgeAfterDays : 30,
+            };
+
+            return res.json(successBody({ diskMb, backup, logRotation }));
+        } catch (err) {
+            extensionHandle.log.error(`${ENM_LOG_PREFIX} /system/storage error: ${err.message}`);
+            return res.status(500).json(errorBody('Failed to read storage status.'));
         }
     });
 
