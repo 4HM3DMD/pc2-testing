@@ -3376,6 +3376,11 @@ body[data-app-size="compact"] .enm-section-card-foot .enm-btn,
 /* Default — if data-audit-mode isn't set yet (older bundles), hide
  * the friendly columns so the table doesn't render double cells. */
 .enm-audit:not([data-audit-mode]) .col-friendly { display: none; }
+/* beta.3.49 — CRITICAL-INFO rows are descriptive duplicates of the
+ * same HTTP-MUTATION mutation row. In friendly mode we collapse them
+ * out so the timeline reads as one event per action; technical mode
+ * still shows them for forensic detail. */
+.enm-audit[data-audit-mode="friendly"] .enm-audit-row-info-duplicate { display: none; }
 /* Friendly-column-specific typography. "What" carries the action
  * description so it should read like body text, not mono. "When"
  * stays mono so it tabular-aligns. */

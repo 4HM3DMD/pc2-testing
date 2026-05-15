@@ -560,6 +560,14 @@
         var idx = this._rows.length - 1;
         var tr = document.createElement('tr');
         tr.dataset.tier = e.tier || '';
+        // beta.3.49 — CRITICAL-INFO rows are descriptive duplicates
+        // of the same HTTP mutation already represented by the
+        // HTTP-MUTATION middleware row. Hide them in friendly mode
+        // so the timeline isn't double-counted; still visible in
+        // technical mode for forensic detail.
+        if (e.tier === 'CRITICAL-INFO') {
+            tr.classList.add('enm-audit-row-info-duplicate');
+        }
         tr.dataset.idx = String(idx);
         tr.setAttribute('tabindex', '0');
         tr.setAttribute('role', 'button');
@@ -632,6 +640,10 @@
         var self = this;
         var tr = document.createElement('tr');
         tr.dataset.tier = e.tier || '';
+        // beta.3.49 — same CRITICAL-INFO hide as _renderLiveRow.
+        if (e.tier === 'CRITICAL-INFO') {
+            tr.classList.add('enm-audit-row-info-duplicate');
+        }
         // a11y: row is keyboard-actionable. Enter opens the drawer.
         tr.setAttribute('tabindex', '0');
         tr.setAttribute('role', 'button');
@@ -1091,17 +1103,34 @@
         if (sec < 60)       { return sec + 's ago'; }
         var min = Math.floor(sec / 60);
         if (min < 60)       { return min + ' min ago'; }
-        var hr = Math.floor(min / 60);
         var d = new Date(ms);
         var nowD = new Date();
+        function _hhmm(date) {
+            return ('' + date.getHours()).padStart(2, '0')
+                + ':' + ('' + date.getMinutes()).padStart(2, '0');
+        }
         var sameDay = d.getDate() === nowD.getDate()
             && d.getMonth() === nowD.getMonth()
             && d.getFullYear() === nowD.getFullYear();
         if (sameDay) {
-            return 'Today ' + ('' + d.getHours()).padStart(2, '0')
-                + ':' + ('' + d.getMinutes()).padStart(2, '0');
+            return 'Today ' + _hhmm(d);
         }
+        // beta.3.49 — distinct "Yesterday HH:MM" label so the >24h
+        // bucket doesn't get the awkward "0d ago" / "1d ago" wording
+        // for events that happened just a few hours ago but past
+        // local midnight.
+        var yesterday = new Date(now);
+        yesterday.setDate(yesterday.getDate() - 1);
+        if (d.getDate() === yesterday.getDate()
+            && d.getMonth() === yesterday.getMonth()
+            && d.getFullYear() === yesterday.getFullYear()) {
+            return 'Yesterday ' + _hhmm(d);
+        }
+        var hr = Math.floor(min / 60);
         var days = Math.floor(hr / 24);
+        // Defensive: anything sub-24h on a different calendar day
+        // already returned above. Treat a stray days===0 as Today.
+        if (days < 1) { return 'Today ' + _hhmm(d); }
         if (days < 30) { return days + 'd ago'; }
         return formatTs(ms);  // older than 30 days — show full timestamp
     }
@@ -1163,17 +1192,55 @@
         'POST /setup/keystore':             'Generated keystore',
         'POST /setup/network':              'Configured network',
         'POST /setup/complete':             'Finished setup',
+        // beta.3.49 — extra routes the audit middleware records when
+        // operators (or smoke tests) hit them. POST /maintenance/status
+        // is the "wrong-method" canonical example (status is a GET-only
+        // resource); show it as a route probe rather than the raw
+        // path string.
+        'POST /maintenance/status':         'Probed maintenance state',
+        'GET /maintenance/status':          'Checked maintenance state',
+        'POST /healing/proposals/:id/approve': 'Approved healing proposal',
+        'POST /healing/proposals/:id/reject':  'Rejected healing proposal',
+        'POST /healing/proposals/:id/ack':      'Acknowledged proposal',
     };
     function friendlyAction(e) {
         var rule = e.ruleId || e.rule_id;
         if (rule && Object.prototype.hasOwnProperty.call(RULE_FRIENDLY, rule)) {
             return RULE_FRIENDLY[rule];
         }
-        // For CRITICAL-INFO rows where ruleId is null, the outcome
-        // field carries the descriptive text written by routes/*
-        // _audit() calls (e.g. "Identity reset: new pubkey 03d2…").
-        if (!rule && e.outcome) { return String(e.outcome); }
-        return rule || '—';
+        // beta.3.49 — older rows (pre-3.47 middleware shape) had
+        // ruleId=null + outcome="success". Surfacing "success" as the
+        // action label is useless. Skip those status-only outcomes
+        // and fall back to a tier-based generic label so the column
+        // still reads sensibly while old rows roll off via retention.
+        var outStr = e.outcome ? String(e.outcome) : '';
+        var isJustStatus = /^(success|failure|failed|ok|done)$/i.test(outStr.trim());
+        if (!rule && e.outcome && !isJustStatus) {
+            return _sanitizeOutcomeText(outStr);
+        }
+        if (rule) { return rule; }
+        if (e.tier === 'AUTOMATED-SAFE')  { return 'Automated maintenance'; }
+        if (e.tier === 'CRITICAL-NOTIFY') { return 'Alert raised'; }
+        if (e.tier === 'OWNER-CONFIRMS')  { return 'Healing proposal'; }
+        if (e.tier === 'HTTP-MUTATION')   { return 'Setting change'; }
+        return 'Activity recorded';
+    }
+
+    // beta.3.49 — strip technical detail (absolute paths, raw command
+    // strings, stack traces) from descriptive outcome text so the
+    // friendly column doesn't dump implementation specifics. The
+    // technical Outcome column still shows the raw text verbatim.
+    function _sanitizeOutcomeText(s) {
+        var v = String(s);
+        v = v.replace(/Command failed:.*$/, '').trim();
+        v = v.replace(/\/var\/lib\/pc2\/data\/extensions\/elastos-node-manager\/\S+/g, '<ela-cli>');
+        v = v.replace(/\s*stderr:.*$/, '').trim();
+        v = v.replace(/:\s*ela-cli wallet account failed:?\s*$/, '').trim();
+        if (/password wrong|open wallet failed|Password incorrect/i.test(v)) {
+            return v.split(':')[0].trim() + ' (password incorrect)';
+        }
+        if (v.length > 140) { v = v.slice(0, 137) + '…'; }
+        return v;
     }
 
     // Map tier codes to short friendly chip labels for both the table
