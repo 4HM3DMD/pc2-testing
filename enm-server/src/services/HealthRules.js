@@ -609,23 +609,34 @@ const RULE_METADATA = Object.freeze({
            description: 'Another process on this host is bound to a port ela needs (20338 / 20339 / 20336). Surface critical for operator triage.' },
 });
 
+// beta.3.22 — every rule is enabled by default. The operator-facing
+// audit found EVERY rule except F1 was sitting off, which made the
+// "Auto-execute safe healing" toggle nearly meaningless: even the
+// alerts that just notify (CRITICAL_NOTIFY tier) never fired. Per
+// directive #4 ("automatic for the user"), the healing system should
+// work out-of-the-box without the operator hand-toggling 15
+// detectors. Grace periods on each detect function (peer-zero ≥5min,
+// RPC unreachable ≥2min, height stall ≥10min, etc.) absorb normal
+// startup / transient conditions, so flipping the default to true is
+// safe — false positives during boot are gated by the grace timers,
+// not by the rule being off.
 const DEFAULT_ENABLED = Object.freeze({
     F1: true,   // process exited unexpectedly → auto-restart
-    F2: false,  // RPC unreachable
-    F3: false,  // peer count zero
-    F4: false,  // sync stalled
-    F5: false,  // disk space
-    F6: false,  // log directory growth
-    F7: false,  // memory ceiling
-    F8: false,  // height regression
-    F9: false,  // config drift
-    F10: false, // RPC password rotation
-    F11: false, // BPoS deposit drift
-    F12: false, // producer inactiveRounds
-    F13: false, // clock skew
-    F16: false, // peer-zero fallback
-    F18: false, // BPoS no-inbound
-    F19: false, // host conflict (HostConflictScanner has its own dedup)
+    F2: true,   // RPC unreachable (2-min grace)
+    F3: true,   // peer count zero (5-min grace, operator-tunable)
+    F4: true,   // sync stalled (10-min grace, operator-tunable)
+    F5: true,   // disk space (operator-tunable thresholds)
+    F6: true,   // OOM killed
+    F7: true,   // binary version drift
+    F8: true,   // height regression
+    F9: true,   // config drift on disk
+    F10: true,  // RPC password rotation reminder
+    F11: true,  // BPoS deposit drift
+    F12: true,  // producer inactiveRounds (NEVER_AUTOMATIC; alert only)
+    F13: true,  // clock skew
+    F16: true,  // peer-zero fallback
+    F18: true,  // BPoS no-inbound
+    F19: true,  // host conflict (HostConflictScanner has its own dedup)
 });
 
 const _enabledOverrides = new Map();

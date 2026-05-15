@@ -93,10 +93,40 @@ const globalSchema = Joi.object({
     }).default(),
     notifications: Joi.object({
         criticalRequiresAck: Joi.boolean().default(true),
+        // beta.3.19 (Phase 2 Alerts) — operator-tunable thresholds
+        // for HealthChecker's F3 / F4 / F5 detectors. Defaults match
+        // the alpha.28 hardcoded values; bounds mirror the Joi
+        // request-body schema in EnmRequestSchemas.notificationsBody.
+        thresholds: Joi.object({
+            diskFreeWarnGb:     Joi.number().integer().min(10).max(10000).optional(),
+            diskFreeCriticalGb: Joi.number().integer().min(1).max(10000).optional(),
+            peerZeroGraceMin:   Joi.number().integer().min(1).max(120).optional(),
+            syncStallGraceMin:  Joi.number().integer().min(1).max(240).optional(),
+        }).default({}),
     }).default(),
     audit: Joi.object({
         retentionDays: Joi.number().integer().min(0).max(3650).default(365),
     }).default(),
+    // beta.3.10 — scrypt hash for the anti-snipe password. Persisted
+    // here so SelfHealingEngine._verifyAntiSnipePassword can verify
+    // confirm-tier proposals against it. Format:
+    //     scrypt$<saltHex>$<derivedHex>
+    // Cleared (delete key) when the operator clicks "Clear" in the
+    // Security section. NEVER echoed back to the client — the
+    // EnmConfigRedact pass converts it to a `antiSnipePasswordSet`
+    // boolean before the /config GET response.
+    antiSnipePasswordHash: Joi.string().allow(null).pattern(/^scrypt\$[0-9a-f]+\$[0-9a-f]+$/).optional(),
+    // beta.3.20 (Phase 3 Storage) — keystore auto-backup state +
+    // policy. The service writes lastKeystoreBackupAt + path
+    // every successful backup; PUT /config/storage writes the
+    // policy fields. All fields optional so a config from an
+    // older beta still validates.
+    backup: Joi.object({
+        keystoreIntervalDays: Joi.number().integer().min(1).max(90).optional(),
+        keystoreKeepCount:    Joi.number().integer().min(1).max(50).optional(),
+        lastKeystoreBackupAt: Joi.number().integer().min(0).allow(null).optional(),
+        lastKeystoreBackupPath: Joi.string().allow(null, '').optional(),
+    }).default({}),
     // Auto-start: when PC2 boots and an extension's `ready` hook fires, start
     // any chain whose `enabled=true`. Reattach handles the "ela was already
     // running before PC2 restarted" case; this handles cold boots.
@@ -106,10 +136,14 @@ const globalSchema = Joi.object({
     }).default(),
     // Log rotation — gzip *.log older than gzipAfterDays, purge *.gz older
     // than purgeAfterDays. main.js scheduler runs compactNow every 24h.
+    // beta.3.20 — purgeAfterDays min lowered from 7 → 1 day so the
+    // Settings Storage section's range (1-3650) doesn't trip the
+    // schema. The cross-field "gzip < purge" rule is enforced in
+    // EnmRequestSchemas.storageBody at the PUT boundary.
     logRotation: Joi.object({
         enabled: Joi.boolean().default(true),
-        gzipAfterDays: Joi.number().integer().min(1).max(90).default(7),
-        purgeAfterDays: Joi.number().integer().min(7).max(3650).default(90),
+        gzipAfterDays: Joi.number().integer().min(1).max(365).default(7),
+        purgeAfterDays: Joi.number().integer().min(1).max(3650).default(30),
     }).default(),
 });
 
