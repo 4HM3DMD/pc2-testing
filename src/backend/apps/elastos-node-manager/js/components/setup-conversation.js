@@ -1299,10 +1299,24 @@
         if (label.indexOf('[') === 0) {
             label = s.phase || t('friendly.setup.card_b2.phase_preparing');
         }
-        if (s.phase === 'downloading' && s.bytesTotal) {
-            var got = (s.bytesDownloaded / (1024 ** 3)).toFixed(2);
-            var tot = (s.bytesTotal / (1024 ** 3)).toFixed(2);
-            label += ' — ' + got + ' / ' + tot + ' GB';
+        if (s.phase === 'downloading') {
+            // beta.3.41 — accept both the HTTP-poll shape
+            // ({bytesDownloaded, bytesTotal}) AND the SSE-emit shape
+            // ({got, total}). Pre-3.41 we only checked bytesTotal, so
+            // every SSE chunk-progress event re-rendered the label
+            // without the "X / Y GB" suffix — operator saw the GB
+            // counter flash for one HTTP-poll tick then vanish on
+            // the next SSE event. Mirror the applyStatus accept-both
+            // pattern from beta.3.37.
+            var got   = (typeof s.bytesDownloaded === 'number') ? s.bytesDownloaded
+                      : (typeof s.got === 'number') ? s.got : 0;
+            var total = (typeof s.bytesTotal === 'number') ? s.bytesTotal
+                      : (typeof s.total === 'number') ? s.total : 0;
+            if (total > 0) {
+                var gotGb = (got / (1024 ** 3)).toFixed(2);
+                var totGb = (total / (1024 ** 3)).toFixed(2);
+                label += ' — ' + gotGb + ' / ' + totGb + ' GB';
+            }
         }
         return label;
     }
