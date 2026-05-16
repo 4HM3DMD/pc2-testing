@@ -208,8 +208,24 @@ async function runFullDiagnose(deps) {
     // legacy /.config/elastos, systemd unit). This is the same scanner used
     // by the start route — we surface it here as part of the report so the
     // operator sees the full picture without a separate panel.
+    //
+    // beta.3.50 — forward ourPids so the scanner skips ports that our own
+    // managed ela is correctly holding. Without this, every diagnose run
+    // against a *running* chain returned 6 fake CRITICAL port_bound
+    // findings (rpc 20336, p2p 20338, info 20333, rest 20334, ws 20335,
+    // dpos 20339) — because HostConflictScanner's own-pid exemption (see
+    // beta.3.27 + beta.3.32 in HostConflictScanner.js) was unreachable
+    // from this code path. HealthChecker.js:455-468 already does this
+    // for the periodic scan; runFullDiagnose was the missing twin.
+    const ourPids = new Set();
     try {
-        const conflicts = await HostConflictScanner.scan({ logger: log });
+        const st = processService.statusSync(chainId);
+        if (st && Number.isInteger(st.pid) && st.pid > 0 && st.alive) {
+            ourPids.add(st.pid);
+        }
+    } catch (_) { /* empty set is the safe fallback */ }
+    try {
+        const conflicts = await HostConflictScanner.scan({ logger: log, ourPids });
         for (const c of conflicts) {
             findings.push({
                 id: 'host-conflict-' + c.type.toLowerCase(),
