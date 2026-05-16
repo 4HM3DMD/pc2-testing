@@ -45,6 +45,14 @@ const AUTO_FIX_ACTIONS = Object.freeze({
     RESTART_CHAIN:       'restart-chain',
     CONFIG_ROLLBACK:     'config-rollback',
     CLEAR_LEVELDB_LOCK:  'clear-leveldb-lock',
+    // beta.3.59 — operator-triggered chain rollback for the
+    // arbitrator-mismatch failure mode (sponsor-not-in-arbitrators
+    // validation rejection from a SIGKILLed-ela inconsistency).
+    // Invokes ela-cli rollback --height N --datadir <chainDir>/elastos.
+    // Requires the chain to be stopped first; backs up the live
+    // default.dcp before mutating any chain data. Keystore.dat is
+    // OUTSIDE the data path so the producer identity is untouched.
+    CHAIN_ROLLBACK:      'chain-rollback',
 });
 
 const STATUS = Object.freeze({

@@ -1056,7 +1056,11 @@ function build(extensionHandle) {
         try {
             const adapter = adapterOr404(req, res, extensionHandle);
             if (!adapter) return undefined;
-            const result = await runAutoFix(action, adapter, extensionHandle);
+            // beta.3.59 — chain-rollback takes a `height` query param. Hoisted
+            // into runAutoFix via the third options arg so the existing
+            // narrow-action contract isn't disrupted for the other actions.
+            const opts = { query: req.query || {} };
+            const result = await runAutoFix(action, adapter, extensionHandle, opts);
             return res.json(successBody({ action, ...result }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} POST /chains/${req.params.chainId}/auto-fix: ${err.message}`);
@@ -1330,7 +1334,7 @@ function classifyAutoFixError(err) {
  * @param {object} extensionHandle
  * @returns {Promise<{ ok: boolean, detail: string }>}
  */
-async function runAutoFix(action, adapter, extensionHandle) {
+async function runAutoFix(action, adapter, extensionHandle, opts) {
     const A = Diagnostics.AUTO_FIX_ACTIONS;
     if (action === A.REMOVE_STALE_PID) {
         const p = pidFilePath(adapter.chainId);
@@ -1371,7 +1375,109 @@ async function runAutoFix(action, adapter, extensionHandle) {
             throw err;
         }
     }
+    if (action === A.CHAIN_ROLLBACK) {
+        return runChainRollback(adapter, extensionHandle, opts);
+    }
     throw new Error('Unhandled action: ' + action);
+}
+
+/**
+ * beta.3.59 — operator-triggered chain rollback for the arbitrator-state
+ * mismatch failure mode. After a SIGKILL of ela (OOM, deploy bounce, hard
+ * reboot) the cp_dpos/default.dcp may have a stale arbitrator view; new
+ * blocks reference sponsors not in our local set; PowCheckBlockContext
+ * keeps rejecting them; height freezes. The recovery KB-confirmed by the
+ * Elastos.ELA source (cmd/rollback/rollback.go) is: stop ela, run
+ * ela-cli rollback --height N --datadir <chainDir>/elastos, restart.
+ *
+ * Safety:
+ *   - Chain must be stopped (409 Conflict otherwise via classifyAutoFixError)
+ *   - Height must be a positive integer, sufficiently below current height
+ *   - Backup of default.dcp is taken before any mutation
+ *   - keystore.dat lives at <chainDir>/keystore.dat, OUTSIDE the rollback
+ *     scope (which is <chainDir>/elastos/data/), so it's untouched
+ *   - No automatic restart afterwards — operator confirms a restart
+ *     separately so they can see the post-rollback state first
+ *
+ * @param {object} adapter
+ * @param {object} extensionHandle
+ * @param {object} opts
+ * @param {object} opts.query   parsed query string (height)
+ * @returns {Promise<{ok: boolean, detail: string, height: number, backupPath?: string}>}
+ */
+async function runChainRollback(adapter, extensionHandle, opts) {
+    const proc = ChainRegistry.getProcessService();
+    if (proc.statusSync(adapter.chainId).alive) {
+        throw new Error('Chain is alive — stop the chain before rollback.');
+    }
+    const heightRaw = opts && opts.query && opts.query.height;
+    const height = Number(heightRaw);
+    if (!Number.isInteger(height) || height < 1_000_000) {
+        // Floor guard: a rollback target below 1M almost certainly indicates
+        // operator typo, not a real arbitrator-mismatch recovery. The KB
+        // says rollback is "DANGEROUS, non-transactional" — be paranoid.
+        throw new Error('Invalid rollback target — height must be an integer >= 1,000,000.');
+    }
+    // Locate ela-cli via the binary downloader's known-good state.
+    const downloader = ChainRegistry.getBinaryDownloader();
+    if (!downloader) {
+        throw new Error('Binary downloader not available — cannot locate ela-cli.');
+    }
+    const onDisk = await downloader.getStatusWithDisk(adapter.chainId);
+    const cliPath = onDisk && onDisk.cliPath;
+    if (!cliPath) {
+        throw new Error('ela-cli not found on disk — cannot perform rollback.');
+    }
+    const dataDir = path.join(chainDir(adapter.chainId), 'elastos');
+    // Backup default.dcp before mutating. Non-fatal if it doesn't exist —
+    // the rollback itself rewinds blockchain state, default.dcp will be
+    // regenerated on next start.
+    const dcpPath = path.join(dataDir, 'data', 'checkpoints', 'cp_dpos', 'default.dcp');
+    const backupTs = new Date().toISOString().replace(/[:.]/g, '-');
+    const backupPath = `/tmp/default.dcp.bak.${backupTs}`;
+    try {
+        await fsp.copyFile(dcpPath, backupPath);
+        extensionHandle.log.info(`${ENM_LOG_PREFIX} chain-rollback ${adapter.chainId}: backed up default.dcp to ${backupPath}`);
+    } catch (err) {
+        if (err.code !== 'ENOENT') { throw err; }
+        // No default.dcp to back up — proceed; rollback regenerates it.
+    }
+    // Spawn ela-cli rollback. Use execFile (no shell), pass args directly.
+    const { execFile } = require('node:child_process');
+    const result = await new Promise((resolve, reject) => {
+        execFile(cliPath, [
+            'rollback',
+            '--height', String(height),
+            '--datadir', dataDir,
+        ], {
+            timeout: 5 * 60_000,  // 5 minutes — rollback of ~1000 blocks is fast
+            maxBuffer: 4 * 1024 * 1024,
+        }, (err, stdout, stderr) => {
+            if (err) {
+                err.stdout = stdout;
+                err.stderr = stderr;
+                return reject(err);
+            }
+            resolve({ stdout, stderr });
+        });
+    });
+    extensionHandle.log.info(`${ENM_LOG_PREFIX} chain-rollback ${adapter.chainId}: completed at height=${height}; stdout(tail)=${String(result.stdout).slice(-200)}`);
+    // ALSO delete default.dcp so ela rebuilds from the most-recent
+    // <height>.dcp ≤ N on next start. Without this, ela might re-load
+    // the still-present (now-stale relative to rollback height) default.dcp.
+    try {
+        await fsp.unlink(dcpPath);
+    } catch (err) {
+        if (err.code !== 'ENOENT') {
+            extensionHandle.log.warn(`${ENM_LOG_PREFIX} chain-rollback ${adapter.chainId}: could not unlink default.dcp (non-fatal): ${err.message}`);
+        }
+    }
+    return {
+        ok: true,
+        detail: `Chain rolled back to height ${height}. Start the chain to resume sync from there. Backup at ${backupPath}.`,
+        height,
+        backupPath,
+    };
 }
 
 /**
