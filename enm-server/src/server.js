@@ -263,6 +263,21 @@ async function main() {
         log('error', `healing init failed: ${err.message}`);
     }
 
+    // beta.3.51 — autoStart loop. Schema's `global.autoStart.onBoot` (default
+    // true) was dead code prior to this release: reattach() only re-bound to
+    // ela processes that were ALREADY running, so any boot where ela had
+    // exited (deploy, crash, host reboot, post-resync) left enabled chains
+    // `stopped` until F1's slow self-heal cadence eventually fired. Now we
+    // schedule a post-reattach start pass after `delaySec` (default 10s).
+    // See services/EnmAutoStart.js for gating + audit details.
+    try {
+        const { runAutoStart } = require('./services/EnmAutoStart');
+        const decision = await runAutoStart({ extensionHandle, registry: ChainRegistry });
+        log('info', `autoStart: ${JSON.stringify(decision)}`);
+    } catch (err) {
+        log('error', `autoStart init failed: ${err.message}`);
+    }
+
     // beta.3.20 (Phase 3) — periodic storage maintenance. Compacts
     // chain logs every 24h (gzip+purge per cfg.global.logRotation) and
     // auto-backs-up the keystore every N days (default 7) per
