@@ -1060,7 +1060,13 @@ function build(extensionHandle) {
             return res.json(successBody({ action, ...result }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} POST /chains/${req.params.chainId}/auto-fix: ${err.message}`);
-            return res.status(500).json(errorBody(err.message));
+            // beta.3.53 — classify known precondition failures as 409 Conflict
+            // instead of a misleading 500. These are operator-correctable
+            // states (chain is alive when we'd need it stopped; no backup to
+            // restore; etc.) — they aren't internal-server errors. 500 stays
+            // the default for genuinely-unexpected failures.
+            const statusCode = classifyAutoFixError(err);
+            return res.status(statusCode).json(errorBody(err.message));
         }
     });
 
@@ -1293,6 +1299,25 @@ function build(extensionHandle) {
     });
 
     return router;
+}
+
+/**
+ * beta.3.53 — Map known precondition error messages thrown by runAutoFix
+ * to the HTTP status that actually describes them. "Chain is alive" (refuse
+ * to clear LOCK on a running DB) is a 409 Conflict, not a 500: the operator
+ * has to stop the chain before this action can succeed — nothing crashed on
+ * the server. Genuine unexpected errors keep 500.
+ *
+ * @param {Error} err
+ * @returns {number} HTTP status code
+ */
+function classifyAutoFixError(err) {
+    const msg = (err && err.message) ? String(err.message) : '';
+    // Precondition: resource state doesn't permit this action right now.
+    if (/Chain is alive/i.test(msg)) { return 409; }
+    if (/No backup config/i.test(msg)) { return 409; }
+    // Unknown — keep the default.
+    return 500;
 }
 
 /**

@@ -143,6 +143,40 @@ class HealthChecker {
 
             // F1 input: process alive vs not.
             const alive = !!status.alive;
+
+            // beta.3.53 — synthesize a lastExit when we observe alive=true→false
+            // without having received an 'exit' event from the child handle.
+            // This is the only path F1 can use after reattach (where ENM has no
+            // child handle and therefore can never get a real exit event).
+            // Preconditions:
+            //   - We saw this chain alive in our own lifetime (_observedAliveOnce)
+            //   - The previous fast tick saw it alive (_wasAlivePrevTick)
+            //   - Current tick sees it dead (alive === false)
+            //   - We don't already have a lastExit recorded (don't clobber a
+            //     real exit event)
+            // Synthetic exit: code=null, signal=null, manualStop=false,
+            // observedVia tag for debuggability. F1 treats this the same as
+            // a real non-clean exit (code != 0 || signal present is false here,
+            // but the cleanlyExited check in detectF1 requires code===0 to skip
+            // — code===null does NOT skip, so F1 fires).
+            if (s._observedAliveOnce && s._wasAlivePrevTick && !alive && !s.lastExit) {
+                s.lastExit = {
+                    code: null,
+                    signal: null,
+                    manualStop: false,
+                    at: Date.now(),
+                    observedVia: 'fastTick-transition',
+                };
+                this.extensionHandle.log.warn(
+                    `${ENM_LOG_PREFIX} ${chainId}: alive→dead transition without exit event `
+                    + `(reattached process gone); synthesizing lastExit so F1 fires.`,
+                );
+            }
+            // Update transition trackers AFTER the synthesis check so we read
+            // the previous-tick value first.
+            s._wasAlivePrevTick = alive;
+            if (alive) { s._observedAliveOnce = true; }
+
             // RPC reachability ping (cheap — one HTTP request via EnmRpcClient).
             let rpcSummary = null;
             if (alive) {
@@ -517,6 +551,22 @@ class HealthChecker {
                 lastBinaryVersion: null,
                 lastExit: null,
                 restartAttempts: 0,
+                // beta.3.53 — F1 reattach fix. `lastExit` is populated by the
+                // 'exit' EventEmitter callback that NativeProcessService fires
+                // when a child process it spawned terminates. After ENM
+                // reattaches to an ela that was spawned by a *previous* ENM
+                // lifetime, there is no child handle — so no exit event ever
+                // fires. Result: when the reattached ela dies, statusSync
+                // detects alive=false but lastExit stays null, and F1's
+                // `if (!exit) return null` guard silences the crash.
+                //
+                // We close the gap by tracking whether we ever saw this chain
+                // alive in our own lifetime. If we did, and statusSync flips
+                // alive=true → false without an exit event, we synthesize a
+                // lastExit so F1 can fire. First-boot (never seen alive) is
+                // unchanged — F1 stays silent on "unknown initial state".
+                _wasAlivePrevTick: false,
+                _observedAliveOnce: false,
             };
             this.state.set(chainId, s);
         }
