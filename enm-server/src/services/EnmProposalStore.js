@@ -31,6 +31,11 @@ const STATUS = Object.freeze({
     EXECUTED: 'executed',
     EXPIRED:  'expired',
     FAILED:   'failed',
+    // beta.3.55 — added so HealthChecker can retire pending proposals whose
+    // underlying condition has cleared (chain back to alive+RPC-reachable).
+    // Dashboard listPending filter excludes this status, so auto-resolved
+    // rows stop nagging the operator after the system self-heals.
+    AUTO_RESOLVED: 'auto_resolved',
 });
 
 const DEFAULT_TTL_SEC = 3600;
@@ -260,6 +265,59 @@ async function markExecuted(db, id, result) {
 }
 
 /**
+ * beta.3.55 — list pending proposals for a specific chain, regardless of
+ * wallet. Used by HealthChecker's auto-resolve sweep, which is keyed by
+ * chain (the recovery condition is per-chain, not per-wallet).
+ *
+ * @param {object} db
+ * @param {string} chainId
+ * @returns {Promise<Array<ProposalRow>>}
+ */
+async function listPendingByChain(db, chainId) {
+    if (!db || !chainId) {
+        return [];
+    }
+    const rows = await db.read(
+        `SELECT id, wallet_address, chain_id, rule_id, type, status,
+                summary_action, summary_reason, proposed_at, expires_at,
+                approved_at, rejected_at, executed_at, rejection_reason,
+                outcome, payload_json
+         FROM enm_proposals
+         WHERE chain_id = ? AND status = ?`,
+        [String(chainId), STATUS.PENDING],
+    );
+    return Array.isArray(rows) ? rows : [];
+}
+
+/**
+ * beta.3.55 — retire a pending proposal because the underlying condition
+ * has cleared (e.g., chain auto-restarted by F1 or autoStart). The reason
+ * is stored in `outcome` so the audit-tab's history view explains why
+ * the operator never had to act on it.
+ *
+ * No-op if the proposal isn't pending (already approved/rejected/expired).
+ *
+ * @param {object} db
+ * @param {string} id
+ * @param {string} reason
+ * @returns {Promise<ProposalRow|null>}
+ */
+async function markAutoResolved(db, id, reason) {
+    const now = Date.now();
+    const outcomeText = reason ? String(reason).slice(0, 500) : null;
+    const res = await db.write(
+        `UPDATE enm_proposals
+            SET status = ?, executed_at = ?, outcome = ?
+          WHERE id = ? AND status = ?`,
+        [STATUS.AUTO_RESOLVED, now, outcomeText, id, STATUS.PENDING],
+    );
+    if (!res || (res.changes != null && res.changes === 0)) {
+        return null;
+    }
+    return getById(db, id);
+}
+
+/**
  * Bulk-mark expired pending rows. Called from listPending and from a 1-min
  * sweep timer in main.js (Phase 4 wiring).
  *
@@ -314,10 +372,12 @@ module.exports = {
     create,
     getById,
     listPending,
+    listPendingByChain,
     listRecent,
     approve,
     reject,
     markExecuted,
+    markAutoResolved,
     sweepExpired,
     decodePayload,
 };

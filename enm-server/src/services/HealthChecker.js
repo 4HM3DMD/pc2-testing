@@ -40,6 +40,9 @@ const { validate } = require('./EnmConfigSchema');
 const { chainDir } = require('./DataDir');
 const ClockSkewChecker = require('./ClockSkewChecker');
 const HostConflictScanner = require('./HostConflictScanner');
+// beta.3.55 — auto-resolve pending healing proposals when the chain recovers.
+const ProposalStore = require('./EnmProposalStore');
+const AuditLog = require('./EnmAuditLog');
 
 class HealthChecker {
     /**
@@ -175,7 +178,15 @@ class HealthChecker {
             // Update transition trackers AFTER the synthesis check so we read
             // the previous-tick value first.
             s._wasAlivePrevTick = alive;
-            if (alive) { s._observedAliveOnce = true; }
+            if (alive) {
+                s._observedAliveOnce = true;
+                // First alive-tick of this up-period sets the timestamp.
+                // Subsequent alive ticks leave it (so _aliveSinceMs grows
+                // monotonically while up). A dead tick resets it to null.
+                if (!s._aliveSinceMs) { s._aliveSinceMs = Date.now(); }
+            } else {
+                s._aliveSinceMs = null;
+            }
 
             // RPC reachability ping (cheap — one HTTP request via EnmRpcClient).
             let rpcSummary = null;
@@ -205,6 +216,33 @@ class HealthChecker {
                 .filter((d) => d.ruleId === 'F1' || d.ruleId === 'F2');
             if (dets.length > 0) {
                 await this.engine.apply(chainId, dets, chainCfg);
+            }
+
+            // beta.3.55 — auto-resolve obsolete healing proposals. Operator
+            // complaint: "opened ENM, autoStart restarted the chain, but I
+            // still got a notification to click Restart." That notification
+            // sources from pending OWNER-CONFIRMS proposals (F1/F2/F6/...)
+            // that were created before the chain self-healed. The dashboard
+            // has no way to know those proposals are obsolete unless we
+            // explicitly retire them. Here we walk pending rows for this
+            // chain whenever it's alive+RPC-reachable+stable and mark any
+            // whose root-cause condition has cleared as 'auto_resolved'.
+            // listPending in EnmProposalStore filters by status='pending_
+            // approval', so retired rows stop appearing in the operator's
+            // notification panel.
+            //
+            // Stable-uptime threshold (PROPOSAL_AUTORESOLVE_STABLE_MS) guards
+            // against retiring proposals during a flap (alive→dead→alive in
+            // <30s). If a chain just came back this tick and might die
+            // again in the next, we wait until it's stayed up long enough
+            // to be confident the issue is gone.
+            if (alive && rpcSummary && rpcSummary.ok && status.pid) {
+                // Cheap fire-and-forget. Errors logged but don't block tick.
+                this._sweepAutoResolved(chainId, status, rpcSummary, s).catch((err) => {
+                    this.extensionHandle.log.debug(
+                        `${ENM_LOG_PREFIX} auto-resolve sweep ${chainId} failed: ${err.message}`,
+                    );
+                });
             }
         }
     }
@@ -538,6 +576,72 @@ class HealthChecker {
     // Helpers
     // ========================================================================
 
+    /**
+     * beta.3.55 — walk pending healing proposals for this chain and retire
+     * any whose root-cause condition has cleared. Called from _fastTick when
+     * the chain looks healthy.
+     *
+     * @private
+     * @param {string} chainId
+     * @param {object} status     processStatus from statusSync (alive=true)
+     * @param {object} rpcSummary {ok: true} when chain RPC is reachable
+     */
+    async _sweepAutoResolved(chainId, status, rpcSummary, ruleState) {
+        // Only retire after the chain has been alive + RPC-reachable for at
+        // least PROPOSAL_AUTORESOLVE_STABLE_MS. Otherwise we'd retire on the
+        // very first tick after restart, before we've confirmed the chain
+        // is actually stable. ruleState._aliveSinceMs is maintained by the
+        // fast tick — set on the first alive=true observation, cleared on
+        // any alive=false. So (now - _aliveSinceMs) is the contiguous
+        // alive-duration of the current up-period.
+        const PROPOSAL_AUTORESOLVE_STABLE_MS = 30_000;
+        if (!ruleState || !ruleState._aliveSinceMs) { return; }
+        const aliveMs = Date.now() - ruleState._aliveSinceMs;
+        if (aliveMs < PROPOSAL_AUTORESOLVE_STABLE_MS) { return; }
+
+        let db;
+        try {
+            db = this.extensionHandle.import('data').db;
+        } catch (_) { /* db not ready — try again next tick */ return; }
+        if (!db) { return; }
+
+        let rows;
+        try {
+            rows = await ProposalStore.listPendingByChain(db, chainId);
+        } catch (err) {
+            this.extensionHandle.log.debug(
+                `${ENM_LOG_PREFIX} listPendingByChain(${chainId}) failed: ${err.message}`,
+            );
+            return;
+        }
+        if (!rows || rows.length === 0) { return; }
+
+        for (const row of rows) {
+            const reason = describeAutoResolveReason(row, status, rpcSummary);
+            if (!reason) { continue; }
+            try {
+                await ProposalStore.markAutoResolved(db, row.id, reason);
+                await AuditLog.append(db, {
+                    walletAddress: 'system',
+                    chainId,
+                    ruleId: row.rule_id,
+                    tier: 'AUTOMATED-SAFE',
+                    decision: 'auto-resolved',
+                    executor: 'system',
+                    outcome: reason,
+                    payload: { action: 'auto-resolve', proposalId: row.id },
+                });
+                this.extensionHandle.log.info(
+                    `${ENM_LOG_PREFIX} auto-resolved ${row.rule_id} proposal ${row.id} on ${chainId}: ${reason}`,
+                );
+            } catch (err) {
+                this.extensionHandle.log.warn(
+                    `${ENM_LOG_PREFIX} auto-resolve failed for ${row.id}: ${err.message}`,
+                );
+            }
+        }
+    }
+
     /** @private */
     _ensureState(chainId) {
         let s = this.state.get(chainId);
@@ -567,6 +671,13 @@ class HealthChecker {
                 // unchanged — F1 stays silent on "unknown initial state".
                 _wasAlivePrevTick: false,
                 _observedAliveOnce: false,
+                // beta.3.55 — tracks the timestamp the chain first went
+                // alive in the current up-period. Reset to null on any
+                // alive=false tick. Used by _sweepAutoResolved as the
+                // "has been stable for at least N seconds" guard so we
+                // don't retire pending proposals on the very first tick
+                // after a flap.
+                _aliveSinceMs: null,
             };
             this.state.set(chainId, s);
         }
@@ -737,6 +848,78 @@ class HealthChecker {
     }
 }
 
+/**
+ * beta.3.55 — decide whether a pending healing proposal's underlying
+ * condition has cleared, given the current chain snapshot. Returns a
+ * human-readable reason string when the proposal should be auto-resolved,
+ * or null to leave it pending.
+ *
+ * Resolution rules (in order):
+ *   F1 — restart on crash       → resolved if chain alive again
+ *   F2 — restart on RPC down    → resolved if RPC reachable again
+ *   F3 — restart on peers=0     → resolved if peer count > 0
+ *   F6 — investigate OOM-kill   → resolved if chain stable
+ *   F7 — port conflict          → never auto-resolved (operator must
+ *                                 confirm the conflict is gone)
+ *   F18 — no inbound peers      → resolved if peer count > 0
+ *   default for action=restart  → resolved if chain alive + RPC reachable
+ *   default otherwise           → never auto-resolved
+ *
+ * Why F7 is excluded: a port conflict can clear because the rogue
+ * process exited OR because ela is now binding the port itself. We
+ * can't tell which from inside ENM, and silently retiring the
+ * proposal would hide a real "another node is running" warning from
+ * the operator. They have to look at it.
+ *
+ * @param {object} proposal     row from listPendingByChain
+ * @param {object} status       processStatus (alive=true at call site)
+ * @param {object} rpcSummary   {ok: true, peers?: number, ...}
+ * @returns {string|null}
+ */
+function describeAutoResolveReason(proposal, status, rpcSummary) {
+    if (!proposal || !status || !status.alive || !rpcSummary || !rpcSummary.ok) {
+        return null;
+    }
+    const ruleId = proposal.rule_id;
+    let payload = null;
+    try {
+        if (proposal.payload_json) {
+            payload = JSON.parse(proposal.payload_json);
+        }
+    } catch (_) { /* leave payload null */ }
+
+    // Per-rule semantics:
+    if (ruleId === 'F1') {
+        return 'Chain process is alive again — restart no longer needed.';
+    }
+    if (ruleId === 'F2') {
+        return 'RPC is reachable again — restart no longer needed.';
+    }
+    if (ruleId === 'F3' || ruleId === 'F18') {
+        if (typeof rpcSummary.peers === 'number' && rpcSummary.peers > 0) {
+            return `Peer count recovered (${rpcSummary.peers}) — proposal no longer applies.`;
+        }
+        return null;
+    }
+    if (ruleId === 'F6') {
+        return 'Chain has been stable since the OOM-kill — investigation no longer urgent.';
+    }
+    if (ruleId === 'F7') {
+        // Port conflict — operator must confirm; never auto-resolve.
+        return null;
+    }
+
+    // Generic fallback: if the proposed action was a restart and the
+    // chain is healthy, the restart is redundant.
+    if (payload && payload.action === 'restart') {
+        return 'Chain is healthy — restart no longer needed.';
+    }
+
+    return null;
+}
+
 module.exports = {
     HealthChecker,
+    // exported for tests
+    _internal: { describeAutoResolveReason },
 };
