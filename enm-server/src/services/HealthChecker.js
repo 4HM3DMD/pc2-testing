@@ -162,7 +162,28 @@ class HealthChecker {
             // a real non-clean exit (code != 0 || signal present is false here,
             // but the cleanlyExited check in detectF1 requires code===0 to skip
             // — code===null does NOT skip, so F1 fires).
-            if (s._observedAliveOnce && s._wasAlivePrevTick && !alive && !s.lastExit) {
+            // beta.3.59 — synthesis must give the real 'exit' EventEmitter
+            // handler time to fire. Race condition observed on 3.58: stop()
+            // sets handle.manualStop=true and SIGTERMs; ela exits; node
+            // queues the 'exit' event handler async. If the fast tick runs
+            // BEFORE that handler, we'd see alive=false + lastExit=null on
+            // tick T and synthesize with manualStop=false → F1 fires for a
+            // deliberate operator stop. Operator's chain-rollback workflow
+            // hit this: stop succeeded, F1 fired 3s later, chain bounced
+            // back, rollback precondition failed.
+            //
+            // Fix: only synthesize after TWO consecutive dead ticks (10s
+            // of "alive=false" with still no lastExit). The exit handler
+            // runs within milliseconds of the 'exit' event being emitted
+            // by the OS, so 10s is more than enough headroom. Reattached
+            // processes (which never have a child handle and therefore
+            // never get an 'exit' event) still get synthesized at tick 2.
+            if (s._wasAlivePrevTick && !alive) {
+                s._consecutiveDeadTicks = (s._consecutiveDeadTicks || 0) + 1;
+            } else if (alive) {
+                s._consecutiveDeadTicks = 0;
+            }
+            if (s._observedAliveOnce && s._consecutiveDeadTicks >= 2 && !alive && !s.lastExit) {
                 s.lastExit = {
                     code: null,
                     signal: null,
