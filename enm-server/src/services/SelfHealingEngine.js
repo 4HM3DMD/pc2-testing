@@ -265,7 +265,22 @@ class SelfHealingEngine {
         let outcome = 'success';
         let success = true;
         try {
-            await withChainLock(chainId, () => this._executeRestart(chainId, chainConfig));
+            // beta.3.54 — DROPPED outer withChainLock. _executeRestart calls
+            // processService.restart, which already wraps itself in
+            // withChainLock(chainId). Nested locks on the SAME chainId deadlock
+            // (withChainLock is FIFO non-reentrant per its own docstring).
+            // Result before this fix: F1 detection ran successfully through
+            // the budget check, but the restart hung forever inside the inner
+            // lock. No audit row was written (the row was after the deadlocked
+            // await), no error was thrown, no restart happened. Eventually the
+            // budget counter (synchronous, no lock needed) exhausted and the
+            // engine escalated to OWNER-CONFIRMS — the only F1 audit row that
+            // ever appeared.
+            //
+            // Single lock is sufficient: the operator's HTTP /restart route
+            // and our F1 path both end up in processService.restart's own
+            // lock, so they serialize correctly.
+            await this._executeRestart(chainId, chainConfig);
         } catch (err) {
             success = false;
             outcome = err.message;
