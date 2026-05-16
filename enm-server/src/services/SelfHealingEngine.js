@@ -246,6 +246,37 @@ class SelfHealingEngine {
     async _applyAutomatedSafe(chainId, det, chainConfig) {
         // Restart-loop budget: count attempts within a rolling window.
         if (this._isRestartAction(det)) {
+            // beta.3.58 — if an OWNER-CONFIRMS escalation proposal for
+            // the SAME rule on this chain is already pending, the
+            // operator has been notified and the auto-restart cycle
+            // must STOP — repeated restarts won't fix the underlying
+            // issue (otherwise we wouldn't have escalated). Each
+            // budget-window reset (every 10 min) would otherwise fire
+            // 3 more attempts indefinitely. Operator complaint on 3.56
+            // showed F2 cycling 3 restarts every 10 min for 1+ hour
+            // while the chain was actually stuck in arbitrator-state
+            // mismatch (restart can't fix). Defer to operator action.
+            try {
+                const db = this.getDb();
+                const pending = await ProposalStore.listPendingByChain(db, chainId);
+                const escalationOpen = pending.some(
+                    (p) => p.rule_id === det.ruleId
+                );
+                if (escalationOpen) {
+                    // No audit row — would itself be spam. Operator
+                    // can see the pending proposal in the dashboard;
+                    // that's the source of truth for "what's blocked".
+                    return;
+                }
+            } catch (err) {
+                // listPendingByChain failure shouldn't block healing —
+                // worst case we proceed to budget check and the
+                // existing escalation path handles things.
+                this.extensionHandle.log.debug(
+                    `${ENM_LOG_PREFIX} ${chainId}/${det.ruleId} pending-proposal probe failed (non-fatal): ${err.message}`,
+                );
+            }
+
             // Note: F1's detectF1 in HealthRules.js already gates on
             // snap.processExit.manualStop, so a manually-stopped chain
             // never reaches this path. The audit flagged a defensive
