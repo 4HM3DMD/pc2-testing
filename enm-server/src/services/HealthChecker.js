@@ -934,6 +934,31 @@ function describeAutoResolveReason(proposal, status, rpcSummary) {
         }
         return null;
     }
+    if (ruleId === 'F4') {
+        // beta.3.57 — F4 "sync stalled" must NOT use the generic
+        // "chain healthy" rule because F4 FIRES when chain is healthy
+        // (alive + RPC + peers). Its premise is "height stalled", so
+        // the only valid resolution is "height moved past the height
+        // that was stuck". The proposal's payload carries stuckHeight
+        // captured at detection time; we resolve only when the live
+        // rpcSummary.height exceeds it.
+        //
+        // Without this guard, beta.3.55+ created an infinite cycle:
+        // F4 detects → propose → auto-resolve "chain healthy" → next
+        // tick F4 detects again (still stuck) → propose → auto-resolve
+        // → ... fast-tick rate spam at 12 proposals/min.
+        const stuckAt = payload && typeof payload.stuckHeight === 'number'
+            ? payload.stuckHeight
+            : null;
+        if (stuckAt != null && typeof rpcSummary.height === 'number'
+            && rpcSummary.height > stuckAt) {
+            return `Height advanced (${stuckAt} → ${rpcSummary.height}) — stall cleared.`;
+        }
+        // Still stuck (or no payload) → leave pending. Operator's
+        // notification panel will show ONE F4 proposal at a time
+        // (deduped by the engine), not a flood.
+        return null;
+    }
     if (ruleId === 'F6') {
         return 'Chain has been stable since the OOM-kill — investigation no longer urgent.';
     }
@@ -942,12 +967,13 @@ function describeAutoResolveReason(proposal, status, rpcSummary) {
         return null;
     }
 
-    // Generic fallback: if the proposed action was a restart and the
-    // chain is healthy, the restart is redundant.
-    if (payload && payload.action === 'restart') {
-        return 'Chain is healthy — restart no longer needed.';
-    }
-
+    // beta.3.57 — REMOVED the generic "action==='restart' → resolve"
+    // fallback. It was unsafe: F4 fires WHEN the chain looks healthy
+    // (alive+RPC+peers) so the fallback resolved F4 instantly, breaking
+    // the proposal dedupe and creating a spam loop. Each rule whose
+    // proposed action is "restart" must declare its own resolution
+    // condition above. If a rule isn't listed here, its proposals are
+    // never auto-resolved — they expire via the TTL sweep instead.
     return null;
 }
 

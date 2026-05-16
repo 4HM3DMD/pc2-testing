@@ -58,6 +58,16 @@ class SelfHealingEngine {
         this.ownerWallet = deps.ownerWallet || null;
         /** @type {Map<string, { count: number, firstAt: number }>} */
         this._restartBudget = new Map();
+        // beta.3.57 — per-(chainId,ruleId) "last proposal" timestamp.
+        // Defense-in-depth: even if the DB-level dedupe in
+        // _applyOwnerConfirms fails for any reason (race with
+        // auto-resolve sweep, TTL expiry, etc.), we won't fire the
+        // same rule again within PROPOSAL_RATE_LIMIT_MS. Operator's
+        // beta.3.55+ regression saw F4 fire 30+ times in 26 min
+        // because auto-resolve cleared pending faster than dedupe
+        // could match — this cap is the last-resort safeguard.
+        /** @type {Map<string, number>} */
+        this._lastProposalAt = new Map();
     }
 
     /**
@@ -355,11 +365,30 @@ class SelfHealingEngine {
         // both walk past listPending and double-insert (Phase 4 audit, agent 1).
         return withChainLock(`enm-proposal:${chainId}`, async () => {
             const db = this.getDb();
+            // beta.3.57 — per-(chain,rule) rate limit. Independent of the
+            // DB dedupe below; covers the case where a previous proposal
+            // was auto-resolved (or expired) and the rule fires again
+            // before the underlying condition has had time to actually
+            // change. Without this, F4 in beta.3.55+ created 30+
+            // proposals in 26 min on srv832310 (fast-tick rate).
+            // 30 min is empirical: same window as the auto-resolve
+            // stable-uptime guard, so a stuck-then-recovered chain
+            // gets one F4 row instead of 360.
+            const PROPOSAL_RATE_LIMIT_MS = 30 * 60_000;
+            const rateKey = `${chainId}:${det.ruleId}`;
+            const lastAt = this._lastProposalAt.get(rateKey);
+            if (lastAt && (Date.now() - lastAt) < PROPOSAL_RATE_LIMIT_MS) {
+                return; // recently proposed — silently drop the dup tick
+            }
             const existing = await ProposalStore.listPending(db, this.ownerWallet);
             const dup = existing.find((p) => p.chain_id === chainId && p.rule_id === det.ruleId);
             if (dup) {
                 return; // already represented in the dashboard
             }
+            // Record rate-limit timestamp BEFORE the create so a concurrent
+            // tick that's already past the dedupe also gets blocked. Cleared
+            // automatically by the 30-min window expiry.
+            this._lastProposalAt.set(rateKey, Date.now());
             const proposal = await ProposalStore.create(db, {
                 walletAddress: this.ownerWallet,
                 chainId,

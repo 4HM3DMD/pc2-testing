@@ -206,7 +206,12 @@ function detectF4(snap) {
         tier: HEALING_TIERS.OWNER_CONFIRMS,
         summaryAction: `Restart ${snap.chainId} to clear sync stall`,
         summaryReason: `Block height ${snap.rpcSummary.height} has not advanced for >10 minutes.`,
-        payload: { action: 'restart', chainId: snap.chainId },
+        // beta.3.57 — stuckHeight in payload so the auto-resolve sweep
+        // can tell "F4 cleared" (height advanced past stuckHeight) from
+        // "still stuck" (height same as when proposed). Without it the
+        // sweep resolved every F4 instantly because the rule's own
+        // precondition (alive + RPC + peers) looked like "healthy".
+        payload: { action: 'restart', chainId: snap.chainId, stuckHeight: snap.rpcSummary.height },
     };
 }
 
