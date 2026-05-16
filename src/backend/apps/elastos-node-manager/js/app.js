@@ -962,6 +962,37 @@
         if (this.services.sse) {
             this._notifSub = this.services.sse.subscribe('notifications', function (payload) {
                 if (!payload) { return; }
+                // beta.3.56 — handle backend auto-resolve. When the
+                // HealthChecker retires a pending proposal because the
+                // underlying condition cleared (chain came back up,
+                // RPC reachable, peers > 0, etc.), it pushes an SSE
+                // notification with proposalActioned=true. Close the
+                // matching modal if open and surface a friendly toast
+                // explaining why. Same close-on-action contract used
+                // by the cross-tab BroadcastChannel handler so the
+                // modal stays consistent across all dismiss paths.
+                //
+                // Toast is only shown when a modal was actually open.
+                // Silent backstage cleanup (proposal retired before
+                // the operator ever saw it) doesn't deserve a toast —
+                // would add noise when the "Auto-healed." toast from
+                // F1/F2 already conveyed the recovery.
+                if (payload.proposalActioned && payload.proposalId) {
+                    var hadOpenModal = self._proposalCard
+                        && self._proposalCard.proposal
+                        && self._proposalCard.proposal.id === payload.proposalId;
+                    if (hadOpenModal) {
+                        try { self._proposalCard.close(); }
+                        catch (_) { /* already closing */ }
+                        self.services.notifications.show({
+                            severity: 'info',
+                            title:    payload.summary || 'Resolved',
+                            body:     payload.detail  || 'Chain recovered — no action needed.',
+                            id:       'auto-resolved-' + payload.proposalId,
+                        });
+                    }
+                    return;
+                }
                 if (payload.proposalId) {
                     self._openProposalById(payload.proposalId);
                     return;

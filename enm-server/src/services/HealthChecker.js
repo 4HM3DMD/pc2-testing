@@ -634,6 +634,39 @@ class HealthChecker {
                 this.extensionHandle.log.info(
                     `${ENM_LOG_PREFIX} auto-resolved ${row.rule_id} proposal ${row.id} on ${chainId}: ${reason}`,
                 );
+                // beta.3.56 — push an SSE notification so the dashboard
+                // dismisses any open proposal-card modal for this id and
+                // surfaces a friendly "auto-resolved" toast in its place.
+                // Without this, the operator continued to see the
+                // "Confirmation needed" modal even after the backend
+                // retired the row (visible in operator's screenshot of
+                // 3.55 — modal asking to confirm restart side-by-side
+                // with an "Auto-healed" toast).
+                if (this.sseHub) {
+                    try {
+                        this.sseHub.publish('notifications', {
+                            ts: Date.now(),
+                            chainId,
+                            ruleId: row.rule_id,
+                            severity: 'info',
+                            summary: row.summary_action || 'Healing proposal',
+                            detail: reason,
+                            // The two fields below are the signal the
+                            // frontend uses to close the matching modal.
+                            // Mirrors the BroadcastChannel cross-tab
+                            // 'proposal-actioned' contract; same shape so
+                            // the dashboard handler can branch off one
+                            // check.
+                            proposalActioned: true,
+                            proposalId: row.id,
+                            verdict: 'auto_resolved',
+                        });
+                    } catch (err) {
+                        this.extensionHandle.log.debug(
+                            `${ENM_LOG_PREFIX} auto-resolve SSE publish failed: ${err.message}`,
+                        );
+                    }
+                }
             } catch (err) {
                 this.extensionHandle.log.warn(
                     `${ENM_LOG_PREFIX} auto-resolve failed for ${row.id}: ${err.message}`,
