@@ -989,12 +989,14 @@
             // beta.3.48 — toggle for the technical view.
             show_technical:     'Show technical details',
             hide_technical:     'Hide technical details',
-            // beta.3.48 — friendly names for the executor column. We
-            // can only resolve "operator" if the executor wallet
-            // matches the current logged-in operator wallet. Anything
-            // else surfaced as a short hex.
-            executor_you:       'You',
+            // beta.3.48 — friendly names for the executor column.
+            // beta.3.52 — the executor field is now a role label, not
+            // a wallet hex. Possible values: 'operator', 'system',
+            // 'F1'/'F2'/'AUTOSTART'/etc. PC2 wallet never appears here
+            // anymore (ENM identity = keystore, not PC2 wallet).
+            executor_you:       'You', // legacy key — no longer used
             executor_system:    'System',
+            executor_operator:  'Operator',
             // beta.3.48 — friendly names for the 5 healing tiers.
             // Mock kept the full codes; operator feedback was that
             // they're internal jargon and don't help a regular user.

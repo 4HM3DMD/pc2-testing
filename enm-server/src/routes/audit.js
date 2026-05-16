@@ -10,10 +10,12 @@
  * The CSV / JSON export option in the dashboard hits the same endpoint with
  * limit=500 and the page composes a Blob client-side. Server stays simple.
  *
- * Auth: any authenticated wallet sees only its own rows. The owner-check is
- * relaxed here because rejecting a non-owner reader just flattens an audit
- * tab — the real owner-protection is enforced via the wallet_address WHERE
- * filter, never by route-level requireOwner.
+ * Auth (beta.3.52): owner-gated. ENM is single-tenant — one operator, one
+ * keystore — so the previous "filter rows by actor wallet" model was both
+ * unnecessary and actively wrong: it forced PC2 wallet to be propagated into
+ * every audit row, coupling PC2 identity to ENM's data model. We now gate at
+ * the route level with requireOwner and return ALL rows. The PC2 wallet never
+ * leaves the auth boundary.
  */
 
 'use strict';
@@ -22,7 +24,7 @@ const express = require('express');
 
 const { ENM_LOG_PREFIX, errorBody, successBody } = require('../services/EnmConstants');
 const { limit } = require('../services/EnmRateLimit');
-const { readActorWallet } = require('../auth/OwnerCheckMiddleware');
+const { requireOwner } = require('../auth/OwnerCheckMiddleware');
 const AuditLog = require('../services/EnmAuditLog');
 
 const ALLOWED_TIERS = new Set([
@@ -43,14 +45,12 @@ function build(deps) {
     const { extensionHandle, getDb } = deps;
     const router = express.Router();
 
-    router.get('/', limit('read'), async (req, res) => {
-        const wallet = readActorWallet(req);
-        if (!wallet) {
-            return res.status(401).json(errorBody('Authentication required.'));
-        }
+    router.get('/', limit('read'), requireOwner, async (req, res) => {
+        // beta.3.52 — requireOwner gates the route. No more wallet-filter
+        // inside the query; the owner sees every audit row in the table
+        // (HTTP-MUTATION, AUTOMATED-SAFE/AUTOSTART, CRITICAL-INFO, etc.).
         try {
             const opts = {
-                walletAddress: wallet,
                 chainId: typeof req.query.chainId === 'string' ? req.query.chainId : undefined,
                 tier: parseTier(req.query.tier),
                 fromTs: parseTs(req.query.from),

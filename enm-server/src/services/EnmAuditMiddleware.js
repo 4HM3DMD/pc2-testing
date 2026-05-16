@@ -53,10 +53,12 @@ function build(extensionHandle) {
 
         // Hook into response finish to record outcome.
         res.on('finish', () => {
-            const wallet = readActorWallet(req);
-            if (!wallet) {
-                // Anonymous mutation attempt — handler should have already 401'd.
-                // Skip audit (we have no wallet to attribute to).
+            // beta.3.52 — only check that the request was authenticated; we no
+            // longer propagate the PC2 wallet into the audit row. ENM keystore
+            // and PC2 wallet are decoupled identities (the keystore identity
+            // is the producer; PC2 wallet only gates access). Anonymous
+            // mutations are skipped because the handler already 401'd.
+            if (!readActorWallet(req)) {
                 return;
             }
 
@@ -78,13 +80,19 @@ function build(extensionHandle) {
 
             // Asynchronous fire-and-forget. Audit failure must not propagate to the
             // user response (already sent).
+            //
+            // beta.3.52 — walletAddress + executor are the literal 'operator'
+            // label, never the PC2 wallet hex. ENM audit rows describe what THIS
+            // node did, not which PC2 wallet authorized it. Auth gating is the
+            // PC2 wallet's job (requireOwner middleware); past that point the
+            // PC2 identity is not propagated into ENM's data model.
             Promise.resolve().then(() => appendAudit(getDb(), {
-                walletAddress: wallet,
+                walletAddress: 'operator',
                 chainId: extractChainId(req) || 'system',
                 ruleId: routeRule,
                 tier: HEALING_TIERS.HTTP_MUTATION,
                 decision: success ? AUDIT_DECISION.EXECUTED : AUDIT_DECISION.FAILED,
-                executor: wallet,
+                executor: 'operator',
                 outcome: httpOutcome,
                 durationMs,
                 payload: {

@@ -226,8 +226,13 @@ function build(extensionHandle) {
                 } catch (_) { /* graceful degrade — leave producer null */ }
             }
 
+            // beta.3.52 — `walletAddress` removed from response. ENM's identity
+            // is the keystore (ELA mainchain producer), NOT the PC2 owner wallet.
+            // The two are completely separate concerns:
+            //   - PC2 wallet authenticates the request (handled by requireOwner)
+            //   - ENM keystore is what this node represents on-chain
+            // Returning the PC2 wallet here implied they were coupled.
             return res.json(successBody({
-                walletAddress: wallet,
                 keystore: {
                     exists: keystoreExists,
                     publicKey,

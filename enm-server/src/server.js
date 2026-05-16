@@ -296,15 +296,21 @@ async function main() {
 
     // 0.2.0-beta.3.8 — wire AuditLog → SseHub bridge. Every audit row
     // inserted via EnmAuditLog.append() now also publishes on the
-    // `audit` topic (scoped to the row's wallet via publishToWallet
-    // so cross-wallet rows can't leak). Frontend audit-tab subscribes
-    // and prepends new rows in real time instead of polling.
+    // `audit` topic. Frontend audit-tab subscribes and prepends new
+    // rows in real time instead of polling.
+    //
+    // beta.3.52 — switched from publishToWallet (PC2-wallet-scoped) to
+    // broadcast publish. ENM is single-tenant: one operator authenticated
+    // via requireOwner, one keystore. There's no second wallet to leak to.
+    // The /events SSE endpoint still requires authentication at subscribe
+    // time, and the audit route is owner-gated; broadcasting on the topic
+    // exposes the same rows the owner already reads via GET /audit.
     try {
         const AuditLog = require('./services/EnmAuditLog');
         AuditLog.setPublishHook(
             (row) => {
-                if (!row || !row.walletAddress) { return; }
-                sseHub.publishToWallet(row.walletAddress, 'audit', row);
+                if (!row) { return; }
+                sseHub.publish('audit', row);
             },
             (err) => {
                 log('debug', `audit SSE publish failed (non-fatal): ${err.message}`);

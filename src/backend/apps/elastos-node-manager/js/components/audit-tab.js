@@ -112,25 +112,17 @@
 
     AuditTab.prototype.mount = function (parent) {
         parent.appendChild(this.root);
-        // beta.3.48 — cache the operator wallet for friendlyExecutor()
-        // so "You" vs short-hex resolves correctly. Fire-and-forget;
-        // missing wallet just means friendlyExecutor falls back to
-        // short hex (matches the technical column behaviour).
-        if (this.api && typeof this.api.get === 'function') {
-            this.api.get('/whoami').then(function (resp) {
-                var r = (resp && resp.result) || resp || {};
-                if (r.wallet_address && typeof window !== 'undefined') {
-                    window.__enmCurrentOperatorWallet = r.wallet_address;
-                }
-            }).catch(function () { /* swallow — friendly fallback handles it */ });
-        }
+        // beta.3.52 — the /whoami pre-warm + __enmCurrentOperatorWallet
+        // cache was dropped. ENM no longer surfaces the PC2 wallet
+        // anywhere; the audit row executor field is now a literal
+        // 'operator'/'system' role label, so friendlyExecutor() needs
+        // no per-session identity hint.
         this.refresh();
         // 0.2.0-beta.3.8 — subscribe to the live `audit` SSE topic so
         // new rows prepend in place instead of needing a manual
-        // refresh. Backend (EnmAuditLog.append → publishToWallet) is
-        // wallet-scoped, so this connection only receives the
-        // authenticated operator's rows. Subscription is a no-op when
-        // sse isn't injected; destroy() handles the unsub.
+        // refresh. beta.3.52 made the SSE publish broadcast (single-
+        // tenant ENM, owner-only /events subscription gate); audit-tab
+        // still receives the same rows the GET /audit returns.
         if (this.sse && typeof this.sse.subscribe === 'function') {
             var self = this;
             this._unsubAudit = this.sse.subscribe('audit', function (row) {
@@ -589,7 +581,7 @@
             friendlyTierLabel(e.tier), 'enm-tier-badge', { tier: e.tier });
         addCell(tr, 'col-decision col-technical', e.decision || '—');
         addCell(tr, 'col-executor col-technical',
-            friendlyExecutor(e, getCurrentOperatorWallet()),
+            friendlyExecutor(e),
             e.executor || '');
         addBadgeCell(tr, 'col-outcome col-technical', e.outcome || '—', 'enm-outcome-badge',
             { kind: outcomeKind(e.outcome) });
@@ -666,7 +658,7 @@
             friendlyTierLabel(e.tier), 'enm-tier-badge', { tier: e.tier });
         addCell(tr, 'col-decision col-technical', e.decision || '—');
         addCell(tr, 'col-executor col-technical',
-            friendlyExecutor(e, getCurrentOperatorWallet()),
+            friendlyExecutor(e),
             e.executor || '');
         addBadgeCell(tr, 'col-outcome col-technical', e.outcome || '—', 'enm-outcome-badge',
             { kind: outcomeKind(e.outcome) });
@@ -1282,32 +1274,32 @@
         return (v && v.charAt(0) === '[') ? '—' : v;
     }
 
-    // Resolve a friendly "Who" label for the executor column. "You"
-    // when the executor wallet matches the current logged-in operator,
-    // "System" for system-driven events (healing rules fired without
-    // operator action), short hex for any other wallet.
-    function friendlyExecutor(e, ownerWallet) {
+    // beta.3.52 — Resolve a friendly "Who" label for the executor column.
+    // ENM is decoupled from the PC2 wallet identity, so the executor is
+    // always one of:
+    //   - 'operator' → "Operator" (a human-initiated owner action)
+    //   - 'system'   → "System"   (ENM did it autonomously: autostart, F1, etc.)
+    //   - 'F1'/'F2'/.../'AUTOSTART' → the rule name (specific healing rule)
+    // Legacy rows from pre-3.52 carry an EVM-shaped hex address in the
+    // executor field — we map any non-system, non-rule value to "Operator"
+    // so the PC2 wallet never leaks into the visible label.
+    function friendlyExecutor(e /* , _legacyOwnerWallet */) {
         var w = e.executor || e.wallet_address || null;
         var t = root.enmTOrFallback;
-        if (!w || w === 'system') { return t('audit.executor_system'); }
-        if (ownerWallet && String(w).toLowerCase() === String(ownerWallet).toLowerCase()) {
-            return t('audit.executor_you');
-        }
-        return shortenWallet(w);
+        if (!w) { return t('audit.executor_system'); }
+        var s = String(w);
+        if (s === 'system') { return t('audit.executor_system'); }
+        if (s === 'operator') { return t('audit.executor_operator'); }
+        // Specific healing rule names (Fnn, AUTOSTART, etc.) — show as-is.
+        if (/^[A-Z][A-Z0-9_-]{1,32}$/.test(s)) { return s; }
+        // Legacy EVM hex or unknown value: collapse to generic operator label.
+        return t('audit.executor_operator');
     }
 
-    // Read the currently-logged-in operator's wallet so friendlyExecutor
-    // can render "You" vs the short hex. Falls back to null if the
-    // wallet service hasn't resolved yet.
-    function getCurrentOperatorWallet() {
-        try {
-            if (typeof window !== 'undefined'
-                && window.__enmCurrentOperatorWallet) {
-                return window.__enmCurrentOperatorWallet;
-            }
-        } catch (_) { /* swallow */ }
-        return null;
-    }
+    // beta.3.52 — getCurrentOperatorWallet() was removed. The PC2 wallet
+    // is no longer surfaced anywhere in ENM's UI; the audit executor
+    // column reads from the row's role label ('operator' / 'system' /
+    // rule name) which friendlyExecutor() resolves directly.
 
     /** Grouped ms display so a 2847 reads as "2,847 ms" in the drawer. */
     function formatMs(n) {

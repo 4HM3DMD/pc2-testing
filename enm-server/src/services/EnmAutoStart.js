@@ -42,7 +42,10 @@ const AuditLog = require('./EnmAuditLog');
 const RULE_ID = 'AUTOSTART';
 const TIER = 'AUTOMATED-SAFE';
 const EXECUTOR = 'system';
-const SYSTEM_WALLET = '0x0000000000000000000000000000000000000000';
+// beta.3.52 — switched from 0x000…000 to the literal 'system' label.
+// ENM audit rows never carry EVM-shaped wallet addresses anymore;
+// the column holds an actor *role*, not a PC2 identity.
+const SYSTEM_WALLET = 'system';
 
 /**
  * Orchestrate auto-start of enabled chains on ENM boot.
