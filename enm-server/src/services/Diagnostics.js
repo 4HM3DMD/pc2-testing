@@ -473,11 +473,26 @@ async function runFullDiagnose(deps) {
 }
 
 function summarize(findings) {
-    const summary = { ok: 0, warn: 0, fail: 0, skip: 0, unknown: 0 };
+    // beta.3.61 — dedupe findings by (id, data.path). HostConflictScanner
+    // emits one finding per detected source of conflict, but for the same
+    // root cause it can report duplicates (e.g., legacy_config returned
+    // twice when /root/.config/elastos is detected by two probes). The
+    // operator saw the same "Legacy node.sh config detected" warning
+    // listed twice in the diagnose panel for weeks.
+    const seen = new Set();
+    const deduped = [];
     for (const f of findings) {
+        const dataPath = f.data && f.data.path ? f.data.path : '';
+        const key = (f.id || '') + '|' + dataPath;
+        if (seen.has(key)) { continue; }
+        seen.add(key);
+        deduped.push(f);
+    }
+    const summary = { ok: 0, warn: 0, fail: 0, skip: 0, unknown: 0 };
+    for (const f of deduped) {
         summary[f.status] = (summary[f.status] || 0) + 1;
     }
-    return { findings, summary };
+    return { findings: deduped, summary };
 }
 
 module.exports = {

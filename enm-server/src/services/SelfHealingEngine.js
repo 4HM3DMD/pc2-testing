@@ -402,10 +402,17 @@ class SelfHealingEngine {
             // before the underlying condition has had time to actually
             // change. Without this, F4 in beta.3.55+ created 30+
             // proposals in 26 min on srv832310 (fast-tick rate).
-            // 30 min is empirical: same window as the auto-resolve
-            // stable-uptime guard, so a stuck-then-recovered chain
-            // gets one F4 row instead of 360.
-            const PROPOSAL_RATE_LIMIT_MS = 30 * 60_000;
+            //
+            // beta.3.61 — bumped 30min → 90min. With the previous 30min
+            // value, a permanently-stuck chain still got an F4 proposal
+            // EVERY HOUR because: proposal TTL is 1hr → expires → 30min
+            // rate-limit had already passed (since previous proposal at
+            // T-1hr) → next F4 detection fires a new proposal. Operator
+            // saw 476 auto_resolved + 12 expired F4 proposals over 24h
+            // on srv832310 with this pattern (every :29:37 sharp).
+            // 90min > 60min TTL → the window always overlaps an
+            // already-expired proposal, blocking the re-fire.
+            const PROPOSAL_RATE_LIMIT_MS = 90 * 60_000;
             const rateKey = `${chainId}:${det.ruleId}`;
             const lastAt = this._lastProposalAt.get(rateKey);
             if (lastAt && (Date.now() - lastAt) < PROPOSAL_RATE_LIMIT_MS) {

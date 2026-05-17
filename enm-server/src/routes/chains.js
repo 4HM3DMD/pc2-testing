@@ -1320,6 +1320,12 @@ function classifyAutoFixError(err) {
     // Precondition: resource state doesn't permit this action right now.
     if (/Chain is alive/i.test(msg)) { return 409; }
     if (/No backup config/i.test(msg)) { return 409; }
+    // beta.3.61 — 412 for the explicit-confirm safety gate on chain-rollback.
+    // Distinct from 409 (state-based) — this is "you didn't pass the
+    // dangerous-action confirmation flag" which is a missing-parameter
+    // / precondition-failed semantic.
+    if (/chain-rollback is destructive/.test(msg)) { return 412; }
+    if (/Invalid rollback target/.test(msg)) { return 400; }
     // Unknown — keep the default.
     return 500;
 }
@@ -1406,6 +1412,22 @@ async function runAutoFix(action, adapter, extensionHandle, opts) {
  * @returns {Promise<{ok: boolean, detail: string, height: number, backupPath?: string}>}
  */
 async function runChainRollback(adapter, extensionHandle, opts) {
+    // beta.3.61 — explicit confirmation gate. The KB-cited rollback path
+    // (ela-cli rollback) is "non-transactional, DANGEROUS". An interrupted
+    // rollback (SSH drop, OS reboot, OOM) leaves FFLDB block index and
+    // UTXO state desynchronized — verified empirically on srv832310 when
+    // a long-running rollback was interrupted and subsequent boots got
+    // stuck at "INITIALIZE FINISHED → server shutting down" with no
+    // recovery short of full chain wipe + bootstrap. The caller MUST
+    // pass confirm=I-understand-rollback-is-destructive to proceed.
+    const confirm = opts && opts.query && opts.query.confirm;
+    if (confirm !== 'I-understand-rollback-is-destructive') {
+        throw new Error(
+            'chain-rollback is destructive and may corrupt the chain if interrupted. '
+            + 'Pass ?confirm=I-understand-rollback-is-destructive to proceed. '
+            + 'For most "chain stuck" cases, use chain-resync + bootstrap instead.',
+        );
+    }
     const proc = ChainRegistry.getProcessService();
     if (proc.statusSync(adapter.chainId).alive) {
         throw new Error('Chain is alive — stop the chain before rollback.');
