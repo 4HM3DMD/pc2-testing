@@ -90,6 +90,16 @@ const globalSchema = Joi.object({
         ownerConfirmsTimeoutSec: Joi.number().integer().min(60).max(86_400).default(3600),
         maxRestartAttempts: Joi.number().integer().min(1).max(20).default(3),
         restartCooldownSec: Joi.number().integer().min(5).max(600).default(30),
+        // beta.3.76 — per-rule enable/disable overrides. Keys are the
+        // F-rule IDs (F1, F2, F4, F5, F6, F7, F8, F9, F10, F11, F12,
+        // F13, F16, F18, F19, F22) plus AUTOSTART. Any rule omitted
+        // here keeps its DEFAULT_ENABLED value (all true today). At
+        // boot HealthChecker pushes this map into HealthRules.
+        // setRuleEnabled so the engine's runAll() gate honours it.
+        enabledRules: Joi.object().pattern(
+            Joi.string().regex(/^(F\d{1,2}|AUTOSTART)$/),
+            Joi.boolean(),
+        ).default({}),
     }).default(),
     notifications: Joi.object({
         criticalRequiresAck: Joi.boolean().default(true),

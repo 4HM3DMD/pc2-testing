@@ -6464,3 +6464,172 @@ body[data-app-size="compact"] .enm-app .enm-welcome-card,
 body[data-app-size="compact"] .enm-app .enm-setup-msg {
     padding: var(--sp-3);
 }
+
+/* ====================================================================
+ * beta.3.76 — new components: per-rule healing toggle + snapshot
+ * inventory + LOW responsive bug pass.
+ * ==================================================================== */
+
+/* Per-rule on/off toggle on each healing rule row. role="switch" pill
+   that sits at the right edge of the rule summary. Click toggles the
+   rule via PUT /config/healing. Off state grays the dot + adds a
+   strikethrough on the title via the existing .enm-healing-rules-
+   item-disabled class. */
+.enm-healing-rules-toggle {
+    margin-left: auto;
+    padding: 2px 8px;
+    font-size: 10px;
+    font-weight: var(--fw-semibold);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--success);
+    background: var(--success-bg);
+    border: 1px solid var(--success-soft);
+    border-radius: var(--r-xs);
+    cursor: pointer;
+    user-select: none;
+    transition: background var(--motion-fast) var(--ease-out),
+                color var(--motion-fast) var(--ease-out);
+}
+.enm-healing-rules-toggle:hover {
+    background: var(--success-soft);
+}
+.enm-healing-rules-toggle.enm-healing-rules-toggle-off {
+    color: var(--text-tertiary);
+    background: var(--bg-elevated);
+    border-color: var(--border-subtle);
+}
+.enm-healing-rules-toggle.enm-healing-rules-toggle-off:hover {
+    background: var(--bg-surface);
+}
+.enm-healing-rules-toggle:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+}
+
+/* Snapshot inventory list (Settings → Security → snapshot panel).
+   Each row: timestamp + size + restore button, separator below. */
+.enm-snapshot-inventory-head {
+    margin-top: var(--sp-3);
+    margin-bottom: var(--sp-1);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-tertiary);
+    font-weight: var(--fw-semibold);
+}
+.enm-snapshot-inventory {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-height: 300px;
+    overflow-y: auto;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-sm);
+    padding: 2px;
+}
+.enm-snapshot-inventory-row {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    gap: var(--sp-2);
+    align-items: center;
+    padding: 4px var(--sp-2);
+    border-radius: var(--r-xs);
+    font-size: var(--fs-caption);
+}
+.enm-snapshot-inventory-row:hover {
+    background: var(--bg-elevated);
+}
+.enm-snapshot-inventory-row-latest {
+    background: var(--accent-soft);
+}
+.enm-snapshot-inventory-row-latest:hover {
+    background: var(--accent-soft);
+}
+.enm-snapshot-inventory-time {
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.enm-snapshot-inventory-latest-pill {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 0 4px;
+    font-size: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--accent);
+    background: var(--bg-elevated);
+    border-radius: var(--r-xs);
+    vertical-align: 2px;
+}
+.enm-snapshot-inventory-size {
+    color: var(--text-tertiary);
+    font-variant-numeric: tabular-nums;
+    font-size: 11px;
+}
+.enm-snapshot-inventory-restore {
+    min-height: 24px;
+    padding: 2px 8px;
+    font-size: 10px;
+}
+.enm-app[data-app-size="compact"] .enm-snapshot-inventory-row,
+body[data-app-size="compact"] .enm-app .enm-snapshot-inventory-row {
+    grid-template-columns: 1fr auto;
+    grid-template-rows: auto auto;
+    row-gap: 2px;
+}
+.enm-app[data-app-size="compact"] .enm-snapshot-inventory-restore,
+body[data-app-size="compact"] .enm-app .enm-snapshot-inventory-restore {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+}
+
+/* LOW-severity responsive bug pass (per the post-3.75 audit).
+   Six quick wins consolidated here. */
+
+/* .enm-audit-empty + .enm-log-empty padding was sp-7 (56px) and sp-6
+   (48px) at all sizes — overkill at compact where the "no entries"
+   message becomes the visual centerpiece on small viewports. */
+.enm-app[data-app-size="compact"] .enm-audit-empty,
+body[data-app-size="compact"] .enm-app .enm-audit-empty,
+.enm-app[data-app-size="compact"] .enm-log-empty,
+body[data-app-size="compact"] .enm-app .enm-log-empty {
+    padding: var(--sp-3);
+}
+
+/* .enm-audit-drawer-foot — wide horizontal padding (sp-5 = 40px)
+   wastes the side gutter at compact. Already had gap: sp-1 from 3.74;
+   now also shrink the padding so the prev/next buttons have more room. */
+.enm-app[data-app-size="compact"] .enm-audit-drawer-foot,
+body[data-app-size="compact"] .enm-app .enm-audit-drawer-foot {
+    padding: var(--sp-2);
+}
+
+/* .enm-healing-rules-desc — indented description had a left padding
+   inherited from wide where the rule row had room. At compact the
+   description text was being squeezed into ~200px after the indent. */
+.enm-app[data-app-size="compact"] .enm-healing-rules-desc,
+body[data-app-size="compact"] .enm-app .enm-healing-rules-desc {
+    padding-left: var(--sp-2);
+    font-size: 11px;
+}
+
+/* .enm-healing-activity-when — fixed 70px width inside the activity
+   scroll table. At compact the column needs to be more flexible. */
+.enm-app[data-app-size="compact"] .enm-healing-activity-when,
+body[data-app-size="compact"] .enm-app .enm-healing-activity-when {
+    width: auto;
+    min-width: 56px;
+}
+
+/* .enm-filter-chip — at compact, drop the wide padding to 4px 8px so
+   chip strips don't wrap mid-strip; already in 3.72 but the explicit
+   value here covers the case where flex-shrink takes effect. */
+.enm-app[data-app-size="compact"] .enm-filter-chip,
+body[data-app-size="compact"] .enm-app .enm-filter-chip {
+    padding: 4px 8px;
+    font-size: 10px;
+}

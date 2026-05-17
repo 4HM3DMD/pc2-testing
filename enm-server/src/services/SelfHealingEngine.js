@@ -429,9 +429,13 @@ class SelfHealingEngine {
      *
      * @param {string} chainId
      * @param {object} chainConfig
+     * @param {string} [snapshotName] — optional ISO-timestamp name of the
+     *   snapshot to restore. Omit for the autonomous F22 path (always
+     *   restores newest). Passed through by the manual restore-by-id
+     *   route added in beta.3.76.
      * @returns {Promise<string>}  outcome string for audit row
      */
-    async _executeStateRestore(chainId, chainConfig) {
+    async _executeStateRestore(chainId, chainConfig, snapshotName) {
         const STATE_RESTORE_COOLDOWN_MS = 6 * 60 * 60_000; // 6 hours
         const VERIFY_WINDOW_MS = 60_000;
         if (!this._stateRestoreLastAt) { this._stateRestoreLastAt = new Map(); }
@@ -467,8 +471,10 @@ class SelfHealingEngine {
             );
         });
 
-        // 2. Restore the latest snapshot over live state files.
-        const restoreResult = await stateSnapshot.restore(chainId);
+        // 2. Restore the chosen snapshot over live state files. When
+        // snapshotName is omitted (the autonomous F22 path), the service
+        // picks the newest — preserving the pre-3.76 behaviour.
+        const restoreResult = await stateSnapshot.restore(chainId, snapshotName);
         this.extensionHandle.log.info(
             `${ENM_LOG_PREFIX} state-restore ${chainId}: restored ${restoreResult.restoredFiles.length} file(s) from ${restoreResult.snapshotName}`,
         );

@@ -355,7 +355,7 @@ class EnmStateSnapshot {
     }
 
     /**
-     * Restore the most-recent valid snapshot over the live state files.
+     * Restore a snapshot over the live state files.
      * Caller MUST have already stopped the chain process before calling.
      *
      * Files are restored with the same atomic pattern as snapshot creation:
@@ -363,10 +363,16 @@ class EnmStateSnapshot {
      * leaves either the OLD live file or the NEW restored file, never half-
      * written content.
      *
+     * beta.3.76 — accepts optional `snapshotName` to restore a specific
+     * snapshot by ID. When omitted, restores the newest (preserves the
+     * pre-3.76 latest-only behaviour the autonomous F22 path relies on).
+     *
      * @param {string} chainId
+     * @param {string} [snapshotName] — optional ISO-timestamp name of the
+     *   snapshot to restore. If omitted, the newest is used.
      * @returns {Promise<{ok: boolean, snapshotName: string, restoredFiles: string[]}>}
      */
-    async restore(chainId) {
+    async restore(chainId, snapshotName) {
         const status = this.processService.statusSync(chainId);
         if (status && status.alive) {
             throw new Error('EnmStateSnapshot.restore: chain must be stopped before restore.');
@@ -375,8 +381,21 @@ class EnmStateSnapshot {
         if (snapshots.length === 0) {
             throw new Error('EnmStateSnapshot.restore: no snapshots available to restore from.');
         }
-        const newest = snapshots[0];
-        const snapshotDir = path.join(DataDir.enmDataDir(), SNAPSHOT_ROOT_NAME, chainId, newest.name);
+        let chosen;
+        if (snapshotName) {
+            // Caller wants a specific snapshot. _listSnapshots only returns
+            // entries with a valid meta.json, so a match here means the
+            // snapshot is restorable.
+            chosen = snapshots.find((s) => s.name === snapshotName);
+            if (!chosen) {
+                throw new Error(
+                    `EnmStateSnapshot.restore: snapshot "${snapshotName}" not found in inventory for ${chainId}.`,
+                );
+            }
+        } else {
+            chosen = snapshots[0]; // newest
+        }
+        const snapshotDir = path.join(DataDir.enmDataDir(), SNAPSHOT_ROOT_NAME, chainId, chosen.name);
         const chainDir = DataDir.chainDir(chainId);
         const restored = [];
         for (const f of STATE_FILES) {
@@ -394,9 +413,9 @@ class EnmStateSnapshot {
             restored.push(dstPath);
         }
         this.extensionHandle.log.info(
-            `${ENM_LOG_PREFIX} EnmStateSnapshot.restore ${chainId}: restored ${restored.length} file(s) from ${newest.name}`,
+            `${ENM_LOG_PREFIX} EnmStateSnapshot.restore ${chainId}: restored ${restored.length} file(s) from ${chosen.name}`,
         );
-        return { ok: true, snapshotName: newest.name, restoredFiles: restored };
+        return { ok: true, snapshotName: chosen.name, restoredFiles: restored };
     }
 }
 

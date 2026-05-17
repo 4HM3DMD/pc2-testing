@@ -89,6 +89,16 @@ function build(deps) {
                 const sz = (s.meta && s.meta.totalBytes) || 0;
                 return acc + sz;
             }, 0);
+            // beta.3.76 — surface the full snapshot inventory so the
+            // operator can pick a specific one to restore. Pre-3.76 the
+            // response only carried `latest`, which forced the UI into
+            // a restore-latest-only flow.
+            const items = snapshots.map((s) => ({
+                name: s.name,
+                takenAt: s.takenAt,
+                sizeBytes: (s.meta && s.meta.totalBytes) || 0,
+                files: (s.meta && s.meta.files) || [],
+            }));
             return res.json(successBody({
                 enabled: snapshotCfg.enabled !== false,  // default true
                 intervalSec: snapshotCfg.intervalSec || 3600,
@@ -96,6 +106,7 @@ function build(deps) {
                 autoRestore: snapshotCfg.autoRestore !== false,
                 count: snapshots.length,
                 latest,
+                snapshots: items,
                 totalSizeBytes,
                 serviceRunning: !!stateSnapshot,
             }));
@@ -147,19 +158,34 @@ function build(deps) {
     });
 
     /**
-     * POST /:chainId/restore
-     * Restore the most-recent snapshot. Stops the chain, copies snapshot
-     * files over live state, restarts. Same flow as the autonomous F22
-     * path — operator can use this to manually trigger when they suspect
-     * a state desync but F22 hasn't fired yet.
+     * POST /:chainId/restore           — restore the most-recent snapshot
+     * POST /:chainId/restore/:snapshotName — restore a specific snapshot
+     *
+     * Stops the chain, copies snapshot files over live state, restarts.
+     * Same flow as the autonomous F22 path — operator can use this to
+     * manually trigger when they suspect a state desync but F22 hasn't
+     * fired yet.
+     *
+     * beta.3.76 — the optional snapshotName path parameter lets the
+     * operator pick a specific historic snapshot (e.g. "restore to 6h
+     * ago, that's before the suspect mutation landed"). Omit for the
+     * autonomous newest-snapshot behaviour.
      *
      * DESTRUCTIVE — requires explicit `?confirm=I-want-to-restore-state`
      * to proceed (mirrors the chain-rollback safety gate from beta.3.61).
      */
-    router.post('/:chainId/restore', limit('admin'), requireOwner, async (req, res) => {
+    const restoreHandler = async (req, res) => {
         const chainId = String(req.params.chainId || '').trim();
         if (!/^[a-z0-9-]+$/.test(chainId)) {
             return res.status(400).json(errorBody('Invalid chainId.'));
+        }
+        const snapshotName = req.params.snapshotName
+            ? String(req.params.snapshotName).trim()
+            : null;
+        if (snapshotName && !/^[A-Za-z0-9._:-]+$/.test(snapshotName)) {
+            // Snapshot names are ISO timestamps like 2026-05-17T22-30-00.123Z
+            // — strict whitelist defends against path traversal.
+            return res.status(400).json(errorBody('Invalid snapshotName.'));
         }
         const confirm = (req.query && req.query.confirm) || '';
         if (confirm !== 'I-want-to-restore-state') {
@@ -196,29 +222,33 @@ function build(deps) {
                 // Fall back to direct stateSnapshot.restore if the engine
                 // isn't wired (shouldn't happen post-3.63, defensive).
                 await adapter.stop().catch(() => { /* tolerate */ });
-                const result = await stateSnapshot.restore(chainId);
+                const result = await stateSnapshot.restore(chainId, snapshotName);
                 await adapter.start(chainCfg);
                 return res.json(successBody({
                     ...result,
                     note: 'Restored via direct path (engine unavailable). Verify manually.',
                 }));
             }
-            const outcome = await engine._executeStateRestore(chainId, chainCfg);
+            const outcome = await engine._executeStateRestore(chainId, chainCfg, snapshotName);
             return res.json(successBody({
                 ok: true,
                 outcome,
+                snapshotName: snapshotName || null,
             }));
         } catch (err) {
             extensionHandle.log.error(
-                `${ENM_LOG_PREFIX} POST /snapshots/${chainId}/restore: ${err.message}`,
+                `${ENM_LOG_PREFIX} POST /snapshots/${chainId}/restore${snapshotName ? '/' + snapshotName : ''}: ${err.message}`,
             );
             // Classify common precondition failures.
             const code = /cooldown/i.test(err.message) ? 429
                 : /no snapshots/i.test(err.message) ? 409
+                : /not found/i.test(err.message) ? 404
                 : 500;
             return res.status(code).json(errorBody(err.message));
         }
-    });
+    };
+    router.post('/:chainId/restore', limit('admin'), requireOwner, restoreHandler);
+    router.post('/:chainId/restore/:snapshotName', limit('admin'), requireOwner, restoreHandler);
 
     return router;
 }

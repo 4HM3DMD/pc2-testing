@@ -478,6 +478,62 @@ function build(extensionHandle) {
         }
     });
 
+    // beta.3.76 — PUT /config/healing.
+    //
+    // Per-rule enable/disable overrides for the healing engine. Body:
+    //   { enabledRules: { F1: true, F2: false, F22: true, ... } }
+    //
+    // Only the keys present in the body are written; omitted rules
+    // keep their previous override (or DEFAULT_ENABLED if never set).
+    // To "clear" a rule back to default, send the boolean of its
+    // DEFAULT_ENABLED value (true for every rule today).
+    //
+    // No chain restart needed — HealthChecker._loadConfigSafe pushes
+    // the new map into HealthRules on its next tick (≤5 s cadence).
+    // The Settings → Healing section ships with a "No restart needed"
+    // tag matching the Alerts section.
+    router.put('/healing', limit('admin'), requireOwner, async (req, res) => {
+        const body = (req.body && typeof req.body === 'object') ? req.body : {};
+        const enabledRules = body.enabledRules;
+        if (!enabledRules || typeof enabledRules !== 'object' || Array.isArray(enabledRules)) {
+            return res.status(400).json(errorBody(
+                'Body must include { enabledRules: { ruleId: bool, ... } }.',
+            ));
+        }
+        // Validate keys + values inline (Joi schema enforces this too,
+        // but a clearer 400 here avoids the operator hitting the cfg
+        // save layer's generic validation error).
+        const RULE_KEY_RE = /^(F\d{1,2}|AUTOSTART)$/;
+        for (const k of Object.keys(enabledRules)) {
+            if (!RULE_KEY_RE.test(k)) {
+                return res.status(400).json(errorBody(
+                    `Invalid ruleId "${k}". Must match /^F\\d{1,2}$/ or be "AUTOSTART".`,
+                ));
+            }
+            if (typeof enabledRules[k] !== 'boolean') {
+                return res.status(400).json(errorBody(
+                    `enabledRules.${k} must be boolean.`,
+                ));
+            }
+        }
+        try {
+            const cfg = await ConfigStore.load();
+            cfg.global = cfg.global || {};
+            cfg.global.healing = cfg.global.healing || {};
+            cfg.global.healing.enabledRules =
+                cfg.global.healing.enabledRules || {};
+            const slot = cfg.global.healing.enabledRules;
+            for (const k of Object.keys(enabledRules)) {
+                slot[k] = !!enabledRules[k];
+            }
+            await ConfigStore.save(cfg, { logger: extensionHandle.log });
+            return res.json(successBody({ enabledRules: slot }));
+        } catch (err) {
+            extensionHandle.log.error(`${ENM_LOG_PREFIX} PUT /config/healing: ${err.message}`);
+            return res.status(500).json(errorBody(err.message));
+        }
+    });
+
     // 0.2.0-beta.3.10 — POST /config/anti-snipe-password.
     //
     // Sets (or clears) the scrypt hash that SelfHealingEngine.

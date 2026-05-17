@@ -792,6 +792,19 @@ class HealthChecker {
                 && cfg.global.notifications.thresholds) {
                 HealthRules.setThresholds(cfg.global.notifications.thresholds);
             }
+            // beta.3.76 — push per-rule enabled overrides into HealthRules
+            // so runAll() honours the operator's toggles. Same idempotent
+            // pattern as the threshold push above. When the operator clears
+            // a toggle by removing the key, the schema defaults to {}, the
+            // rule falls back to DEFAULT_ENABLED, and isRuleEnabled returns
+            // the original default.
+            if (cfg && cfg.global && cfg.global.healing
+                && cfg.global.healing.enabledRules) {
+                const map = cfg.global.healing.enabledRules;
+                for (const ruleId of Object.keys(map)) {
+                    HealthRules.setRuleEnabled(ruleId, !!map[ruleId]);
+                }
+            }
             return cfg;
         } catch (err) {
             this.extensionHandle.log.warn(

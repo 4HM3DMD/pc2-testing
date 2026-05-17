@@ -2236,6 +2236,58 @@
         btnRestore.addEventListener('click', function () { self._handleSnapshotRestore(btnRestore); });
         btnRow.appendChild(btnRestore);
         host.appendChild(btnRow);
+
+        // beta.3.76 — snapshot inventory + per-row restore-by-id.
+        // GET /snapshots/:chainId now returns `snapshots: [{name,
+        // takenAt, sizeBytes, files}]` (pre-3.76 only `latest` was
+        // exposed). Render an inventory table so the operator can pick
+        // a specific historical snapshot to restore instead of always
+        // the newest. Each row's button hits the new POST endpoint
+        // /snapshots/:chainId/restore/:snapshotName.
+        var items = Array.isArray(d.snapshots) ? d.snapshots : [];
+        if (items.length > 0) {
+            var listHead = document.createElement('div');
+            listHead.className = 'enm-snapshot-inventory-head';
+            listHead.textContent = t('settings.snapshot_inventory') || 'All snapshots';
+            host.appendChild(listHead);
+            var inventory = document.createElement('div');
+            inventory.className = 'enm-snapshot-inventory';
+            for (var i = 0; i < items.length; i += 1) {
+                var it = items[i];
+                var row = document.createElement('div');
+                row.className = 'enm-snapshot-inventory-row';
+                if (latest && it.name === latest.name) {
+                    row.classList.add('enm-snapshot-inventory-row-latest');
+                }
+                var time = document.createElement('span');
+                time.className = 'enm-snapshot-inventory-time';
+                time.textContent = new Date(it.takenAt).toLocaleString();
+                if (latest && it.name === latest.name) {
+                    var pill = document.createElement('span');
+                    pill.className = 'enm-snapshot-inventory-latest-pill';
+                    pill.textContent = t('settings.snapshot_latest_pill') || 'latest';
+                    time.appendChild(pill);
+                }
+                row.appendChild(time);
+                var sz = document.createElement('span');
+                sz.className = 'enm-snapshot-inventory-size';
+                sz.textContent = Math.round((it.sizeBytes || 0) / 1024) + ' KB';
+                row.appendChild(sz);
+                var btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'enm-btn enm-btn-danger enm-snapshot-inventory-restore';
+                btn.textContent = t('settings.snapshot_restore_short') || 'Restore';
+                btn.disabled = !enabled;
+                (function (snapshotName, button) {
+                    button.addEventListener('click', function () {
+                        self._handleSnapshotRestore(button, snapshotName);
+                    });
+                }(it.name, btn));
+                row.appendChild(btn);
+                inventory.appendChild(row);
+            }
+            host.appendChild(inventory);
+        }
     };
 
     /** @private — take-now action handler */
@@ -2274,8 +2326,12 @@
             });
     };
 
-    /** @private — restore-now action handler (double-confirm) */
-    SettingsTab.prototype._handleSnapshotRestore = function (btn) {
+    /** @private — restore-now action handler (double-confirm)
+     * @param {HTMLButtonElement} btn
+     * @param {string} [snapshotName] beta.3.76 — optional ISO name; when
+     *   omitted, restores the newest snapshot (pre-3.76 behaviour).
+     */
+    SettingsTab.prototype._handleSnapshotRestore = function (btn, snapshotName) {
         var self = this;
         var t = root.enmTOrFallback;
         if (!this.services || !this.services.api
@@ -2285,16 +2341,25 @@
         }
         // Browser-native confirm is fine here — the action is rare,
         // destructive, and operator-initiated. No need for a custom
-        // modal yet.
-        if (!root.confirm(t('settings.snapshot_restore_confirm'))) { return; }
+        // modal yet. When restoring a specific snapshot, include its
+        // timestamp in the confirm prompt so the operator can verify
+        // they're about to roll the chain back to that point.
+        var confirmMsg = t('settings.snapshot_restore_confirm');
+        if (snapshotName) {
+            confirmMsg += '\n\n' + (t('settings.snapshot_restore_picked') || 'Will restore: ')
+                + snapshotName;
+        }
+        if (!root.confirm(confirmMsg)) { return; }
         btn.disabled = true;
         var prev = btn.textContent;
         btn.textContent = t('settings.snapshot_restoring');
         // Confirm query param matches the server-side gate in
         // routes/snapshots.js (412 without it).
-        this.services.api.post(
-            '/snapshots/mainchain/restore?confirm=I-want-to-restore-state', {},
-        )
+        var url = snapshotName
+            ? ('/snapshots/mainchain/restore/' + encodeURIComponent(snapshotName)
+               + '?confirm=I-want-to-restore-state')
+            : '/snapshots/mainchain/restore?confirm=I-want-to-restore-state';
+        this.services.api.post(url, {})
             .then(function (data) {
                 var r = (data && data.result) || data || {};
                 self.services.notifications.show({
@@ -2439,12 +2504,40 @@
             titleEl.textContent = rule.title || rule.ruleId;
             ruleSummary.appendChild(titleEl);
 
-            if (!rule.currentlyEnabled) {
-                var off = document.createElement('span');
-                off.className = 'enm-healing-rules-off';
-                off.textContent = 'off';
-                ruleSummary.appendChild(off);
-            }
+            // beta.3.76 — operator-facing per-rule on/off toggle.
+            // Backend persists via PUT /config/healing and HealthChecker
+            // pushes the map into HealthRules.setRuleEnabled on its
+            // next ≤5s tick. The handler is wired to a span (not a
+            // <button> inside the <summary>) to dodge the native
+            // <summary> click semantics that would expand/collapse the
+            // <details> when the toggle is clicked. Stop propagation +
+            // role=switch + keyboard support keep it accessible.
+            var toggle = document.createElement('span');
+            toggle.className = 'enm-healing-rules-toggle';
+            toggle.setAttribute('role', 'switch');
+            toggle.setAttribute('aria-checked', rule.currentlyEnabled ? 'true' : 'false');
+            toggle.setAttribute('tabindex', '0');
+            toggle.setAttribute('data-rule-id', rule.ruleId);
+            toggle.setAttribute(
+                'aria-label',
+                (rule.currentlyEnabled ? 'Disable' : 'Enable') + ' rule ' + rule.ruleId,
+            );
+            toggle.textContent = rule.currentlyEnabled ? 'on' : 'off';
+            if (!rule.currentlyEnabled) { toggle.classList.add('enm-healing-rules-toggle-off'); }
+            (function (toggle, ruleId, currentlyEnabled) {
+                function handleFlip(ev) {
+                    if (ev) {
+                        ev.preventDefault();
+                        ev.stopPropagation();
+                    }
+                    self._toggleHealingRule(ruleId, !currentlyEnabled, toggle);
+                }
+                toggle.addEventListener('click', handleFlip);
+                toggle.addEventListener('keydown', function (ev) {
+                    if (ev.key === ' ' || ev.key === 'Enter') { handleFlip(ev); }
+                });
+            }(toggle, rule.ruleId, rule.currentlyEnabled));
+            ruleSummary.appendChild(toggle);
 
             ruleDetails.appendChild(ruleSummary);
 
@@ -2457,6 +2550,60 @@
             list.appendChild(li);
         }
         host.appendChild(list);
+    };
+
+    /**
+     * beta.3.76 — flip a single F-rule on/off.
+     * PUT /config/healing with a single-key body so other persisted
+     * overrides remain intact (the route is additive — keys absent from
+     * the body are not cleared). On success, refresh the rules list so
+     * the next render reflects the new state.
+     * @private
+     */
+    SettingsTab.prototype._toggleHealingRule = function (ruleId, nextEnabled, toggleEl) {
+        var self = this;
+        if (!this.services || !this.services.api
+            || typeof this.services.api.put !== 'function') {
+            return;
+        }
+        // Optimistic UI flip — restore on error.
+        var prevText = toggleEl.textContent;
+        var prevChecked = toggleEl.getAttribute('aria-checked');
+        toggleEl.textContent = nextEnabled ? 'on' : 'off';
+        toggleEl.setAttribute('aria-checked', nextEnabled ? 'true' : 'false');
+        toggleEl.classList.toggle('enm-healing-rules-toggle-off', !nextEnabled);
+        var body = { enabledRules: {} };
+        body.enabledRules[ruleId] = !!nextEnabled;
+        this.services.api.put('/config/healing', body)
+            .then(function () {
+                if (self.services && self.services.notifications) {
+                    self.services.notifications.show({
+                        severity: 'info',
+                        title: ruleId + ' is now ' + (nextEnabled ? 'on' : 'off'),
+                        body: 'The healing engine will pick up this change within ~5 s.',
+                    });
+                }
+                // Re-render so the disabled-style class flips on the <li>
+                // wrapper too (visual dim). Backend push completes async
+                // so the rendered state will match within a tick.
+                self._refreshHealingRules();
+            })
+            .catch(function (err) {
+                toggleEl.textContent = prevText;
+                toggleEl.setAttribute('aria-checked', prevChecked);
+                toggleEl.classList.toggle(
+                    'enm-healing-rules-toggle-off',
+                    prevChecked !== 'true',
+                );
+                var msg = (err && err.message) || String(err);
+                if (self.services && self.services.notifications) {
+                    self.services.notifications.show({
+                        severity: 'warning',
+                        title: 'Failed to update ' + ruleId,
+                        body: msg,
+                    });
+                }
+            });
     };
 
     /**
