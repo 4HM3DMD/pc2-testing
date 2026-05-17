@@ -6266,3 +6266,201 @@ body[data-app-size="compact"] .enm-app .enm-audit-toolbar-actions .enm-btn {
     padding: 3px 6px;
     font-size: 10px;
 }
+
+/* ====================================================================
+ * beta.3.75 — "do same for all other pages" — apply the 3.74 compact
+ * treatment (page-scroll, tighter chrome, smaller buttons) uniformly
+ * across Dashboard + Settings. The audit pane already feels mobile-
+ * native after 3.74; the other panes still had wide-card chrome at
+ * compact (sp-4/sp-5 padding, sp-4 card gaps, 32px section icons)
+ * eating screen real estate that mobile operators don't have to
+ * spare.
+ *
+ * Key moves:
+ *   - main padding drops to 4px at <360px viewports so card content
+ *     gets edge-to-edge feel
+ *   - all section cards lose their side borders + radius at <360px
+ *     (edge-to-edge mobile pattern) so content body uses the full
+ *     viewport width
+ *   - section card body padding tightens to sp-2 at compact
+ *   - dashboard cards tighter
+ *   - settings nav section heads + items tighter
+ *   - misc card chrome (icon size, head padding) shrinks
+ * ==================================================================== */
+
+/* Very-narrow viewport floor: under 360px (typical PC2 window can be
+   even narrower than iPhone-SE), trim main + pane padding to 4px so
+   every pixel goes to content. */
+@media (max-width: 360px) {
+    .enm-app[data-app-size="compact"] .enm-main,
+    body[data-app-size="compact"] .enm-app .enm-main {
+        padding: 4px;
+    }
+    .enm-app[data-app-size="compact"] #enm-pane-dashboard,
+    body[data-app-size="compact"] .enm-app #enm-pane-dashboard {
+        gap: var(--sp-2);
+        padding-bottom: var(--sp-2);
+    }
+    .enm-app[data-app-size="compact"] #enm-pane-audit,
+    body[data-app-size="compact"] .enm-app #enm-pane-audit,
+    .enm-app[data-app-size="compact"] #enm-pane-logs,
+    body[data-app-size="compact"] .enm-app #enm-pane-logs {
+        padding: 4px;
+        gap: 4px;
+    }
+}
+
+/* Dashboard pane density at compact (all viewports <480px). */
+.enm-app[data-app-size="compact"] #enm-pane-dashboard,
+body[data-app-size="compact"] .enm-app #enm-pane-dashboard {
+    gap: var(--sp-3);
+    padding-bottom: var(--sp-3);
+}
+
+/* Section cards: tighter body padding at compact + edge-to-edge feel
+   at very-narrow viewports (drops border + radius so cards extend
+   visually to the pane edges, recovering ~16px of horizontal content
+   width per card). */
+.enm-app[data-app-size="compact"] .enm-section-card,
+body[data-app-size="compact"] .enm-app .enm-section-card {
+    border-radius: var(--r-sm);
+}
+.enm-app[data-app-size="compact"] .enm-section-card-body,
+body[data-app-size="compact"] .enm-app .enm-section-card-body {
+    padding: var(--sp-2) var(--sp-3);
+}
+.enm-app[data-app-size="compact"] .enm-section-card-head,
+body[data-app-size="compact"] .enm-app .enm-section-card-head {
+    padding: var(--sp-2) var(--sp-3);
+}
+.enm-app[data-app-size="compact"] .enm-section-card-icon,
+body[data-app-size="compact"] .enm-app .enm-section-card-icon {
+    width: 24px;
+    height: 24px;
+}
+@media (max-width: 360px) {
+    .enm-app[data-app-size="compact"] .enm-section-card,
+    body[data-app-size="compact"] .enm-app .enm-section-card {
+        border-left: none;
+        border-right: none;
+        border-radius: 0;
+        margin-left: -4px;
+        margin-right: -4px;
+    }
+    .enm-app[data-app-size="compact"] .enm-section-card-body,
+    body[data-app-size="compact"] .enm-app .enm-section-card-body {
+        padding: var(--sp-2);
+    }
+    .enm-app[data-app-size="compact"] .enm-section-card-head,
+    body[data-app-size="compact"] .enm-app .enm-section-card-head {
+        padding: var(--sp-2);
+    }
+}
+
+/* Chain card (hero on dashboard): tighter at compact for the same
+   reasons as section cards. */
+.enm-app[data-app-size="compact"] .enm-chain-card,
+body[data-app-size="compact"] .enm-app .enm-chain-card {
+    padding: var(--sp-3);
+    border-radius: var(--r-sm);
+}
+.enm-app[data-app-size="compact"] .enm-chain-card-title,
+body[data-app-size="compact"] .enm-app .enm-chain-card-title {
+    font-size: var(--fs-body);
+}
+@media (max-width: 360px) {
+    .enm-app[data-app-size="compact"] .enm-chain-card,
+    body[data-app-size="compact"] .enm-app .enm-chain-card {
+        padding: var(--sp-2);
+        border-left: none;
+        border-right: none;
+        border-radius: 0;
+        margin-left: -4px;
+        margin-right: -4px;
+    }
+    .enm-app[data-app-size="compact"] .enm-chain-height,
+    body[data-app-size="compact"] .enm-app .enm-chain-height {
+        font-size: 22px;
+    }
+}
+
+/* Settings pane wrap + pills strip — at compact the existing rules
+   (line ~2853) drop the nav rail and switch to horizontal pills.
+   Tighten pill spacing further so 6 sections fit on one row without
+   wrapping. */
+.enm-app[data-app-size="compact"] .enm-settings-wrap,
+body[data-app-size="compact"] .enm-app .enm-settings-wrap {
+    gap: var(--sp-2);
+}
+.enm-app[data-app-size="compact"] .enm-settings-pills,
+body[data-app-size="compact"] .enm-app .enm-settings-pills {
+    padding-bottom: var(--sp-2);
+    gap: 2px;
+}
+.enm-app[data-app-size="compact"] .enm-settings-pane,
+body[data-app-size="compact"] .enm-app .enm-settings-pane {
+    gap: var(--sp-2);
+}
+
+/* Healing rules section: each rule-row + the "view details" summary
+   tighten at compact so the long Healing pane fits more rules per
+   screen. */
+.enm-app[data-app-size="compact"] .enm-healing-rules-row > summary.enm-healing-rules-row-summary,
+body[data-app-size="compact"] .enm-app .enm-healing-rules-row > summary.enm-healing-rules-row-summary {
+    padding: var(--sp-1) var(--sp-2);
+}
+.enm-app[data-app-size="compact"] .enm-healing-details > summary.enm-healing-details-summary,
+body[data-app-size="compact"] .enm-app .enm-healing-details > summary.enm-healing-details-summary {
+    padding: 6px var(--sp-2);
+    font-size: var(--fs-caption);
+}
+
+/* Auto-heal snapshot card values stack tighter at compact. */
+.enm-app[data-app-size="compact"] .enm-snapshot-value,
+body[data-app-size="compact"] .enm-app .enm-snapshot-value {
+    font-size: var(--fs-caption);
+}
+
+/* Tools / update card head — wide uses fs-h3 (22px) + sp-4 padding.
+   Tighten to body font + sp-2 padding at compact. */
+.enm-app[data-app-size="compact"] .enm-tools-update-head h3,
+body[data-app-size="compact"] .enm-app .enm-tools-update-head h3 {
+    font-size: var(--fs-body);
+}
+.enm-app[data-app-size="compact"] .enm-tools-update-card,
+body[data-app-size="compact"] .enm-app .enm-tools-update-card {
+    padding: var(--sp-2) var(--sp-3);
+}
+.enm-app[data-app-size="compact"] .enm-tools-update-versions,
+body[data-app-size="compact"] .enm-app .enm-tools-update-versions {
+    font-size: var(--fs-caption);
+    gap: 6px;
+}
+
+/* Validator-registration card (shown to unregistered nodes): wide
+   has a sp-6 padded conversational card. At compact, tighten so the
+   setup steps don't push the action button off-screen. */
+.enm-app[data-app-size="compact"] .enm-validator-registration-card,
+body[data-app-size="compact"] .enm-app .enm-validator-registration-card {
+    padding: var(--sp-3);
+}
+
+/* Node-identity card: stack the head columns at compact and shrink
+   the head font so the pubkey + wallet address rows get more room. */
+.enm-app[data-app-size="compact"] .enm-identity-card,
+body[data-app-size="compact"] .enm-app .enm-identity-card {
+    padding: var(--sp-2);
+}
+.enm-app[data-app-size="compact"] .enm-identity-card-title,
+body[data-app-size="compact"] .enm-app .enm-identity-card-title {
+    font-size: var(--fs-body);
+}
+
+/* Welcome / setup conversation cards (first-run flow). Shrink so
+   the setup prompts read like a chat thread on a phone. */
+.enm-app[data-app-size="compact"] .enm-welcome-card,
+body[data-app-size="compact"] .enm-app .enm-welcome-card,
+.enm-app[data-app-size="compact"] .enm-setup-msg,
+body[data-app-size="compact"] .enm-app .enm-setup-msg {
+    padding: var(--sp-3);
+}
