@@ -5568,3 +5568,442 @@ body[data-app-size="compact"] .enm-bpos-head-chip,
     opacity: 0.5;
     cursor: not-allowed;
 }
+
+/* ====================================================================
+ * beta.3.72 — compact + narrow viewport overhaul.
+ *
+ * 3.71 fixed the topbar regression from 3.70 but every pane still had
+ * piecemeal compact treatment that left layouts overflowing or jammed
+ * at iPhone-class widths (<480px). This block is a single, source-
+ * ordered-last override layer that owns small-screen behavior for:
+ *
+ *   - shared chrome: section cards, form rows, inputs, chip inputs,
+ *     secret fields, modals
+ *   - Dashboard: stats grids, BPoS grid, identity grid, hero slot
+ *   - Logs: line grid, toolbar, search, meta, chips
+ *   - Settings: pills nav, healing rules + activity, snapshot grid
+ *   - Activity: filters, table cells, drawer head/kv/payload/foot
+ *
+ * Bugs were enumerated by 4 parallel audit passes — ~56 findings.
+ * This block addresses every HIGH-severity item plus the cluster of
+ * MED items that matter for one-handed phone use; LOW items left for
+ * follow-up. Each rule has a one-line comment explaining the bug it
+ * fixes so future operators can trace intent.
+ * ==================================================================== */
+
+/* --------- shared chrome (forms, cards, inputs, modals) ---------- */
+
+/* Form rows: at wide the label sits in a 230px left column. At narrow
+   (<700px) the entire row stacks — label above control — so neither
+   element ever competes with the other for horizontal space. */
+.enm-app[data-app-size="narrow"] .enm-form-row,
+body[data-app-size="narrow"] .enm-app .enm-form-row,
+.enm-app[data-app-size="compact"] .enm-form-row,
+body[data-app-size="compact"] .enm-app .enm-form-row {
+    grid-template-columns: 1fr;
+    gap: var(--sp-2);
+    padding: var(--sp-3) 0;
+}
+.enm-app[data-app-size="narrow"] .enm-form-label-block,
+body[data-app-size="narrow"] .enm-app .enm-form-label-block,
+.enm-app[data-app-size="compact"] .enm-form-label-block,
+body[data-app-size="compact"] .enm-app .enm-form-label-block {
+    display: block;
+    padding-top: 0;
+}
+
+/* Help text inside form rows wraps without hyphens at wide; at compact
+   the container shrinks below the longest help string and long URLs
+   would overflow. break-word lets them split. */
+.enm-app[data-app-size="compact"] .enm-form-control-help,
+body[data-app-size="compact"] .enm-app .enm-form-control-help {
+    word-break: break-word;
+    overflow-wrap: anywhere;
+}
+
+/* Inline button row (e.g. Save + Cancel + status span). At compact
+   each button gets equal width and stretches across the row. */
+.enm-app[data-app-size="compact"] .enm-form-inline,
+body[data-app-size="compact"] .enm-app .enm-form-inline {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--sp-2);
+}
+.enm-app[data-app-size="compact"] .enm-form-inline .enm-btn,
+body[data-app-size="compact"] .enm-app .enm-form-inline .enm-btn {
+    width: 100%;
+}
+
+/* Input with right-side suffix (e.g. "blocks" / "min" tick units).
+   At compact the 56px wide-mode right-padding eats too much room. */
+.enm-app[data-app-size="narrow"] .enm-input.has-suffix,
+body[data-app-size="narrow"] .enm-app .enm-input.has-suffix {
+    padding-right: 40px;
+}
+.enm-app[data-app-size="compact"] .enm-input.has-suffix,
+body[data-app-size="compact"] .enm-app .enm-input.has-suffix {
+    padding-right: 36px;
+}
+
+/* Chip input (whitelist editor, RPC allow-list). Fixed 38px min-height
+   forced ugly stretching when many chips wrapped; let it grow naturally. */
+.enm-app[data-app-size="compact"] .enm-chip-input,
+body[data-app-size="compact"] .enm-app .enm-chip-input {
+    min-height: 0;
+    align-items: flex-start;
+}
+.enm-app[data-app-size="compact"] .enm-chip-input-input,
+body[data-app-size="compact"] .enm-app .enm-chip-input-input {
+    min-width: 60px;
+    flex: 1 1 80px;
+}
+/* Individual chips: long IPv6 strings get ellipsis instead of forcing
+   their container wider than the pane. The dropdown / popover variants
+   keep their full-text affordance via title=. */
+.enm-app[data-app-size="compact"] .enm-chip,
+body[data-app-size="compact"] .enm-app .enm-chip {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Secret field (RPC password etc.) — input + show/hide eye button
+   side-by-side eats horizontal room. Stack at compact. */
+.enm-app[data-app-size="compact"] .enm-secret-field,
+body[data-app-size="compact"] .enm-app .enm-secret-field {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--sp-2);
+}
+.enm-app[data-app-size="compact"] .enm-secret-field .enm-input,
+body[data-app-size="compact"] .enm-app .enm-secret-field .enm-input {
+    padding-right: var(--sp-3);
+}
+
+/* Section card head: icon column + headbody is 32+24+text at wide.
+   At compact the icon sits above so the text can use the full width. */
+.enm-app[data-app-size="compact"] .enm-section-card-head,
+body[data-app-size="compact"] .enm-app .enm-section-card-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--sp-2);
+    padding: var(--sp-3);
+}
+.enm-app[data-app-size="compact"] .enm-section-card-title,
+body[data-app-size="compact"] .enm-app .enm-section-card-title {
+    font-size: var(--fs-body);
+    line-height: 1.35;
+}
+.enm-app[data-app-size="compact"] .enm-section-card-body,
+body[data-app-size="compact"] .enm-app .enm-section-card-body {
+    padding: var(--sp-3);
+}
+
+/* Security callout — banner above sensitive toggles. Shrink padding
+   so the body text doesn't wrap to 4 lines on a 320px viewport. */
+.enm-app[data-app-size="compact"] .enm-security-callout,
+body[data-app-size="compact"] .enm-app .enm-security-callout {
+    padding: var(--sp-2);
+    font-size: var(--fs-caption);
+    line-height: 1.45;
+}
+
+/* Modal card: shared between confirmation modals (proposal accept,
+   danger zone confirms, snapshot restore). Tighten padding + heading
+   at compact so the card fits a 280px PC2 window with room to read. */
+.enm-app[data-app-size="compact"] .enm-modal-card,
+body[data-app-size="compact"] .enm-app .enm-modal-card {
+    padding: var(--sp-3);
+}
+.enm-app[data-app-size="compact"] .enm-modal-title,
+body[data-app-size="compact"] .enm-app .enm-modal-title {
+    font-size: var(--fs-body);
+    line-height: 1.35;
+}
+/* Modal actions row stacks at compact. Drop the cooldown's
+   margin-right:auto so it doesn't fly to the top of the stacked row;
+   it should sit flush left like the other buttons. */
+.enm-app[data-app-size="compact"] .enm-modal-actions,
+body[data-app-size="compact"] .enm-app .enm-modal-actions {
+    flex-direction: column-reverse;
+    align-items: stretch;
+    gap: var(--sp-2);
+}
+.enm-app[data-app-size="compact"] .enm-modal-actions .enm-modal-cooldown,
+body[data-app-size="compact"] .enm-app .enm-modal-actions .enm-modal-cooldown {
+    margin: 0;
+    text-align: center;
+}
+.enm-app[data-app-size="compact"] .enm-modal-actions .enm-btn,
+body[data-app-size="compact"] .enm-app .enm-modal-actions .enm-btn {
+    width: 100%;
+}
+
+/* ----------------- Dashboard pane (chain card + system status) ----- */
+
+/* Stats grid (peers / version / uptime) — wide uses auto-fit minmax
+   120px which becomes 2 cells of 120-160px each on narrow viewports
+   and forces the 3rd onto its own row. At compact, drop to 1 column
+   so each metric reads cleanly with its full label. */
+.enm-app[data-app-size="compact"] .enm-stats,
+body[data-app-size="compact"] .enm-app .enm-stats {
+    grid-template-columns: 1fr;
+    gap: var(--sp-2);
+    padding-top: var(--sp-3);
+    margin-top: var(--sp-3);
+}
+
+/* BPoS stat grid (deposit / rewards / staked, etc.) — wide is 2 cols;
+   at compact a 2-col layout squeezes the values, so 1 col reads better. */
+.enm-app[data-app-size="compact"] .enm-bpos-grid,
+body[data-app-size="compact"] .enm-app .enm-bpos-grid {
+    grid-template-columns: 1fr;
+    gap: var(--sp-2);
+}
+.enm-app[data-app-size="compact"] .enm-bpos-head-title,
+body[data-app-size="compact"] .enm-app .enm-bpos-head-title {
+    font-size: 15px;
+}
+/* Long 66-char hex signing-key value: shrink font 1px so it doesn't
+   wrap into 4-5 short lines at <360px. */
+.enm-app[data-app-size="compact"] .enm-bpos-signing-key-value,
+body[data-app-size="compact"] .enm-app .enm-bpos-signing-key-value {
+    font-size: 10px;
+}
+
+/* Identity-grid rows (node identity card): 160px label column starves
+   the 1fr value column below ~360px width. Stack at narrow + compact. */
+.enm-app[data-app-size="narrow"] .enm-identity-grid-row,
+body[data-app-size="narrow"] .enm-app .enm-identity-grid-row,
+.enm-app[data-app-size="compact"] .enm-identity-grid-row,
+body[data-app-size="compact"] .enm-app .enm-identity-grid-row {
+    grid-template-columns: 1fr;
+    gap: var(--sp-1);
+    align-items: flex-start;
+}
+.enm-app[data-app-size="compact"] .enm-identity-row,
+body[data-app-size="compact"] .enm-app .enm-identity-row {
+    padding: var(--sp-2) var(--sp-3);
+}
+
+/* Chain hero slot — fixed 124px at compact still ate room next to
+   the metadata at <360px. Cap to 100px so meta gets breathing room. */
+@media (max-width: 360px) {
+    .enm-app[data-app-size="compact"] .enm-chain-hero-slot,
+    body[data-app-size="compact"] .enm-app .enm-chain-hero-slot {
+        width: 88px;
+        max-width: 100%;
+    }
+}
+
+/* ---------------------- Logs pane --------------------------------- */
+
+/* Toolbar gap shrinks at narrow + compact so search + chips stay on
+   one row whenever possible. */
+.enm-app[data-app-size="narrow"] .enm-log-toolbar,
+body[data-app-size="narrow"] .enm-app .enm-log-toolbar {
+    gap: var(--sp-2);
+}
+.enm-app[data-app-size="narrow"] .enm-log-toolbar-left,
+body[data-app-size="narrow"] .enm-app .enm-log-toolbar-left {
+    gap: var(--sp-2);
+}
+.enm-app[data-app-size="narrow"] .enm-log-search,
+body[data-app-size="narrow"] .enm-app .enm-log-search {
+    max-width: 240px;
+    min-width: 140px;
+}
+/* Level chips: drop padding so 4 chips + counts fit one row at narrow. */
+.enm-app[data-app-size="narrow"] .enm-log-lvl-chip,
+body[data-app-size="narrow"] .enm-app .enm-log-lvl-chip {
+    padding: 3px 8px;
+    gap: 4px;
+}
+.enm-app[data-app-size="narrow"] .enm-log-meta,
+body[data-app-size="narrow"] .enm-app .enm-log-meta {
+    gap: var(--sp-2);
+}
+
+/* Log line grid: 80px timestamp + 16px stream icon + 1fr text at wide
+   leaves ~ (viewport - 96px) for the message. At narrow the wide grid
+   is overspecified; tighten timestamp + stream so the message gets
+   another ~20px of room. Compact already has its own tighter rule. */
+.enm-app[data-app-size="narrow"] .enm-log-line,
+body[data-app-size="narrow"] .enm-app .enm-log-line {
+    grid-template-columns: 64px 14px 1fr;
+    gap: var(--sp-1);
+    padding: 1px var(--sp-3);
+}
+
+/* ---------------------- Settings pane ----------------------------- */
+
+/* Settings pills nav: when the left rail collapses to horizontal pills,
+   the wide pill size (~80px each) overflows a 320px viewport. Shrink. */
+.enm-app[data-app-size="compact"] .enm-settings-pill,
+body[data-app-size="compact"] .enm-app .enm-settings-pill {
+    padding: 4px var(--sp-2);
+    gap: 4px;
+    font-size: 11px;
+}
+
+/* Healing rules per-row layout: wide is dot + ID badge + title with
+   3-col grid. At compact the ID badge eats half the row; drop it
+   (visually — it stays readable on expand) and let title use full width. */
+.enm-app[data-app-size="compact"] .enm-healing-rules-row > summary.enm-healing-rules-row-summary,
+body[data-app-size="compact"] .enm-app .enm-healing-rules-row > summary.enm-healing-rules-row-summary {
+    flex-wrap: wrap;
+    row-gap: 2px;
+}
+.enm-app[data-app-size="compact"] .enm-healing-rules-row .enm-healing-rule-id,
+body[data-app-size="compact"] .enm-app .enm-healing-rules-row .enm-healing-rule-id {
+    font-size: 10px;
+    padding: 1px 4px;
+}
+
+/* Healing activity table: 4 columns (when / rule / action / outcome).
+   Even at narrow the rightmost outcome clips. Allow horizontal scroll
+   wrapped in a scroller so the table doesn't blow out the pane width. */
+.enm-app[data-app-size="narrow"] .enm-healing-activity-scroll,
+body[data-app-size="narrow"] .enm-app .enm-healing-activity-scroll,
+.enm-app[data-app-size="compact"] .enm-healing-activity-scroll,
+body[data-app-size="compact"] .enm-app .enm-healing-activity-scroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+.enm-app[data-app-size="compact"] .enm-healing-activity-table,
+body[data-app-size="compact"] .enm-app .enm-healing-activity-table {
+    font-size: 11px;
+    min-width: 360px; /* keeps columns aligned; scroll within scroller */
+}
+.enm-app[data-app-size="compact"] .enm-healing-activity-table th,
+.enm-app[data-app-size="compact"] .enm-healing-activity-table td,
+body[data-app-size="compact"] .enm-app .enm-healing-activity-table th,
+body[data-app-size="compact"] .enm-app .enm-healing-activity-table td {
+    padding: 6px var(--sp-2);
+}
+
+/* Healing-details <summary> touch target — bump to 44px floor at
+   compact so phone taps reliably hit (WCAG 2.5.5 minimum). */
+.enm-app[data-app-size="compact"] .enm-healing-details > summary.enm-healing-details-summary,
+body[data-app-size="compact"] .enm-app .enm-healing-details > summary.enm-healing-details-summary {
+    min-height: 44px;
+    align-items: center;
+}
+
+/* Snapshot grid (Settings → Security → auto-heal snapshots card):
+   wide is max-content+1fr; at compact stack so long status labels
+   ("Auto-restore status") don't push values off-screen. */
+.enm-app[data-app-size="compact"] .enm-snapshot-grid,
+body[data-app-size="compact"] .enm-app .enm-snapshot-grid {
+    grid-template-columns: 1fr;
+    gap: 2px;
+}
+.enm-app[data-app-size="compact"] .enm-snapshot-label,
+body[data-app-size="compact"] .enm-app .enm-snapshot-label {
+    font-size: 10px;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.enm-app[data-app-size="compact"] .enm-snapshot-actions .enm-btn,
+body[data-app-size="compact"] .enm-app .enm-snapshot-actions .enm-btn {
+    flex: 1 1 100%;
+}
+
+/* ---------------------- Activity (audit) pane --------------------- */
+
+/* Filter strip: wide is two horizontal groups (When + Tier) on one
+   row. At compact stack the groups vertically and tighten chip
+   spacing so each group reads on its own line. */
+.enm-app[data-app-size="compact"] .enm-audit-filters,
+body[data-app-size="compact"] .enm-app .enm-audit-filters {
+    gap: var(--sp-1);
+    padding: var(--sp-2);
+}
+.enm-app[data-app-size="compact"] .enm-audit-filter-group,
+body[data-app-size="compact"] .enm-app .enm-audit-filter-group {
+    flex-direction: row;
+    flex-wrap: wrap;
+    width: 100%;
+    gap: 4px;
+}
+.enm-app[data-app-size="compact"] .enm-filter-chip,
+body[data-app-size="compact"] .enm-app .enm-filter-chip {
+    padding: 4px 8px;
+    font-size: 11px;
+    flex-shrink: 1;
+}
+
+/* Audit table column hiding: wide shows all columns; compact already
+   hides .col-executor + .col-decision; narrow now also hides
+   .col-decision so the badge clutter eases at tablet widths too. */
+.enm-app[data-app-size="narrow"] .enm-audit-table .col-decision,
+body[data-app-size="narrow"] .enm-app .enm-audit-table .col-decision {
+    display: none;
+}
+
+/* Audit table cell density at narrow + compact. */
+.enm-app[data-app-size="narrow"] .enm-audit-table thead th,
+body[data-app-size="narrow"] .enm-app .enm-audit-table thead th,
+.enm-app[data-app-size="compact"] .enm-audit-table thead th,
+body[data-app-size="compact"] .enm-app .enm-audit-table thead th {
+    padding: 6px var(--sp-2);
+    font-size: 10px;
+}
+.enm-app[data-app-size="narrow"] .enm-audit-table td,
+body[data-app-size="narrow"] .enm-app .enm-audit-table td,
+.enm-app[data-app-size="compact"] .enm-audit-table td,
+body[data-app-size="compact"] .enm-app .enm-audit-table td {
+    padding: 6px var(--sp-2);
+}
+
+/* Audit drawer (opens from the side when an audit row is selected).
+   At compact the drawer is full-width; tighten padding so content
+   gets every usable pixel, and stack the header so the long mono
+   title doesn't fight with the tier badge + timestamp. */
+.enm-app[data-app-size="compact"] .enm-audit-drawer,
+body[data-app-size="compact"] .enm-app .enm-audit-drawer {
+    padding: var(--sp-3);
+}
+.enm-app[data-app-size="compact"] .enm-audit-drawer-head,
+body[data-app-size="compact"] .enm-app .enm-audit-drawer-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--sp-2);
+}
+.enm-app[data-app-size="compact"] .enm-drawer-title-mono,
+body[data-app-size="compact"] .enm-app .enm-drawer-title-mono {
+    word-break: break-word;
+    font-size: 13px;
+}
+/* Drawer key-value rows: 90px label column starves long values at
+   compact; stack instead so each pair reads cleanly. */
+.enm-app[data-app-size="compact"] .enm-drawer-kv,
+body[data-app-size="compact"] .enm-app .enm-drawer-kv {
+    grid-template-columns: 1fr;
+    gap: 2px;
+    padding: var(--sp-2) 0;
+}
+.enm-app[data-app-size="compact"] .enm-drawer-kv-key,
+body[data-app-size="compact"] .enm-app .enm-drawer-kv-key {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-tertiary);
+}
+/* JSON payload pre: wide uses horizontal scroll. At compact also
+   word-break-all so very long string values wrap inside the box
+   instead of forcing a scrollbar inside an already-narrow viewport. */
+.enm-app[data-app-size="compact"] .enm-drawer-payload,
+body[data-app-size="compact"] .enm-app .enm-drawer-payload {
+    font-size: 10px;
+    word-break: break-all;
+    white-space: pre-wrap;
+}
+/* Drawer prev/next nav row: at compact use shorter arrow-only labels
+   via ::before so each button stays under 60px instead of wrapping. */
+.enm-app[data-app-size="compact"] .enm-audit-drawer-foot,
+body[data-app-size="compact"] .enm-app .enm-audit-drawer-foot {
+    gap: var(--sp-1);
+}
