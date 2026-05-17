@@ -178,9 +178,18 @@ class HealthChecker {
             // by the OS, so 10s is more than enough headroom. Reattached
             // processes (which never have a child handle and therefore
             // never get an 'exit' event) still get synthesized at tick 2.
-            if (s._wasAlivePrevTick && !alive) {
+            //
+            // beta.3.65 — counter increment fixed. Previous code only
+            // incremented on the alive=true→false transition tick, then
+            // _wasAlivePrevTick flipped to false so subsequent dead ticks
+            // failed the `_wasAlivePrevTick && !alive` guard — counter
+            // stalled at 1 forever, synthesis (>= 2) never fired. F1 was
+            // silently broken for all reattached-process-died scenarios
+            // since 3.60. Now: increment whenever current=dead, reset on
+            // alive. Reaches >= 2 after two consecutive dead ticks (10s).
+            if (!alive) {
                 s._consecutiveDeadTicks = (s._consecutiveDeadTicks || 0) + 1;
-            } else if (alive) {
+            } else {
                 s._consecutiveDeadTicks = 0;
             }
             if (s._observedAliveOnce && s._consecutiveDeadTicks >= 2 && !alive && !s.lastExit) {
