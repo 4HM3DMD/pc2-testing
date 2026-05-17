@@ -6007,3 +6007,144 @@ body[data-app-size="compact"] .enm-app .enm-drawer-payload {
 body[data-app-size="compact"] .enm-app .enm-audit-drawer-foot {
     gap: var(--sp-1);
 }
+
+/* ====================================================================
+ * beta.3.73 — operator screenshot (320-ish px PC2 window) showed three
+ * remaining issues after 3.72:
+ *   (a) topbar tabs still wrapping to 2 rows next to selector + gear
+ *   (b) "Show technical details" + "Copy filtered rows" buttons stacked
+ *       full-width on the Activity pane, eating 90px of vertical real
+ *       estate before any audit row appears
+ *   (c) audit-toolbar title + scope note + footer using wide-mode
+ *       padding, compressing the viewport that should belong to data
+ * ==================================================================== */
+
+/* --- (a) Topbar — restructure as a 2-row grid at compact -----------
+   Wide/narrow keeps the wide-mode flex (selector | tabs | gear in a
+   single row). At compact, switch to a 2-row grid:
+     row 1:  [selector]   [spacer 1fr]   [gear]
+     row 2:  [    tabs spanning all 3 columns    ]
+   This eliminates the ambiguous "tabs wrap within the topbar flex"
+   behavior — tabs now own a dedicated row and lay out cleanly without
+   competing with the selector + gear for horizontal space. */
+.enm-app[data-app-size="compact"] .enm-topbar,
+body[data-app-size="compact"] .enm-app .enm-topbar {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    grid-template-rows: auto auto;
+    grid-template-areas:
+        "selector . gear"
+        "tabs tabs tabs";
+    align-items: center;
+    row-gap: 2px;
+    padding: var(--sp-1) var(--sp-2);
+    min-height: 44px;
+    height: auto;
+}
+.enm-app[data-app-size="compact"] .enm-chain-selector,
+body[data-app-size="compact"] .enm-app .enm-chain-selector {
+    grid-area: selector;
+}
+.enm-app[data-app-size="compact"] .enm-tabs,
+body[data-app-size="compact"] .enm-app .enm-tabs {
+    grid-area: tabs;
+    width: 100%;
+    justify-content: space-between;
+    flex-wrap: nowrap;
+}
+.enm-app[data-app-size="compact"] .enm-topbar-actions,
+body[data-app-size="compact"] .enm-app .enm-topbar-actions {
+    grid-area: gear;
+}
+/* Tab inside the row-2 strip: each one shrinks to fit available width
+   so all 4 fit horizontally even at 280px viewport. */
+.enm-app[data-app-size="compact"] .enm-tabs .enm-tab,
+body[data-app-size="compact"] .enm-app .enm-tabs .enm-tab {
+    padding: 8px 4px;
+    font-size: 11px;
+    flex: 1 1 0;
+    text-align: center;
+    min-width: 0;
+}
+
+/* --- (b) Audit toolbar action buttons --------------------------------
+   The two action buttons ("Show technical details" / "Copy filtered
+   rows") used wide-mode full-text labels and full-size padding, then
+   wrapped to two stacked full-width rows at compact. Make them small,
+   share the row, and shorten their labels via CSS attr-content swap
+   so each fits in <100px. Wide labels stay accessible via aria-label. */
+.enm-app[data-app-size="compact"] .enm-audit-toolbar,
+body[data-app-size="compact"] .enm-app .enm-audit-toolbar {
+    gap: var(--sp-2);
+    align-items: center;
+}
+.enm-app[data-app-size="compact"] .enm-audit-toolbar-head,
+body[data-app-size="compact"] .enm-app .enm-audit-toolbar-head {
+    gap: var(--sp-2);
+    flex-wrap: wrap;
+    width: 100%;
+}
+.enm-app[data-app-size="compact"] .enm-audit-title,
+body[data-app-size="compact"] .enm-app .enm-audit-title {
+    font-size: var(--fs-body);
+}
+.enm-app[data-app-size="compact"] .enm-audit-scope-note,
+body[data-app-size="compact"] .enm-app .enm-audit-scope-note {
+    font-size: 10px;
+}
+.enm-app[data-app-size="compact"] .enm-audit-toolbar-actions,
+body[data-app-size="compact"] .enm-app .enm-audit-toolbar-actions {
+    display: flex;
+    width: 100%;
+    gap: var(--sp-1);
+}
+.enm-app[data-app-size="compact"] .enm-audit-toolbar-actions .enm-btn,
+body[data-app-size="compact"] .enm-app .enm-audit-toolbar-actions .enm-btn {
+    flex: 1 1 0;
+    min-height: 28px;
+    padding: 4px 6px;
+    font-size: 10px;
+    min-width: 0;
+    /* allow long labels to truncate gracefully if the operator's
+       viewport is narrower than expected */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* --- (c) Audit pane density --------------------------------------- */
+/* Pane container gap shrinks at compact so the filter strip, table,
+   and footer pack into less vertical space. */
+.enm-app[data-app-size="compact"] #enm-pane-audit,
+body[data-app-size="compact"] .enm-app #enm-pane-audit,
+.enm-app[data-app-size="compact"] #enm-pane-logs,
+body[data-app-size="compact"] .enm-app #enm-pane-logs {
+    gap: var(--sp-2);
+    padding: var(--sp-2);
+}
+/* Audit foot: tighter padding so "100 entries / Load more" stops
+   looking like a bottom toolbar. */
+.enm-app[data-app-size="compact"] .enm-audit-foot,
+body[data-app-size="compact"] .enm-app .enm-audit-foot {
+    padding: var(--sp-2) var(--sp-3);
+    gap: var(--sp-2);
+}
+.enm-app[data-app-size="compact"] .enm-audit-foot .enm-btn,
+body[data-app-size="compact"] .enm-app .enm-audit-foot .enm-btn {
+    min-height: 30px;
+    padding: 4px 10px;
+    font-size: var(--fs-caption);
+}
+
+/* Audit filters at compact — already styled above (gap 4, padding sp-2).
+   Add label-row separator so WHEN/KIND labels stand out from chips,
+   and keep chips on one row by allowing the group to wrap. */
+.enm-app[data-app-size="compact"] .enm-audit-filter-label,
+body[data-app-size="compact"] .enm-app .enm-audit-filter-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-tertiary);
+    flex: 0 0 100%;
+    margin-bottom: 2px;
+}
