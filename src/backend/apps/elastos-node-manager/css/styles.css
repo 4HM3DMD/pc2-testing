@@ -6148,3 +6148,121 @@ body[data-app-size="compact"] .enm-app .enm-audit-filter-label {
     flex: 0 0 100%;
     margin-bottom: 2px;
 }
+
+/* ====================================================================
+ * beta.3.74 — operator review after 3.73:
+ *   (1) "activity page doesnt show a vertical scroll at all to navigate"
+ *       — the pane was using internal flex-scroll inside .enm-audit-
+ *       table-scroller, but at small viewports that scroll surface is
+ *       squeezed to ~80-150px between the toolbar/filters above and
+ *       foot below, so it visually looks like nothing scrolls. Mobile
+ *       operators expect the WHOLE pane to scroll — toolbar + filters
+ *       + rows + foot all flow vertically and you swipe past them.
+ *   (2) "buttons smaller because" — the .enm-btn min-height of 34px and
+ *       sp-3 padding still ate too much real estate at compact.
+ *   (3) "settings toggle and settings button do the same thing" — gear
+ *       icon removed from the topbar in this version (see index.html
+ *       beta.3.74 comment). The compact topbar grid loses the gear
+ *       column accordingly.
+ * ==================================================================== */
+
+/* (1) Page-level scrolling at compact for the long-list panes (Logs +
+   Activity). The wide-mode pattern keeps toolbar/filters sticky and
+   only the table-scroller scrolls internally; at compact that nested
+   scroll surface is too small to be useful, so we collapse the layout
+   and let the pane itself scroll. */
+.enm-app[data-app-size="compact"] #enm-pane-audit,
+body[data-app-size="compact"] .enm-app #enm-pane-audit,
+.enm-app[data-app-size="compact"] #enm-pane-logs,
+body[data-app-size="compact"] .enm-app #enm-pane-logs {
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
+}
+/* Drop the table-wrap / scroller's own scroll surface at compact so
+   we don't end up with nested scrollers (the worst mobile UX). Let the
+   table render at its natural height and scroll with the pane. */
+.enm-app[data-app-size="compact"] .enm-audit-table-wrap,
+body[data-app-size="compact"] .enm-app .enm-audit-table-wrap,
+.enm-app[data-app-size="compact"] .enm-audit-table-scroller,
+body[data-app-size="compact"] .enm-app .enm-audit-table-scroller {
+    overflow: visible;
+    flex: 0 0 auto;
+    min-height: 0;
+}
+/* Same pattern for the log viewer body. */
+.enm-app[data-app-size="compact"] .enm-log-viewer,
+body[data-app-size="compact"] .enm-app .enm-log-viewer {
+    flex: 0 0 auto;
+    min-height: 0;
+}
+.enm-app[data-app-size="compact"] .enm-log-scroller,
+body[data-app-size="compact"] .enm-app .enm-log-scroller {
+    overflow: visible;
+    flex: 0 0 auto;
+    min-height: 0;
+    max-height: none;
+}
+/* Sticky audit table header still works — pane is now the scroll
+   ancestor so position:sticky resolves against it. Re-anchor at the
+   pane top by adding a tiny extra inset so the header doesn't sit on
+   top of the filter strip's bottom border. */
+.enm-app[data-app-size="compact"] .enm-audit-table thead th,
+body[data-app-size="compact"] .enm-app .enm-audit-table thead th {
+    top: 0;
+}
+
+/* (2) Smaller buttons across the board at compact. .enm-btn defaults
+   to min-height 34px + sp-3 padding + fs-body. Trim down by ~25%. */
+.enm-app[data-app-size="compact"] .enm-btn,
+body[data-app-size="compact"] .enm-app .enm-btn {
+    min-height: 30px;
+    padding: 5px 10px;
+    font-size: var(--fs-caption);
+    gap: 6px;
+}
+.enm-app[data-app-size="compact"] .enm-btn-sm,
+body[data-app-size="compact"] .enm-app .enm-btn-sm {
+    min-height: 26px;
+    padding: 3px 8px;
+    font-size: 11px;
+}
+/* Icon-only buttons (close X in drawer, etc.) — even smaller. */
+.enm-app[data-app-size="compact"] .enm-icon-btn,
+body[data-app-size="compact"] .enm-app .enm-icon-btn {
+    width: 26px;
+    height: 26px;
+}
+.enm-app[data-app-size="compact"] .enm-icon-btn svg,
+body[data-app-size="compact"] .enm-app .enm-icon-btn svg {
+    width: 14px;
+    height: 14px;
+}
+
+/* (3) Topbar grid template loses the gear column post-3.74. Wide
+   still uses flex with selector + tabs filling remaining space.
+   Compact: 2-row grid with selector on row 1 (left-aligned, no gear
+   to right-anchor to) and tabs spanning the full width on row 2. */
+.enm-app[data-app-size="compact"] .enm-topbar,
+body[data-app-size="compact"] .enm-app .enm-topbar {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto;
+    grid-template-areas:
+        "selector"
+        "tabs";
+}
+.enm-app[data-app-size="compact"] .enm-chain-selector,
+body[data-app-size="compact"] .enm-app .enm-chain-selector {
+    justify-self: start;
+}
+
+/* Audit toolbar action buttons get even tighter at compact now that
+   .enm-btn itself shrinks. Override the explicit padding/height so
+   they remain the smallest interactive elements on the pane. */
+.enm-app[data-app-size="compact"] .enm-audit-toolbar-actions .enm-btn,
+body[data-app-size="compact"] .enm-app .enm-audit-toolbar-actions .enm-btn {
+    min-height: 26px;
+    padding: 3px 6px;
+    font-size: 10px;
+}

@@ -10,7 +10,7 @@
     <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
     <meta name="referrer" content="no-referrer">
     <title>Elastos Node Manager</title>
-    <link rel="stylesheet" href="css/styles.css?ts=20260518b373a">
+    <link rel="stylesheet" href="css/styles.css?ts=20260518b374a">
     <script>
         // Beta 3 — Phase 1c carried over. Dark-only. We hard-code data-theme=dark
         // on documentElement so any rule that still says [data-theme="dark"] keeps
@@ -73,12 +73,12 @@
     <!--
         Beta 3 app shell. Reference: enm-design-mocks/v2/phase-02-chrome.html.
 
-        Structure mirrors the mock exactly:
+        Structure (post-beta.3.74 — gear icon dropped per operator
+        callout: was redundant with the Settings tab):
             .enm-app[data-active-tab="..."]
               .enm-topbar
-                .enm-brand          (mark + name + env pill)
+                .enm-chain-selector (was .enm-brand pre-3.70)
                 .enm-tabs           (role=tablist, horizontal scroll)
-                .enm-topbar-actions (gear icon)
               .enm-main             (pane container)
 
         EVM tab is dropped — Beta 3 is mainchain-only per directive.
@@ -137,14 +137,19 @@
                 <button type="button" class="enm-tab"        role="tab" id="enm-tab-settings"  data-tab="settings"  aria-selected="false" aria-controls="enm-pane-settings"  tabindex="-1">Settings</button>
                 <button type="button" class="enm-tab"        role="tab" id="enm-tab-audit"     data-tab="audit"     aria-selected="false" aria-controls="enm-pane-audit"     tabindex="-1">Activity</button>
             </nav>
-            <div class="enm-topbar-actions">
-                <button type="button" class="enm-icon-btn" id="enm-settings-toggle" title="Settings" aria-label="Open settings">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-                        <circle cx="12" cy="12" r="3"></circle>
-                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-                    </svg>
-                </button>
-            </div>
+            <!-- beta.3.74 — the gear icon was removed. Per the operator's
+                 callout in 3.73 review: "the settings toggle and settings
+                 button do the same thing, we don't want both on all
+                 screens". js/app.js#_wireSettingsToggle wired the gear
+                 to programmatically click the Settings tab — pure
+                 redundancy. The Settings tab is the canonical entry and
+                 is always visible in the tabs strip, so the gear ate
+                 valuable topbar width (especially in the new compact
+                 2-row grid layout) for no behaviour the tab didn't
+                 already provide. _wireSettingsToggle stays in app.js
+                 as a no-op because its first line is a getElementById
+                 guard; if a future settings-drawer overlay returns the
+                 gear can come back. -->
         </header>
 
         <main class="enm-main" id="enm-main">
