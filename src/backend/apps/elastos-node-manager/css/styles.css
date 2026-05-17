@@ -286,18 +286,12 @@ body {
     letter-spacing: -0.01em;
     color: var(--text-primary);
 }
-.enm-brand-env {
-    margin-left: var(--sp-2);
-    padding: 2px 7px;
-    background: var(--bg-tint);
-    color: var(--accent);
-    border-radius: var(--r-xs);
-    font-size: 10px;
-    font-weight: var(--fw-semibold);
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    flex: 0 0 auto;
-}
+/* beta.3.69 — .enm-brand-env (the static "MAINNET" pill) removed. See
+   index.html line ~95 for the full rationale + the future-selector
+   contract for when this slot gets reused. Responsive overrides at
+   the bottom of the file (.enm-app[data-app-size="narrow"]
+   .enm-brand-env and compact equivalent) were also dropped — empty
+   selectors on a no-longer-rendered element are dead CSS. */
 
 /* Tab strip — horizontally scrollable on overflow with a right-edge
    fade gradient so the operator sees there's more content past the
@@ -731,9 +725,6 @@ body[data-app-size="compact"] .enm-app .enm-tabs {
 .enm-app[data-app-size="narrow"] .enm-brand-name,
 body[data-app-size="narrow"] .enm-app .enm-brand-name { display: none; }
 
-.enm-app[data-app-size="narrow"] .enm-brand-env,
-body[data-app-size="narrow"] .enm-app .enm-brand-env { margin-left: 0; }
-
 .enm-app[data-app-size="narrow"] .enm-tab,
 body[data-app-size="narrow"] .enm-app .enm-tab {
     padding: 16px var(--sp-2) 14px;
@@ -763,13 +754,6 @@ body[data-app-size="compact"] .enm-app .enm-topbar {
 }
 .enm-app[data-app-size="compact"] .enm-brand-name,
 body[data-app-size="compact"] .enm-app .enm-brand-name { display: none; }
-
-.enm-app[data-app-size="compact"] .enm-brand-env,
-body[data-app-size="compact"] .enm-app .enm-brand-env {
-    margin-left: 0;
-    font-size: 9px;
-    padding: 1px 5px;
-}
 
 .enm-app[data-app-size="compact"] .enm-tab,
 body[data-app-size="compact"] .enm-app .enm-tab {

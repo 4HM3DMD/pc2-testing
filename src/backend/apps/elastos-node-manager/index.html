@@ -10,7 +10,7 @@
     <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
     <meta name="referrer" content="no-referrer">
     <title>Elastos Node Manager</title>
-    <link rel="stylesheet" href="css/styles.css?ts=20260516b349a">
+    <link rel="stylesheet" href="css/styles.css?ts=20260517b369a">
     <script>
         // Beta 3 — Phase 1c carried over. Dark-only. We hard-code data-theme=dark
         // on documentElement so any rule that still says [data-theme="dark"] keeps
@@ -95,14 +95,37 @@
             <div class="enm-brand">
                 <span class="enm-brand-mark" aria-hidden="true"></span>
                 <span class="enm-brand-name">Elastos Node Manager</span>
-                <!-- 0.2.0-beta.3.6 — mock spec is the network identifier
-                     here ("Mainnet" / "Testnet"). ENM is mainchain-only
-                     and runs against mainnet by default; the literal
-                     "Mainnet" matches phase-02-chrome.html line 405. A
-                     narrow-mode CSS variant shortens it to "Main" — see
-                     styles.css .enm-brand-env-short. Beta status moves
-                     to a separate badge slot or the app-name suffix. -->
-                <span class="enm-brand-env" title="Mainnet · Beta channel">Mainnet</span>
+                <!-- 0.2.0-beta.3.69 — static "Mainnet" pill removed.
+                     Reason: zero value on a BPoS-only single-chain
+                     install — operator already knows the network and
+                     can't switch from a label. Slot is RESERVED for
+                     a future role-aware chain selector when ENM gains
+                     multi-chain support:
+
+                       cfg.chains count = 1 (mainchain only)
+                         → BPoS-only operator → NO selector (this state)
+                       cfg.chains count >= 2
+                         → council operator → render selector dropdown
+                           with options:
+                             1. Multi-chain overview (aggregated)
+                             2. Main chain (ELA)
+                             3. ESC + ESC Oracle
+                             4. EID + EID Oracle
+                             5. PG chain + PG Oracle
+                             6. Arbiter cross-chain service
+                             7. SPV module
+
+                     Each selection scopes the Dashboard / Logs /
+                     Activity panes to that chain. "Multi-chain"
+                     renders the fleet overview. Selection persists
+                     per operator in localStorage. The auto-appear
+                     behaviour means a fresh BPoS install never sees
+                     it; the moment a 2nd chain is configured, the
+                     selector appears in this slot.
+
+                     Pre-3.69 history: was <span class="enm-brand-env"
+                     ... >Mainnet</span> with CSS at styles.css:289-300
+                     + responsive overrides; all removed. -->
             </div>
             <nav class="enm-tabs" id="enm-tabs" role="tablist" aria-label="Sections" hidden>
                 <button type="button" class="enm-tab active" role="tab" id="enm-tab-dashboard" data-tab="dashboard" aria-selected="true"  aria-controls="enm-pane-dashboard" tabindex="0">Dashboard</button>
