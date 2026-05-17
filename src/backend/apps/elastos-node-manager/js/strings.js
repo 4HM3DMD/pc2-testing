@@ -1007,11 +1007,21 @@
             tier_label_HTTP_MUTATION:   'Setting change',
             tier_label_CRITICAL_INFO:   'Note',
             // beta.3.48 — friendly outcome groups.
-            outcome_friendly_done:    'Done',
-            outcome_friendly_failed:  'Failed',
-            outcome_friendly_skipped: 'Skipped',
-            outcome_friendly_noted:   'Notified',
-            outcome_friendly_pending: 'Pending',
+            // beta.3.66 — restructured: only OWNER-CONFIRMS pending
+            // proposals show "Awaits you"; everything else routes to
+            // Done / Failed / Auto-resolved by the structured decision
+            // field, not by pattern-matching the outcome string. The
+            // old "Notified" badge was firing for ANY action whose
+            // outcome string didn't match success/error patterns —
+            // turned routine boots into a wall of alarming red badges.
+            outcome_friendly_done:           'Done',
+            outcome_friendly_failed:         'Failed',
+            outcome_friendly_skipped:        'Skipped',
+            outcome_friendly_noted:          'Notified', // legacy — kept for back-compat, not emitted by 3.66+
+            outcome_friendly_pending:        'Awaits you',
+            outcome_friendly_auto_resolved:  'Auto-resolved',
+            outcome_friendly_rejected:       'Rejected',
+            outcome_friendly_expired:        'Expired',
 
             // alpha.28.1 batch 39 — row-count suffix moved from inline
             // English. ICU plurals still deferred (audit-tab.js audit

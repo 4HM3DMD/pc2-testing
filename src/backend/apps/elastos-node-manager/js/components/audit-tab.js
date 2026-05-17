@@ -571,9 +571,14 @@
             formatTsRelative(e.ts), formatTsLocal(e.ts));
         addCell(tr, 'col-what col-friendly',
             friendlyAction(e), e.decision || '');
+        // beta.3.66 — friendly column uses decision-first kind so
+        // routine executed actions display as green "Done", not the
+        // pre-3.66 orange "Notified". Technical column below still uses
+        // outcomeKind on the raw outcome string (operator wants the
+        // tech-mode badge to reflect the actual outcome text).
         addBadgeCell(tr, 'col-result col-friendly',
             friendlyResult(e), 'enm-outcome-badge',
-            { kind: outcomeKind(e.outcome) });
+            { kind: friendlyResultKind(e) });
         addCell(tr, 'col-ts col-technical',       formatTs(e.ts),                 formatTsLocal(e.ts));
         addCell(tr, 'col-chain col-technical',    e.chainId || e.chain_id || '—');
         addCell(tr, 'col-rule col-technical',     e.ruleId  || e.rule_id  || '—');
@@ -648,9 +653,10 @@
             formatTsRelative(e.ts), formatTsLocal(e.ts));
         addCell(tr, 'col-what col-friendly',
             friendlyAction(e), e.decision || '');
+        // beta.3.66 — friendly uses decision-first kind (see _renderRow above).
         addBadgeCell(tr, 'col-result col-friendly',
             friendlyResult(e), 'enm-outcome-badge',
-            { kind: outcomeKind(e.outcome) });
+            { kind: friendlyResultKind(e) });
         addCell(tr, 'col-ts col-technical',       formatTs(e.ts),                 formatTsLocal(e.ts));
         addCell(tr, 'col-chain col-technical',    e.chainId || e.chain_id || '—');
         addCell(tr, 'col-rule col-technical',     e.ruleId  || e.rule_id  || '—');
@@ -1064,6 +1070,25 @@
         return 'warn';
     }
 
+    // beta.3.66 — decision-first kind. Used by the FRIENDLY result badge
+    // so descriptive outcome strings like "Auto-started mainchain on ENM
+    // boot" don't fall through to outcomeKind's 'warn' default (which
+    // rendered as the alarming orange "!" Notified badge). Decision is
+    // structured data so this mapping is unambiguous. Pre-3.66 the badge
+    // icon/colour came from outcomeKind alone — every routine boot event
+    // turned into a red "Notified" alert in the Activity tab.
+    function friendlyResultKind(e) {
+        var d = String(e.decision || '');
+        if (d === 'executed' || d === 'success' || d === 'approved'
+            || d === 'auto-resolved') {
+            return 'success';
+        }
+        if (d === 'failed') { return 'error'; }
+        if (d === 'rejected' || d === 'expired') { return 'skip'; }
+        if (d === 'proposed') { return 'warn'; } // ONLY pending OWNER-CONFIRMS
+        return outcomeKind(e.outcome); // unknown decision — fall back to legacy
+    }
+
     /**
      * UTC ISO timestamp via the shared enmFormatDate helper (alpha.28.1
      * batch 35). Falls back to a manual toISOString rewrite if the
@@ -1134,25 +1159,34 @@
     var RULE_FRIENDLY = {
         // Healing-engine rule codes. These are the F-numbers operators
         // see in the audit log when an automated rule fires.
-        'F1':  'Auto-restart after crash',
-        'F2':  'Re-attached to running ela',
-        'F3':  'Restarted after 0 peers',
-        'F4':  'Restarted on stuck height',
-        'F5':  'Disk-space warning',
-        'F6':  'Process held excess memory',
-        'F7':  'RPC unreachable',
-        'F8':  'Config drifted',
-        'F9':  'Config rolled back',
-        'F10': 'Re-attempted bootstrap',
-        'F11': 'BPoS rotation stalled',
-        'F12': 'Producer marked Inactive',
+        //
+        // beta.3.66 — labels rewritten to match HealthRules RULE_METADATA.
+        // The pre-3.66 set had wildly wrong labels (F2 = "Re-attached to
+        // running ela" was actually the worst — F2 is "RPC unreachable
+        // restart", not reattach; the operator saw mass "Re-attached"
+        // events thinking the chain kept reconnecting when it was actually
+        // restarting because RPC was unresponsive).
+        'F1':  'Auto-restarted (process exited)',
+        'F2':  'Restarted (RPC unresponsive)',
+        'F3':  'Restarted (no peers)',
+        'F4':  'Restart proposed (sync stalled)',
+        'F5':  'Disk space low',
+        'F6':  'OOM-killed (memory pressure)',
+        'F7':  'Binary version differs from install',
+        'F8':  'Height regressed',
+        'F9':  'Config file changed on disk',
+        'F10': 'RPC password rotation reminder',
+        'F11': 'BPoS deposit changed on-chain',
+        'F12': 'Producer missing rounds (Inactive risk)',
         'F13': 'Clock skew detected',
-        'F14': 'Re-downloaded missing binary',
-        'F15': 'Re-applied known-good binary',
-        'F16': 'Stash recovered (post-restart)',
-        'F17': 'Memory pressure',
-        'F18': 'No inbound peers',
+        'F16': 'Recovered from peer-zero',
+        'F18': 'No inbound peers (BPoS)',
         'F19': 'Host port conflict',
+        'F22': 'Auto-healed DPoS state desync',
+        // beta.3.66 — missing label. AUTOSTART is the AUTOMATED-SAFE rule
+        // fired by EnmAutoStart at ENM boot when an enabled chain isn't
+        // running. Previously displayed as the raw string "AUTOSTART".
+        'AUTOSTART': 'Auto-started chain on boot',
         // HTTP routes (normalised by the audit middleware). New
         // routes added in beta.3.33+ for maintenance and beta.3.43+
         // for identity.
@@ -1262,14 +1296,60 @@
     // Notified" based on outcomeKind(). Used in the friendly Result
     // column; the technical Outcome column still shows the raw
     // "200 OK" / "412 Precondition Required" / etc.
+    // beta.3.66 — friendlyResult now keys off the structured `decision`
+    // field (always one of executed/failed/proposed/auto-resolved/etc.)
+    // instead of pattern-matching the outcome STRING. Pre-3.66 the
+    // outcome-string fallback returned 'warn' → "Notified" for any
+    // descriptive outcome it couldn't match against the success/error/
+    // 2xx/4xx patterns. That made AUTOSTART success rows (outcome =
+    // "Auto-started mainchain on ENM boot") show as "Notified" — an
+    // alarming red badge for a routine boot event. Operator saw their
+    // Activity tab fill with red Notified marks for normal operation
+    // and reasonably thought the app was broken.
+    //
+    // Decision-first mapping is unambiguous: executed = Done, failed =
+    // Failed, proposed (still pending) = Awaits you, auto-resolved =
+    // Auto-resolved (resolved silently, no action needed).
     function friendlyResult(e) {
-        var k = outcomeKind(e.outcome);
         var t = root.enmTOrFallback;
+        var d = String(e.decision || '');
+        // Structured decisions first — these are the authoritative source.
+        if (d === 'executed' || d === 'success' || d === 'approved') {
+            var done = t('audit.outcome_friendly_done');
+            return (done && done.charAt(0) === '[') ? 'Done' : done;
+        }
+        if (d === 'failed') {
+            var fail = t('audit.outcome_friendly_failed');
+            return (fail && fail.charAt(0) === '[') ? 'Failed' : fail;
+        }
+        if (d === 'auto-resolved') {
+            // Cleared without needing operator action.
+            var ar = t('audit.outcome_friendly_auto_resolved');
+            return (ar && ar.charAt(0) === '[') ? 'Auto-resolved' : ar;
+        }
+        if (d === 'proposed') {
+            // OWNER-CONFIRMS proposal still awaiting operator confirm.
+            // ONLY THIS PATH shows the "needs attention" badge — pending
+            // proposals are the only case where the operator actually
+            // has to do something.
+            var pending = t('audit.outcome_friendly_pending');
+            return (pending && pending.charAt(0) === '[') ? 'Awaits you' : pending;
+        }
+        if (d === 'rejected') {
+            var rej = t('audit.outcome_friendly_rejected');
+            return (rej && rej.charAt(0) === '[') ? 'Rejected' : rej;
+        }
+        if (d === 'expired') {
+            var exp = t('audit.outcome_friendly_expired');
+            return (exp && exp.charAt(0) === '[') ? 'Expired' : exp;
+        }
+        // Fall back to old outcome-string parsing only for legacy rows
+        // with unknown decisions.
+        var k = outcomeKind(e.outcome);
         var key = k === 'success' ? 'audit.outcome_friendly_done'
                 : k === 'error'   ? 'audit.outcome_friendly_failed'
                 : k === 'skip'    ? 'audit.outcome_friendly_skipped'
-                : k === 'warn'    ? 'audit.outcome_friendly_noted'
-                :                   'audit.outcome_friendly_pending';
+                :                   'audit.outcome_friendly_done'; // changed from 'noted'
         var v = t(key);
         return (v && v.charAt(0) === '[') ? '—' : v;
     }
