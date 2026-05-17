@@ -120,16 +120,31 @@ class EnmStateSnapshot {
     }
 
     /**
-     * Start the periodic snapshot timer. First snapshot fires after
-     * intervalMs (not immediately) so the chain has time to settle from
-     * any boot-time churn.
+     * Start the periodic snapshot timer. Two phases:
+     *   - "kick" snapshot ~10 min after start so a backup exists ASAP
+     *     (before the first regular tick). Without this, a fresh install
+     *     or post-deploy restart had no snapshot available for the F22
+     *     auto-heal during its first hour of life — operator's chain
+     *     could corrupt within that window and we'd have nothing to
+     *     restore from.
+     *   - regular interval after that (default 60 min) for ongoing
+     *     rolling backups. Existing snapshots accumulate up to retention.
+     * The 10-min kick is past the MIN_UPTIME_BEFORE_FIRST_SNAPSHOT_MS
+     * threshold so it'll actually take a snapshot rather than skip
+     * with "chain-too-young".
      */
     start() {
         if (this._timer) { return; }
         const log = this.extensionHandle.log;
         log.info(
-            `${ENM_LOG_PREFIX} EnmStateSnapshot: cadence=${this._intervalMs / 60_000}min, retention=${this._retention}`,
+            `${ENM_LOG_PREFIX} EnmStateSnapshot: kick in 10min, then cadence=${this._intervalMs / 60_000}min, retention=${this._retention}`,
         );
+        // Initial kick — 10 min after start (10 min > MIN_UPTIME 5 min).
+        this._kickTimeout = setTimeout(() => {
+            this._tick().catch((err) => {
+                log.warn(`${ENM_LOG_PREFIX} EnmStateSnapshot kick failed (non-fatal): ${err.message}`);
+            });
+        }, 10 * 60_000);
         this._timer = setInterval(() => {
             this._tick().catch((err) => {
                 log.warn(`${ENM_LOG_PREFIX} EnmStateSnapshot tick failed (non-fatal): ${err.message}`);
@@ -141,6 +156,10 @@ class EnmStateSnapshot {
         if (this._timer) {
             clearInterval(this._timer);
             this._timer = null;
+        }
+        if (this._kickTimeout) {
+            clearTimeout(this._kickTimeout);
+            this._kickTimeout = null;
         }
     }
 
