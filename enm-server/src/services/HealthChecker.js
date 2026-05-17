@@ -207,6 +207,25 @@ class HealthChecker {
                 if (!s._aliveSinceMs) { s._aliveSinceMs = Date.now(); }
             } else {
                 s._aliveSinceMs = null;
+                // beta.3.62 — also reset firstRpcDownAt when chain dies.
+                // Pre-3.62 bug: this timer was only cleared on rpcSummary.ok,
+                // never on alive=false. Result: after a chain restart (deploy,
+                // bootstrap, crash + autoStart), firstRpcDownAt kept its
+                // hours-old timestamp. On the new ela's first fast tick post-
+                // start, F2's "RPC down for >2 min" check immediately
+                // returned TRUE (Date.now() - hours-old-ts >> 2min), so F2
+                // escalated within seconds of the chain being created
+                // instead of waiting the 2-min grace.
+                //
+                // Observed on srv832310 post-bootstrap: chain started at
+                // 20:27:30, F2 escalated at 20:27:55 (25s in, with grace
+                // supposed to be 120s). Then 3 budget attempts in the next
+                // 4s — operator saw 5 notifications in 70 seconds.
+                //
+                // mediumTick already resets firstPeerZeroAt, firstHeightStallAt,
+                // firstNoInboundAt on alive=false (line ~256 below). fastTick
+                // owns firstRpcDownAt and was the missing reset.
+                s.firstRpcDownAt = null;
             }
 
             // RPC reachability ping (cheap — one HTTP request via EnmRpcClient).
