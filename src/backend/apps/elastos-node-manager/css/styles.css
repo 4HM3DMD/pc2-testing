@@ -803,9 +803,32 @@ body[data-app-size="compact"] .enm-online-banner,
  * ==================================================================== */
 .enm-app[data-app-size="narrow"] .enm-topbar,
 body[data-app-size="narrow"] .enm-app .enm-topbar {
-    padding: 0 var(--sp-4);
+    padding: 4px var(--sp-4);
     gap: var(--sp-3);
-    height: 48px;
+    /* beta.3.71 — height was fixed at 48px. With the chain selector
+       restored to the left slot (replacing the old brand which was
+       display:none here), the tabs container can no longer hold 4
+       tabs on one row alongside the selector at narrow widths. The
+       .enm-tabs already flex-wraps; the topbar needs to grow with
+       it instead of clipping. */
+    height: auto;
+    min-height: 48px;
+}
+/* beta.3.71 — chain selector compact treatment at narrow. The trigger
+   was sized for wide-mode (padding 4px 10px 4px 12px, fs-caption ~12px).
+   At <700px it competes with 4 tabs for ~660px of horizontal space and
+   forces .enm-tabs to wrap. Shrink trigger footprint + cap the label
+   to keep tabs on one row whenever the viewport allows it. */
+.enm-app[data-app-size="narrow"] .enm-chain-selector-trigger,
+body[data-app-size="narrow"] .enm-app .enm-chain-selector-trigger {
+    padding: 3px 8px 3px 10px;
+    font-size: 11px;
+}
+.enm-app[data-app-size="narrow"] .enm-chain-selector-label,
+body[data-app-size="narrow"] .enm-app .enm-chain-selector-label {
+    max-width: 96px;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 /* beta.3.26 — Phase A. The wide-mode .enm-tabs / .enm-settings-pills
    strips horizontally-scroll any overflowing items behind a mask-
@@ -854,9 +877,42 @@ body[data-app-size="narrow"] .enm-app .enm-main { padding: var(--sp-3); }
  * ==================================================================== */
 .enm-app[data-app-size="compact"] .enm-topbar,
 body[data-app-size="compact"] .enm-app .enm-topbar {
-    padding: 0 var(--sp-2);
+    padding: 4px var(--sp-2);
     gap: var(--sp-2);
-    height: 44px;
+    /* beta.3.71 — same growth allowance as narrow. At <480px the
+       chain selector + 4 tabs + gear physically cannot fit on one
+       row no matter how aggressively we shrink, so the tabs wrap
+       and the topbar grows. min-height preserves the single-row
+       look on the rare wide-enough compact viewport. */
+    height: auto;
+    min-height: 44px;
+}
+/* beta.3.71 — chain selector compact treatment. At <480px the
+   selector strips down to a minimal chip: tiny padding, 10px font,
+   label capped to ~60px. The dropdown menu opens with full chain
+   names so the trigger only needs to be a visible affordance, not
+   the canonical chain label. aria-label="Chain view selector" on
+   the trigger carries the meaning for screen readers. */
+.enm-app[data-app-size="compact"] .enm-chain-selector-trigger,
+body[data-app-size="compact"] .enm-app .enm-chain-selector-trigger {
+    padding: 2px 6px 2px 8px;
+    font-size: 10px;
+    gap: 4px;
+}
+.enm-app[data-app-size="compact"] .enm-chain-selector-label,
+body[data-app-size="compact"] .enm-app .enm-chain-selector-label {
+    max-width: 64px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+/* beta.3.71 — cap the dropdown menu width so it never escapes the
+   viewport on compact. Without this, the 280-360px menu would clip
+   off the right edge inside a 280px PC2 window. */
+.enm-app[data-app-size="compact"] .enm-chain-selector-menu,
+body[data-app-size="compact"] .enm-app .enm-chain-selector-menu {
+    min-width: 0;
+    width: calc(100vw - 16px);
+    max-width: 320px;
 }
 
 .enm-app[data-app-size="compact"] .enm-tab,
