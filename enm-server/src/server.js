@@ -87,6 +87,9 @@ const maintenanceRouter = require('./routes/maintenance');
 // beta.3.43 — Settings → Identity tab backend (unlock / backup /
 // import / reset). Mounted at /api/enm/identity/* below.
 const identityRouter = require('./routes/identity');
+// beta.3.67 — Phase 7 Auto-heal status + manual take/restore. Mounted
+// at /api/enm/snapshots/* below.
+const snapshotsRouter = require('./routes/snapshots');
 
 const PORT = parseInt(process.env.PORT || '4180', 10);
 // Single source of truth for ENM's data location: DataDir.enmDataDir().
@@ -237,6 +240,8 @@ async function main() {
     // backup, import, full reset). All routes owner-gated; destructive
     // ones check producer state + audit-log.
     api.use('/identity', identityRouter.build({ extensionHandle, getDb }));
+    // beta.3.67 — Phase 7 visibility + manual triggers.
+    api.use('/snapshots', snapshotsRouter.build({ extensionHandle }));
 
     // EVM placeholder (v0.5+). Reserves /api/enm/evm/* so future cross-chain
     // routes can land without naming collisions. Returns 501 today.

@@ -42,6 +42,8 @@ const updatesRouter = require('./updates');
 const maintenanceRouter = require('./maintenance');
 // beta.3.43 — Settings → Identity tab backend.
 const identityRouter = require('./identity');
+// beta.3.67 — Phase 7 Auto-heal status + manual snapshot/restore.
+const snapshotsRouter = require('./snapshots');
 const ChainRegistry = require('../services/ChainRegistry');
 
 /**
@@ -125,6 +127,7 @@ function mountRoutes(app, extensionHandle) {
     api.use('/maintenance', maintenanceRouter.build({ extensionHandle, getDb }));
     // beta.3.43 — Identity tab.
     api.use('/identity', identityRouter.build({ extensionHandle, getDb }));
+    api.use('/snapshots', snapshotsRouter.build({ extensionHandle }));
 
     app.use(ENM_API_PREFIX, api);
 

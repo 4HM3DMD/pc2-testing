@@ -5380,3 +5380,47 @@ body[data-app-size="compact"] .enm-bpos-head-chip,
 .enm-app[data-app-size="compact"] .enm-danger-card-foot .enm-btn {
     flex: 1 1 100%;
 }
+
+/* beta.3.67 — Phase 7 Auto-heal snapshot panel (Settings → Security).
+   Reuses .enm-healing-details container + .enm-healing-details-summary
+   from the existing healing-rules panel; only the inner content + action
+   buttons need their own styling. */
+.enm-snapshot-host {
+    padding: var(--sp-2) var(--sp-3) var(--sp-3) var(--sp-3);
+    color: var(--text-secondary);
+    font-size: var(--fs-body);
+}
+.enm-snapshot-grid {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: var(--sp-1) var(--sp-3);
+    margin: var(--sp-1) 0 var(--sp-2) 0;
+}
+.enm-snapshot-row {
+    display: contents;
+}
+.enm-snapshot-label {
+    color: var(--text-tertiary);
+    font-size: var(--fs-caption);
+}
+.enm-snapshot-value {
+    color: var(--text-primary);
+    font-weight: var(--fw-medium);
+    font-size: var(--fs-caption);
+}
+.enm-snapshot-help {
+    margin: var(--sp-2) 0;
+    font-size: var(--fs-caption);
+    color: var(--text-tertiary);
+    line-height: 1.45;
+}
+.enm-snapshot-actions {
+    display: flex;
+    gap: var(--sp-2);
+    margin-top: var(--sp-2);
+    flex-wrap: wrap;
+}
+.enm-snapshot-actions .enm-btn[disabled] {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
