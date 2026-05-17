@@ -68,6 +68,18 @@ class SelfHealingEngine {
         // could match — this cap is the last-resort safeguard.
         /** @type {Map<string, number>} */
         this._lastProposalAt = new Map();
+        // beta.3.68 — engine boot timestamp. Used to suppress the audit
+        // row + notification for the FIRST F1 firing in the first
+        // POST_DEPLOY_SUPPRESS_MS after engine construction (= ENM
+        // extension boot). That F1 is almost certainly the deploy
+        // bounce (pc2-node SIGTERMs the extension → child ela dies →
+        // new ENM reattaches, finds dead pid, F1 fires within ~10s).
+        // The restart STILL happens — just no audit noise for a
+        // routine deploy event. The deploy itself is already audited
+        // by the HTTP-MUTATION row from /chains/:id/start (or by
+        // AUTOSTART when autoStart fires the start). One event per
+        // deploy is enough.
+        this._bootAtMs = Date.now();
     }
 
     /**
@@ -348,6 +360,31 @@ class SelfHealingEngine {
             this.extensionHandle.log.error(
                 `${ENM_LOG_PREFIX} ${chainId}/${det.ruleId} automated-safe failed: ${err.message}`,
             );
+        }
+        // beta.3.68 — suppress audit row + notification for the routine
+        // post-deploy F1 bounce. After a deploy, ENM extension boots,
+        // reattach finds dead ela (pc2-node killed the process group),
+        // F1 fires within ~10s, restart succeeds. That's not a notable
+        // chain event — operator was annoyed seeing 3+ "Auto-restarted"
+        // rows per deploy day. Conditions:
+        //   - rule is F1 (other rules don't have this pattern)
+        //   - within POST_DEPLOY_SUPPRESS_MS of engine boot
+        //   - restart succeeded (failures still get audited so a
+        //     stuck post-deploy state surfaces normally)
+        //
+        // The restart STILL ran above; we only skip the row + toast.
+        // Internal log line stays so SSH-level forensics still show
+        // what happened.
+        const POST_DEPLOY_SUPPRESS_MS = 30_000;
+        const isPostDeployF1 = success
+            && det && det.ruleId === 'F1'
+            && this._isRestartAction(det)
+            && (Date.now() - this._bootAtMs) < POST_DEPLOY_SUPPRESS_MS;
+        if (isPostDeployF1) {
+            this.extensionHandle.log.info(
+                `${ENM_LOG_PREFIX} ${chainId}/F1 fired within ${Math.round((Date.now() - this._bootAtMs) / 1000)}s of boot — suppressing audit row (post-deploy bounce).`,
+            );
+            return;
         }
         await AuditLog.append(db, {
             walletAddress: this.ownerWallet,
