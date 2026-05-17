@@ -324,6 +324,30 @@
             ? new root.EnmHeightSeriesClient(this.services.api, this.services.sse)
             : null;
 
+        // beta.3.70 — mount the chain selector in the topbar. It's a
+        // small dropdown that REPLACES the old static MAINNET pill +
+        // duplicate brand cluster. Loads /config asynchronously to
+        // detect node mode (BPoS-only vs council) and renders the
+        // option list accordingly (others grayed for BPoS-only).
+        // Mount is best-effort: if the element or component is
+        // missing for any reason, app continues without it.
+        try {
+            var selectorEl = document.getElementById('enm-chain-selector');
+            if (selectorEl && root.EnmChainSelector) {
+                this._chainSelector = new root.EnmChainSelector({
+                    root: selectorEl,
+                    api: this.services.api,
+                });
+                this._chainSelector.mount();
+            }
+        } catch (err) {
+            // Non-fatal — log to console so a real bug surfaces in
+            // dev tools, but never block the rest of init.
+            if (typeof console !== 'undefined') {
+                console.warn('ENM chain selector mount failed:', err && err.message);
+            }
+        }
+
         // Step 1: window-manager IPC contract MUST happen before anything else.
         this.services.wallet.sendReady();
         this.services.wallet.installCloseHandler();

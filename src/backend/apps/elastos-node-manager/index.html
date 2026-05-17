@@ -10,7 +10,7 @@
     <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
     <meta name="referrer" content="no-referrer">
     <title>Elastos Node Manager</title>
-    <link rel="stylesheet" href="css/styles.css?ts=20260517b369a">
+    <link rel="stylesheet" href="css/styles.css?ts=20260517b370a">
     <script>
         // Beta 3 — Phase 1c carried over. Dark-only. We hard-code data-theme=dark
         // on documentElement so any rule that still says [data-theme="dark"] keeps
@@ -92,40 +92,44 @@
         <h1 class="enm-sr-only">Elastos Node Manager</h1>
 
         <header class="enm-topbar" role="banner">
-            <div class="enm-brand">
-                <span class="enm-brand-mark" aria-hidden="true"></span>
-                <span class="enm-brand-name">Elastos Node Manager</span>
-                <!-- 0.2.0-beta.3.69 — static "Mainnet" pill removed.
-                     Reason: zero value on a BPoS-only single-chain
-                     install — operator already knows the network and
-                     can't switch from a label. Slot is RESERVED for
-                     a future role-aware chain selector when ENM gains
-                     multi-chain support:
+            <!-- beta.3.70 — brand-mark + brand-name removed. PC2's
+                 window chrome already shows the app icon + name in
+                 the title bar above; duplicating them inside the
+                 iframe was wasted header space. Operator pointed at
+                 this explicitly: "the top label says it why duplicate".
 
-                       cfg.chains count = 1 (mainchain only)
-                         → BPoS-only operator → NO selector (this state)
-                       cfg.chains count >= 2
-                         → council operator → render selector dropdown
-                           with options:
-                             1. Multi-chain overview (aggregated)
-                             2. Main chain (ELA)
-                             3. ESC + ESC Oracle
-                             4. EID + EID Oracle
-                             5. PG chain + PG Oracle
-                             6. Arbiter cross-chain service
-                             7. SPV module
+                 What replaces them: a chain selector. Detection:
 
-                     Each selection scopes the Dashboard / Logs /
-                     Activity panes to that chain. "Multi-chain"
-                     renders the fleet overview. Selection persists
-                     per operator in localStorage. The auto-appear
-                     behaviour means a fresh BPoS install never sees
-                     it; the moment a 2nd chain is configured, the
-                     selector appears in this slot.
+                   cfg.chains count = 1 (mainchain only)
+                     → BPoS-only operator → selector renders but
+                       only Main chain is enabled; others grayed
+                       with hover tooltip + footer note.
+                   cfg.chains count >= 2
+                     → council operator → all configured chains
+                       enabled, others stay grayed until installed.
 
-                     Pre-3.69 history: was <span class="enm-brand-env"
-                     ... >Mainnet</span> with CSS at styles.css:289-300
-                     + responsive overrides; all removed. -->
+                 The selector lists all 7 known chain surfaces
+                 (Multi-chain overview / Main chain / ESC + Oracle
+                 / EID + Oracle / PG + Oracle / Arbiter / SPV) so
+                 the operator sees the full landscape; available
+                 ones light up, unavailable ones explain why.
+                 Selection persists per operator in localStorage. -->
+            <div class="enm-chain-selector" id="enm-chain-selector"
+                 data-mode="bpos-only" data-active="mainchain">
+                <button type="button" class="enm-chain-selector-trigger"
+                        id="enm-chain-selector-trigger"
+                        aria-haspopup="listbox" aria-expanded="false"
+                        aria-label="Chain view selector">
+                    <span class="enm-chain-selector-label" id="enm-chain-selector-label">Main chain</span>
+                    <span class="enm-chain-selector-caret" aria-hidden="true">▾</span>
+                </button>
+                <div class="enm-chain-selector-menu" id="enm-chain-selector-menu"
+                     role="listbox" aria-labelledby="enm-chain-selector-trigger" hidden>
+                    <!-- Options populated by js/components/chain-selector.js
+                         on first activation so the static markup stays
+                         identity-only and we can iterate the option set
+                         from one place. -->
+                </div>
             </div>
             <nav class="enm-tabs" id="enm-tabs" role="tablist" aria-label="Sections" hidden>
                 <button type="button" class="enm-tab active" role="tab" id="enm-tab-dashboard" data-tab="dashboard" aria-selected="true"  aria-controls="enm-pane-dashboard" tabindex="0">Dashboard</button>
@@ -197,6 +201,7 @@
     <script defer src="js/services/online-watcher.js?ts=20260514a"></script>
     <script defer src="js/services/fleet-health-gradient.js?ts=20260512a"></script>
     <script defer src="js/services/height-series.js?ts=20260512a"></script>
+    <script defer src="js/components/chain-selector.js?ts=20260517b370a"></script>
     <script defer src="js/components/system-status.js?ts=20260515b3s"></script>
     <script defer src="js/components/sparkline.js?ts=20260512a"></script>
     <script defer src="js/components/power-circle.js?ts=20260512a"></script>
@@ -241,6 +246,6 @@
          (Dashboard / Logs / Settings / Audit) replaced its 4-sub-tab
          wrapper; the Dashboard pane now mounts SystemStatus + ChainCard
          + BPoS card + ToolsUpdate directly from app.js._showDashboard. -->
-    <script defer src="js/app.js?ts=20260516b356a"></script>
+    <script defer src="js/app.js?ts=20260517b370a"></script>
 </body>
 </html>

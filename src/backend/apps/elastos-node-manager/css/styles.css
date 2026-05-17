@@ -265,33 +265,141 @@ body {
     flex: 0 0 auto;
 }
 
-/* Brand cluster — gradient mark + name + env pill */
-.enm-brand {
+/* beta.3.70 — .enm-brand / .enm-brand-mark / .enm-brand-name removed
+   along with .enm-brand-env (was the MAINNET pill, removed 3.69).
+   The PC2 window chrome already shows the app icon + name in its
+   title bar; the duplicate inside the iframe was wasted header space.
+   See .enm-chain-selector below for the replacement — a smart chain
+   selector that lives in the same slot.
+
+   Responsive overrides for .enm-brand-name (lines ~720, ~750) were
+   also dropped — empty selectors on a no-longer-rendered element. */
+
+/* beta.3.70 — chain selector. Lives in the topbar slot vacated by
+   the old brand cluster. Operator's mental model: "what chain am I
+   looking at?" rather than "what app is this?" (the title bar
+   handles the latter). For a BPoS-only install (single chain
+   configured) the selector lists all 7 chain surfaces but only
+   Main chain is enabled; the rest are grayed with a hover tooltip
+   + a footer note explaining why. Once a council operator adds more
+   chains via config, the corresponding options light up. */
+.enm-chain-selector {
+    position: relative;
+    flex: 0 0 auto;
+}
+.enm-chain-selector-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-1);
+    padding: 4px 10px 4px 12px;
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color, var(--border-subtle));
+    border-radius: var(--r-md);
+    font: inherit;
+    font-size: var(--fs-caption);
+    font-weight: var(--fw-medium);
+    line-height: 1.2;
+    cursor: pointer;
+    user-select: none;
+    transition: background var(--motion-fast) var(--ease-out),
+                border-color var(--motion-fast) var(--ease-out);
+}
+.enm-chain-selector-trigger:hover {
+    background: var(--bg-surface);
+    border-color: var(--accent);
+}
+.enm-chain-selector-trigger[aria-expanded="true"] {
+    background: var(--bg-surface);
+    border-color: var(--accent);
+}
+.enm-chain-selector-label {
+    white-space: nowrap;
+}
+.enm-chain-selector-caret {
+    font-size: 10px;
+    color: var(--text-tertiary);
+    transition: transform var(--motion-fast) var(--ease-out);
+}
+.enm-chain-selector-trigger[aria-expanded="true"] .enm-chain-selector-caret {
+    transform: rotate(180deg);
+}
+.enm-chain-selector-menu {
+    position: absolute;
+    top: calc(100% + var(--sp-1));
+    left: 0;
+    min-width: 280px;
+    max-width: 360px;
+    padding: var(--sp-1);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color, var(--border-subtle));
+    border-radius: var(--r-md);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+.enm-chain-selector-menu[hidden] { display: none; }
+.enm-chain-selector-option {
     display: flex;
     align-items: center;
     gap: var(--sp-2);
-    flex: 0 0 auto;
-}
-.enm-brand-mark {
-    width: 18px;
-    height: 18px;
+    padding: var(--sp-1) var(--sp-2);
     border-radius: var(--r-xs);
-    background: var(--accent-gradient);
-    box-shadow: 0 0 12px var(--accent-soft);
-    flex: 0 0 auto;
+    color: var(--text-secondary);
+    font-size: var(--fs-caption);
+    cursor: pointer;
+    border: none;
+    background: transparent;
+    width: 100%;
+    text-align: left;
+    font-family: inherit;
 }
-.enm-brand-name {
-    font-size: var(--fs-body);
-    font-weight: var(--fw-semibold);
-    letter-spacing: -0.01em;
+.enm-chain-selector-option:hover:not([disabled]) {
+    background: var(--bg-surface);
     color: var(--text-primary);
 }
-/* beta.3.69 — .enm-brand-env (the static "MAINNET" pill) removed. See
-   index.html line ~95 for the full rationale + the future-selector
-   contract for when this slot gets reused. Responsive overrides at
-   the bottom of the file (.enm-app[data-app-size="narrow"]
-   .enm-brand-env and compact equivalent) were also dropped — empty
-   selectors on a no-longer-rendered element are dead CSS. */
+.enm-chain-selector-option[aria-current="true"] {
+    color: var(--accent);
+    font-weight: var(--fw-semibold);
+}
+.enm-chain-selector-option[disabled] {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+.enm-chain-selector-option-indicator {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex: 0 0 auto;
+    background: var(--text-tertiary);
+}
+.enm-chain-selector-option[aria-current="true"] .enm-chain-selector-option-indicator {
+    background: var(--accent);
+    box-shadow: 0 0 6px var(--accent-soft);
+}
+.enm-chain-selector-option[disabled] .enm-chain-selector-option-indicator {
+    background: transparent;
+    border: 1px dashed var(--text-tertiary);
+}
+.enm-chain-selector-option-label {
+    flex: 1 1 auto;
+}
+.enm-chain-selector-option-hint {
+    font-size: 10px;
+    color: var(--text-tertiary);
+    font-weight: var(--fw-regular);
+}
+.enm-chain-selector-footer {
+    margin-top: var(--sp-1);
+    padding: var(--sp-2);
+    background: var(--bg-tint);
+    border-radius: var(--r-xs);
+    color: var(--text-tertiary);
+    font-size: 11px;
+    line-height: 1.45;
+}
 
 /* Tab strip — horizontally scrollable on overflow with a right-edge
    fade gradient so the operator sees there's more content past the
@@ -722,8 +830,6 @@ body[data-app-size="compact"] .enm-app .enm-tabs {
     touch-action: auto;
     row-gap: 0;
 }
-.enm-app[data-app-size="narrow"] .enm-brand-name,
-body[data-app-size="narrow"] .enm-app .enm-brand-name { display: none; }
 
 .enm-app[data-app-size="narrow"] .enm-tab,
 body[data-app-size="narrow"] .enm-app .enm-tab {
@@ -752,8 +858,6 @@ body[data-app-size="compact"] .enm-app .enm-topbar {
     gap: var(--sp-2);
     height: 44px;
 }
-.enm-app[data-app-size="compact"] .enm-brand-name,
-body[data-app-size="compact"] .enm-app .enm-brand-name { display: none; }
 
 .enm-app[data-app-size="compact"] .enm-tab,
 body[data-app-size="compact"] .enm-app .enm-tab {
