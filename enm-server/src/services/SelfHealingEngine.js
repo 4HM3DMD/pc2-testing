@@ -244,6 +244,18 @@ class SelfHealingEngine {
 
     /** @private */
     async _applyAutomatedSafe(chainId, det, chainConfig) {
+        // beta.3.63 — state-restore actions skip the restart-budget block
+        // entirely; they have their own 6h cooldown enforced in
+        // _executeStateRestore. Here we short-circuit silently when the
+        // cooldown is active so F22 firing every 30s doesn't fill the
+        // audit log with "cooldown active" rows.
+        if (this._isStateRestoreAction(det) && this._stateRestoreLastAt) {
+            const lastAt = this._stateRestoreLastAt.get(chainId);
+            const STATE_RESTORE_COOLDOWN_MS = 6 * 60 * 60_000;
+            if (lastAt && (Date.now() - lastAt) < STATE_RESTORE_COOLDOWN_MS) {
+                return; // silent skip — operator sees the original attempt's row
+            }
+        }
         // Restart-loop budget: count attempts within a rolling window.
         if (this._isRestartAction(det)) {
             // beta.3.58 — if an OWNER-CONFIRMS escalation proposal for
@@ -321,7 +333,15 @@ class SelfHealingEngine {
             // Single lock is sufficient: the operator's HTTP /restart route
             // and our F1 path both end up in processService.restart's own
             // lock, so they serialize correctly.
-            await this._executeRestart(chainId, chainConfig);
+            //
+            // beta.3.63 — dispatcher: state-restore goes through its own
+            // path (stop → restore snapshot → start → verify). Restart
+            // action keeps the existing flow.
+            if (this._isStateRestoreAction(det)) {
+                outcome = await this._executeStateRestore(chainId, chainConfig);
+            } else {
+                await this._executeRestart(chainId, chainConfig);
+            }
         } catch (err) {
             success = false;
             outcome = err.message;
@@ -352,6 +372,95 @@ class SelfHealingEngine {
     /** @private */
     _isRestartAction(det) {
         return det && det.payload && det.payload.action === 'restart';
+    }
+
+    /** @private */
+    _isStateRestoreAction(det) {
+        return det && det.payload && det.payload.action === 'state-restore';
+    }
+
+    /**
+     * @private
+     * beta.3.63 — Phase 7 Layer 4 executor. Stop the chain (gracefully),
+     * restore the most-recent state snapshot, start the chain, verify
+     * height advances past the stuck point within VERIFY_WINDOW_MS.
+     *
+     * Conservative throttle: at most 1 state-restore per (chain, 6h)
+     * window. If the first restore doesn't unstick the chain, the
+     * problem is likely deeper than a single bad state save — escalate
+     * to OWNER-CONFIRMS rather than burn through snapshots.
+     *
+     * @param {string} chainId
+     * @param {object} chainConfig
+     * @returns {Promise<string>}  outcome string for audit row
+     */
+    async _executeStateRestore(chainId, chainConfig) {
+        const STATE_RESTORE_COOLDOWN_MS = 6 * 60 * 60_000; // 6 hours
+        const VERIFY_WINDOW_MS = 60_000;
+        if (!this._stateRestoreLastAt) { this._stateRestoreLastAt = new Map(); }
+        const lastAt = this._stateRestoreLastAt.get(chainId);
+        if (lastAt && (Date.now() - lastAt) < STATE_RESTORE_COOLDOWN_MS) {
+            throw new Error(
+                'state-restore cooldown: a restore was attempted within the last 6 hours. '
+                + 'If the chain is still stuck, escalating to operator instead of looping.',
+            );
+        }
+        this._stateRestoreLastAt.set(chainId, Date.now());
+
+        // Reach EnmStateSnapshot via ChainRegistry handoff (server.js parks
+        // the instance there to avoid a require-cycle).
+        const reg = require('./ChainRegistry');
+        const stateSnapshot = reg._stateSnapshot;
+        if (!stateSnapshot || typeof stateSnapshot.restore !== 'function') {
+            throw new Error('EnmStateSnapshot service not initialised — cannot restore.');
+        }
+        const adapter = reg.getAdapter(chainId);
+
+        // Capture pre-restore height so we can verify it advances.
+        let preHeight = null;
+        try {
+            const rpc = adapter.rpcClient(chainConfig);
+            preHeight = await rpc.getblockcount().catch(() => null);
+        } catch (_) { /* tolerate */ }
+
+        // 1. Stop the chain (60s grace, manualStop=true so F1 stays quiet).
+        await adapter.stop().catch((err) => {
+            this.extensionHandle.log.warn(
+                `${ENM_LOG_PREFIX} state-restore ${chainId}: stop returned: ${err.message}`,
+            );
+        });
+
+        // 2. Restore the latest snapshot over live state files.
+        const restoreResult = await stateSnapshot.restore(chainId);
+        this.extensionHandle.log.info(
+            `${ENM_LOG_PREFIX} state-restore ${chainId}: restored ${restoreResult.restoredFiles.length} file(s) from ${restoreResult.snapshotName}`,
+        );
+
+        // 3. Start the chain. processService.start writes a fresh PID file.
+        await adapter.start(chainConfig);
+
+        // 4. Verify: poll for VERIFY_WINDOW_MS until height > preHeight.
+        // The chain re-fetches the small delta from peers; if state was
+        // the issue, blocks now validate and height climbs.
+        const verifyDeadline = Date.now() + VERIFY_WINDOW_MS;
+        let postHeight = null;
+        while (Date.now() < verifyDeadline) {
+            await new Promise((r) => setTimeout(r, 5000));
+            try {
+                const rpc = adapter.rpcClient(chainConfig);
+                postHeight = await rpc.getblockcount().catch(() => null);
+                if (typeof postHeight === 'number'
+                    && typeof preHeight === 'number'
+                    && postHeight > preHeight) {
+                    return `Restored ${restoreResult.snapshotName} — height advanced ${preHeight} → ${postHeight}`;
+                }
+            } catch (_) { /* keep polling */ }
+        }
+        // If we get here, restore completed but verify didn't see height
+        // advance. ela might still be loading; the operator should check
+        // the chain card. Return a "completed but unverified" outcome
+        // rather than failing outright.
+        return `Restored ${restoreResult.snapshotName} — pre=${preHeight} post=${postHeight}; chain may still be loading.`;
     }
 
     /** @private */

@@ -294,6 +294,36 @@ async function main() {
         log('error', `storage maintenance init failed: ${err.message}`);
     }
 
+    // beta.3.63 — Phase 7 Layer 2: hourly state snapshot service. Periodic
+    // backup of cp_dpos/default.dcp + cp_cr/default.cr + cp_txPool/default.txpcp
+    // so the auto-heal layer can roll forward when the live state desyncs
+    // with the block ledger (root cause of the chain stuck pattern that
+    // bit srv832310 multiple times). Storage is bounded (~6MB × retention),
+    // takes seconds, gated on chain-healthy preconditions.
+    try {
+        const { EnmStateSnapshot } = require('./services/EnmStateSnapshot');
+        const ConfigStore = require('./services/ConfigStore');
+        const cfg = await ConfigStore.load();
+        const snapshotCfg = cfg && cfg.global && cfg.global.stateSnapshot;
+        if (snapshotCfg && snapshotCfg.enabled !== false) {
+            const stateSnapshot = new EnmStateSnapshot({
+                extensionHandle,
+                processService: ChainRegistry.getProcessService(),
+                getAdapter: (id) => ChainRegistry.getAdapter(id),
+                listChains: () => ChainRegistry.listChains(),
+            });
+            stateSnapshot.applyConfig(cfg);
+            stateSnapshot.start();
+            // Expose on the registry so SelfHealingEngine (Layer 4 restore)
+            // can reach it without a require cycle.
+            ChainRegistry._stateSnapshot = stateSnapshot;
+        } else {
+            log('info', 'state snapshot service disabled in config — skipping');
+        }
+    } catch (err) {
+        log('error', `state snapshot init failed (non-fatal): ${err.message}`);
+    }
+
     // 0.2.0-beta.3.8 — wire AuditLog → SseHub bridge. Every audit row
     // inserted via EnmAuditLog.append() now also publishes on the
     // `audit` topic. Frontend audit-tab subscribes and prepends new

@@ -596,6 +596,51 @@ function detectF19(snap) {
 }
 
 /**
+ * F22 — DPoS state desync (Phase 7, beta.3.63).
+ *
+ * Fires when ALL of:
+ *   - process alive
+ *   - RPC reachable + peers > 0
+ *   - height stalled past HEIGHT_STALL_GRACE_MS (same grace as F4)
+ *   - HealthChecker's medium-tick log probe set snap.dposDesyncDetected
+ *
+ * The log probe (HealthChecker._probeDposDesyncSignal) reads the tail of
+ * the most recent ela log file and looks for either:
+ *   - "sponsor is not in current or last arbitrators"
+ *   - "PowCheckBlockContext error"
+ * within the last ~2 minutes of log lines. Either is a definitive marker
+ * of the local arbitrator-state-vs-block-ledger inconsistency.
+ *
+ * F22 takes precedence over F4 (both fire on height stall). F22's action
+ * is 'state-restore' (uses EnmStateSnapshot.restore), F4's is 'restart'
+ * (won't fix this failure mode). Engine dispatches accordingly.
+ */
+function detectF22(snap) {
+    if (!snap || !snap.processStatus || !snap.processStatus.alive) return null;
+    if (!snap.rpcSummary || !snap.rpcSummary.ok) return null;
+    if (snap.rpcSummary.peers === 0) return null;
+    if (typeof snap.rpcSummary.height !== 'number') return null;
+    const firstStall = snap.ruleState && snap.ruleState.firstHeightStallAt;
+    if (!firstStall) return null;
+    if (Date.now() - firstStall < HEIGHT_STALL_GRACE_MS) return null;
+    if (!snap.dposDesyncDetected) return null;
+    return {
+        ruleId: 'F22',
+        tier: HEALING_TIERS.AUTOMATED_SAFE,
+        summaryAction: `Auto-heal ${snap.chainId} DPoS state desync`,
+        summaryReason:
+            `Height ${snap.rpcSummary.height} has been stalled for >10 min and `
+            + 'the ela log shows the arbitrator-state-vs-ledger desync signature. '
+            + 'Restoring most-recent snapshot — cheaper than bootstrap.',
+        payload: {
+            action: 'state-restore',
+            chainId: snap.chainId,
+            stuckHeight: snap.rpcSummary.height,
+        },
+    };
+}
+
+/**
  * Per-rule enable defaults. Per Architectural Invariant #7, healing ships
  * with F1 (auto-restart on unexpected exit) only. F2-F19 are off until
  * the operator opts in via /api/enm/healing/rules/:ruleId/enable.
@@ -649,6 +694,8 @@ const RULE_METADATA = Object.freeze({
            description: 'BPoS needs inbound peers to publish proposals. Surface a critical alert if there have been none for 5 minutes.' },
     F19: { tier: 'CRITICAL_NOTIFY', title: 'Host port conflict',
            description: 'Another process on this host is bound to a port ela needs (20338 / 20339 / 20336). Surface critical for operator triage.' },
+    F22: { tier: 'AUTOMATED_SAFE',  title: 'DPoS state desync auto-heal',
+           description: 'When the chain freezes with "sponsor is not in current or last arbitrators" — the signature of cp_dpos/default.dcp diverging from the block ledger — restore the most-recent state snapshot and let ela re-fetch the small delta from peers. Much cheaper than bootstrap (~3 min vs 30 min).' },
 });
 
 // beta.3.22 — every rule is enabled by default. The operator-facing
@@ -679,6 +726,7 @@ const DEFAULT_ENABLED = Object.freeze({
     F16: true,  // peer-zero fallback
     F18: true,  // BPoS no-inbound
     F19: true,  // host conflict (HostConflictScanner has its own dedup)
+    F22: true,  // DPoS state desync (Phase 7) — auto-heal via snapshot restore
 });
 
 const _enabledOverrides = new Map();
@@ -735,6 +783,12 @@ function runAll(snap) {
     const out = [];
     const detectors = [
         ['F1',  detectF1],  ['F2',  detectF2],  ['F3',  detectF3],
+        // F22 evaluates BEFORE F4 so when both could fire (height stalled +
+        // desync signal present), F22's action='state-restore' wins over
+        // F4's action='restart'. Engine handles only the first detection
+        // per rule_id per chain per tick; same chain can't have both F4
+        // and F22 propose conflicting actions.
+        ['F22', detectF22],
         ['F4',  detectF4],  ['F5',  detectF5],  ['F6',  detectF6],
         ['F7',  detectF7],  ['F8',  detectF8],  ['F9',  detectF9],
         ['F10', detectF10], ['F11', detectF11], ['F12', detectF12],
@@ -763,6 +817,7 @@ module.exports = {
     detectF1, detectF2, detectF3, detectF4, detectF5,
     detectF6, detectF7, detectF8, detectF9, detectF10,
     detectF11, detectF12, detectF13, detectF16, detectF18,
+    detectF22,
     detectF19,
     PEER_ZERO_GRACE_MS,
     RPC_UNREACHABLE_GRACE_MS,

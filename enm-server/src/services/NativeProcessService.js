@@ -301,6 +301,32 @@ class NativeProcessService extends EventEmitter {
             throw new Error(`NativeProcessService.start: spawn returned no PID for ${binaryPath}`);
         }
 
+        // beta.3.63 — Phase 7 Layer 1: harden ela against the Linux OOM
+        // killer by lowering its oom_score_adj. Default for child processes
+        // is 0; range is [-1000, 1000] where -1000 = "never kill" and
+        // 1000 = "kill first". -500 gives strong resistance without making
+        // ela completely OOM-immune (we still want the kernel to reclaim
+        // memory if ela itself goes runaway).
+        //
+        // Why this matters: OOM-killing ela mid-write is the #1 trigger of
+        // the DPoS-state-vs-block-ledger inconsistency that locks up the
+        // chain. With this score, the kernel preferentially kills almost
+        // any other userspace process before reaching for ela. Best-effort
+        // only — non-root can't lower below 0, so this is no-op when ENM
+        // runs unprivileged. Failure is silent.
+        try {
+            fs.writeFileSync(`/proc/${child.pid}/oom_score_adj`, '-500');
+            this.extensionHandle.log.info(
+                `${ENM_LOG_PREFIX} ${chainId} oom_score_adj=-500 (OOM-resistant)`,
+            );
+        } catch (err) {
+            // Non-fatal — silent unless debug. Common on non-Linux dev hosts
+            // or when ENM lacks root. ela just runs with default OOM score.
+            this.extensionHandle.log.debug(
+                `${ENM_LOG_PREFIX} ${chainId} could not set oom_score_adj (${err.message}); ela runs at default OOM priority`,
+            );
+        }
+
         // ela reads its keystore password from stdin per node.sh:878 (Rev 1 audit).
         // The caller (ElaMainChainAdapter) is responsible for piping the plaintext
         // password via the child stdin if BPoS arbiter mode is enabled. This

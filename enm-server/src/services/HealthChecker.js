@@ -387,6 +387,16 @@ class HealthChecker {
                 s.firstNoInboundAt = null;
             }
 
+            // beta.3.63 — Phase 7 Layer 3: probe ela's log tail for the
+            // DPoS-state-vs-block-ledger desync signature. Only worth
+            // checking when height is already stalled (so F22 detection
+            // can confirm "this isn't a generic stall, it's THE desync").
+            // Read is cheap (just last few KB of one file).
+            let dposDesyncDetected = false;
+            if (status.alive && s.firstHeightStallAt) {
+                dposDesyncDetected = await this._probeDposDesyncSignal(chainId);
+            }
+
             const snap = {
                 chainId,
                 processStatus: status,
@@ -397,11 +407,13 @@ class HealthChecker {
                 configValidation: cfgValidation,
                 chainConfig: chainCfg,
                 ruleState: s,
+                dposDesyncDetected,
             };
 
             const dets = HealthRules.runAll(snap).filter((d) =>
                 d.ruleId === 'F3' || d.ruleId === 'F4' || d.ruleId === 'F9'
-                || d.ruleId === 'F10' || d.ruleId === 'F16' || d.ruleId === 'F18');
+                || d.ruleId === 'F10' || d.ruleId === 'F16' || d.ruleId === 'F18'
+                || d.ruleId === 'F22');
             if (dets.length > 0) {
                 await this.engine.apply(chainId, dets, chainCfg);
             }
@@ -869,6 +881,55 @@ class HealthChecker {
             };
         } catch (err) {
             return { ok: false, errCode: err.name || 'RpcError' };
+        }
+    }
+
+    /**
+     * @private
+     * beta.3.63 — Phase 7 Layer 3 probe. Read the tail of the most recent
+     * ela log file and detect the DPoS-state-vs-block-ledger desync
+     * signature. Either pattern below is a definitive marker that
+     * default.dcp is out-of-sync with the block ledger:
+     *
+     *   - "sponsor is not in current or last arbitrators"
+     *   - "PowCheckBlockContext error"
+     *
+     * Only the LAST ~64KB of the log is read so the cost is bounded
+     * (one ~64KB read, one regex scan) regardless of how big the log
+     * has grown. Skipped silently on filesystem errors.
+     *
+     * @param {string} chainId
+     * @returns {Promise<boolean>}
+     */
+    async _probeDposDesyncSignal(chainId) {
+        const PROBE_MAX_BYTES = 64 * 1024;
+        const PATTERN = /sponsor is not in current or last arbitrators|PowCheckBlockContext error/i;
+        try {
+            const logDir = path.join(chainDir(chainId), 'elastos', 'logs', 'node');
+            const entries = await fsp.readdir(logDir).catch(() => []);
+            const logFiles = entries.filter((n) => /\.log$/.test(n));
+            if (logFiles.length === 0) return false;
+            // Pick the most recent (lexicographic sort works because file
+            // names are YYYY-MM-DD_HH.MM.SS.log).
+            logFiles.sort();
+            const newest = logFiles[logFiles.length - 1];
+            const full = path.join(logDir, newest);
+            const stat = await fsp.stat(full).catch(() => null);
+            if (!stat) return false;
+            const startOffset = Math.max(0, stat.size - PROBE_MAX_BYTES);
+            const fd = await fsp.open(full, 'r');
+            try {
+                const buf = Buffer.alloc(stat.size - startOffset);
+                await fd.read(buf, 0, buf.length, startOffset);
+                return PATTERN.test(buf.toString('utf8'));
+            } finally {
+                await fd.close().catch(() => {});
+            }
+        } catch (err) {
+            this.extensionHandle.log.debug(
+                `${ENM_LOG_PREFIX} _probeDposDesyncSignal(${chainId}) failed (non-fatal): ${err.message}`,
+            );
+            return false;
         }
     }
 
