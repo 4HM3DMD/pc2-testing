@@ -1368,71 +1368,45 @@
     /** @private */
     SetupConversation.prototype._renderCardE = function (seq) {
         var t = root.enmT;
-        var heading = t('friendly.setup.card_e.title') || 'Council inputs';
+        var heading = t('friendly.setup.card_e.title') || 'Your wallet address';
         var sub = t('friendly.setup.card_e.sub')
-            || 'Three inputs ENM needs to install the multi-chain stack. '
-            + 'You can change any of these later via Settings.';
+            || 'ENM uses this for everything: ESC, EID, PG block rewards AND the '
+             + 'Arbiter\'s cross-chain signing. One address from your wallet — that\'s it.';
         this.root.setAttribute('aria-label', heading);
         this._body.innerHTML = ''
             + '<h2 class="enm-wiz-heading" id="enm-wiz-heading-e">' + escapeHtml(heading) + '</h2>'
             + '<p class="enm-wiz-para">' + escapeHtml(sub) + '</p>'
             + '<form class="enm-council-form" novalidate>'
             +   '<label class="enm-council-form-row">'
-            +     '<span class="enm-council-form-label">Shared EVM keystore password</span>'
-            +     '<input type="password" id="enm-council-pw" autocomplete="new-password" '
-            +       'spellcheck="false" required minlength="16">'
-            +     '<span class="enm-council-form-hint">16+ chars, must include upper + lower + digit + non-alnum. '
-            +       'Encrypts the EVM keystores for ESC/EID/PG.</span>'
-            +     '<span class="enm-council-form-error" data-for="pw" hidden></span>'
-            +   '</label>'
-            +   '<label class="enm-council-form-row">'
-            +     '<span class="enm-council-form-label">Shared EVM reward address</span>'
-            +     '<input type="text" id="enm-council-reward" spellcheck="false" autocomplete="off" '
-            +       'placeholder="0x…40 hex characters" required>'
-            +     '<span class="enm-council-form-hint">Ethereum-style address that receives EVM block rewards. '
-            +       'Paste from your wallet — ENM never holds the private key (H7).</span>'
+            +     '<span class="enm-council-form-label">' + escapeHtml(
+                    t('friendly.setup.card_e.reward_label') || 'Your wallet address') + '</span>'
+            +     '<input type="text" id="enm-council-reward" spellcheck="false" '
+            +       'autocomplete="off" placeholder="0x…" required>'
+            +     '<span class="enm-council-form-hint">' + escapeHtml(
+                    t('friendly.setup.card_e.reward_hint')
+                    || 'Paste your Ethereum-style address from Essentials. '
+                     + 'Same address is used for ESC, EID, PG, and the Arbiter — '
+                     + 'one wallet, one input.') + '</span>'
             +     '<span class="enm-council-form-error" data-for="reward" hidden></span>'
             +   '</label>'
-            +   '<label class="enm-council-form-row">'
-            +     '<span class="enm-council-form-label">Arbiter mining address (ELA mainchain)</span>'
-            +     '<input type="text" id="enm-council-mining" spellcheck="false" autocomplete="off" '
-            +       'placeholder="E…34 chars base58 (starts with E for mainnet, 4 for testnet)" required>'
-            +     '<span class="enm-council-form-hint">ELA mainchain address that funds SideChainPow '
-            +       'heartbeats. Distinct from the EVM reward address above.</span>'
-            +     '<span class="enm-council-form-error" data-for="mining" hidden></span>'
-            +   '</label>'
+            +   '<div class="enm-council-form-note">'
+            +     '<strong>Heads up:</strong> mining is OFF by default on the EVM '
+            +     'sidechains. Most Council rewards come from BPoS mainchain blocks '
+            +     'and Arbiter SideChainPow heartbeats. You can turn sidechain mining '
+            +     'on later via Settings → Mining &amp; Rewards if you want the extra '
+            +     '(small) rewards.'
+            +   '</div>'
             + '</form>';
         var self = this;
-        var pwEl = this._body.querySelector('#enm-council-pw');
         var rewardEl = this._body.querySelector('#enm-council-reward');
-        var miningEl = this._body.querySelector('#enm-council-mining');
 
         function showError(field, msg) {
             var el = self._body.querySelector('.enm-council-form-error[data-for="' + field + '"]');
             if (el) { el.textContent = msg; el.hidden = !msg; }
         }
-        function clearErrors() {
-            ['pw', 'reward', 'mining'].forEach(function (f) { showError(f, ''); });
-        }
-        function validatePassword(s) {
-            if (typeof s !== 'string' || s.length < 16) {
-                return 'Must be 16+ characters.';
-            }
-            if (!/[A-Z]/.test(s)) return 'Missing an uppercase letter.';
-            if (!/[a-z]/.test(s)) return 'Missing a lowercase letter.';
-            if (!/[0-9]/.test(s)) return 'Missing a digit.';
-            if (!/[^A-Za-z0-9]/.test(s)) return 'Missing a special character (e.g. ! @ #).';
-            return null;
-        }
         function validateEth(s) {
             if (typeof s !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(s)) {
-                return 'Must be 0x + 40 hexadecimal characters.';
-            }
-            return null;
-        }
-        function validateEla(s) {
-            if (typeof s !== 'string' || !/^[E4][1-9A-HJ-NP-Za-km-z]{33}$/.test(s)) {
-                return 'Must start with E (mainnet) or 4 (testnet), 34 chars base58check.';
+                return 'Must start with 0x followed by 40 hex characters.';
             }
             return null;
         }
@@ -1440,26 +1414,20 @@
         this._cancelBtn.hidden = true;
         this._continueBtn.hidden = false;
         this._continueBtn.disabled = false;
-        this._continueBtn.textContent = 'Install Council stack';
+        this._continueBtn.textContent = t('friendly.setup.card_e.cta') || 'Install Council stack';
 
         this._continueBtn.addEventListener('click', function () {
             if (self._destroyed || !self._stillRendering(seq)) { return; }
-            clearErrors();
-            var pw = pwEl.value;
+            showError('reward', '');
             var reward = rewardEl.value.trim();
-            var mining = miningEl.value.trim();
-            var pwErr = validatePassword(pw);
-            var rewardErr = validateEth(reward);
-            var miningErr = validateEla(mining);
-            if (pwErr) { showError('pw', pwErr); }
-            if (rewardErr) { showError('reward', rewardErr); }
-            if (miningErr) { showError('mining', miningErr); }
-            if (pwErr || rewardErr || miningErr) { return; }
-            // Stash inputs for Card F's POST.
+            var err = validateEth(reward);
+            if (err) { showError('reward', err); return; }
+            // beta.0.4.5 — single input. Backend reads the mainchain
+            // keystore password from cfg.chains.mainchain.dpos
+            // .keystorePasswordEncrypted and uses the reward address
+            // for both EVM rewards AND Arbiter mining.
             self._councilInputs = {
-                sharedPassword: pw,
-                sharedRewardAddress: reward,
-                arbiterMiningAddress: mining,
+                rewardAddress: reward,
                 activeNet: 'mainnet',
             };
             self._goto('f');

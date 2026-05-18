@@ -362,7 +362,16 @@ const classDWalletSchema = Joi.object({
     passwordSource: Joi.string().valid('mainchain-ela-txt').default('mainchain-ela-txt'),
 }).default();
 const classDMiningSchema = Joi.object({
-    miningAddress: Joi.string().regex(/^[E4][1-9A-HJ-NP-Za-km-z]{33}$/).allow('').default(''),
+    // beta.0.4.5 — accept EITHER format. Pre-0.4.5 only ELA-mainnet
+    // base58check was accepted. Operator directive 2026-05-18:
+    // "Arbiter should also register as the same EVM address". The
+    // arbiter binary resolves either format string to the same key
+    // when both derive from the same wallet seed (Essentials usage
+    // pattern), so accepting both at the schema layer keeps the
+    // operator-facing UX to ONE address input.
+    miningAddress: Joi.string().regex(
+        /^(?:0x[0-9a-fA-F]{40}|[E4][1-9A-HJ-NP-Za-km-z]{33})$/
+    ).allow('').default(''),
     sideChainPowFeeEla: Joi.number().min(0).max(100).default(0.1),
 }).default();
 const classDPortsSchema = Joi.object({

@@ -191,23 +191,28 @@
                     sub_done:        'Your ElastOS is now a node and is starting up.',
                     cta:             'Take me home',
                 },
-                // beta.0.4.4 — Council install cards (E + F). Reachable
-                // only when the operator picked "Council node" on
-                // Card A AND mainchain setup (Cards B-D) completed.
+                // beta.0.4.5 — Card E redesigned per operator
+                // directive 2026-05-18 ("too many steps and doesn't
+                // actually understand what is it doing"). Collapsed
+                // 3 inputs (password + reward + arbiter mining) down
+                // to ONE (the wallet address). The mainchain keystore
+                // password from Card C is reused for all sidechain
+                // signing (H23). The Arbiter's mining address is the
+                // same wallet address (schema accepts EVM or ELA).
                 card_e: {
-                    title: 'Council inputs',
-                    sub:   'Three inputs ENM needs to install the multi-chain stack. '
-                         + 'You can change any of these later via Settings.',
-                    pw_label:        'Shared EVM keystore password',
-                    pw_hint:         '16+ characters; must include upper, lower, digit, and a non-alphanumeric. '
-                                   + 'Encrypts the EVM keystores for ESC/EID/PG.',
-                    reward_label:    'Shared EVM reward address',
-                    reward_hint:     'Ethereum-style address that receives EVM block rewards. '
-                                   + 'Paste from your wallet — ENM never holds the private key.',
-                    mining_label:    'Arbiter mining address (ELA mainchain)',
-                    mining_hint:     'ELA mainchain address that funds SideChainPow heartbeats. '
-                                   + 'Distinct from the EVM reward address above.',
-                    cta:             'Install Council stack',
+                    title:        'Your wallet address',
+                    sub:          'ENM uses this for everything: ESC, EID, PG block rewards AND '
+                                + 'the Arbiter’s cross-chain signing. One address from your '
+                                + 'wallet — that’s it.',
+                    reward_label: 'Your wallet address',
+                    reward_hint:  'Paste your Ethereum-style address from Essentials. '
+                                + 'Same address is used for ESC, EID, PG, and the Arbiter — '
+                                + 'one wallet, one input.',
+                    note_mining_off: 'Heads up: mining is OFF by default on the EVM sidechains. '
+                                + 'Most Council rewards come from BPoS mainchain blocks and Arbiter '
+                                + 'SideChainPow heartbeats. You can turn sidechain mining on later via '
+                                + 'Settings → Mining & Rewards if you want the extra (small) rewards.',
+                    cta:          'Install Council stack',
                 },
                 card_f: {
                     title:           'Installing Council stack',

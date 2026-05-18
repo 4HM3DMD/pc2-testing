@@ -6663,6 +6663,21 @@ body[data-enm-overview="1"] .enm-app .enm-tabs {
     font-size: 12px;
     color: var(--state-error, #ef5350);
 }
+/* beta.0.4.5 — explainer note under Card E's single input, telling
+   the operator that sidechain mining is OFF by default. */
+.enm-app .enm-council-form-note {
+    margin-top: var(--sp-3, 12px);
+    padding: var(--sp-3, 12px);
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--border-color, var(--border-subtle));
+    border-radius: 8px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-muted, var(--text-primary));
+}
+.enm-app .enm-council-form-note strong {
+    color: var(--text-primary);
+}
 
 /* Card F — stepper */
 .enm-app .enm-council-stepper {

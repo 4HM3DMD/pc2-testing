@@ -1338,32 +1338,34 @@ function build(extensionHandle) {
     router.post('/install-council', limit('admin'), requireOwner, async (req, res) => {
         const body = req.body || {};
         const EnmCrypto = require('../services/EnmCrypto');
-        const ClassBPorts = require('../services/ClassBPorts');
 
-        // Input validation upfront (412 = pre-req fail).
-        if (typeof body.sharedPassword !== 'string'
-            || !EnmCrypto.validatePasswordComplexity(body.sharedPassword)) {
-            return res.status(400).json(errorBody(
-                'install-council: sharedPassword required, 16+ chars with '
-                + 'upper + lower + digit + non-alnum (EnmCrypto.generatePassword '
-                + 'produces a compliant random).',
-            ));
-        }
-        const rewardCheck = EnmCrypto.validateEthAddress(body.sharedRewardAddress || '');
+        // beta.0.4.5 — operator directive: collapse the 3-input form
+        // (password + EVM reward addr + ELA mining addr) down to ONE
+        // input (rewardAddress). Mainchain keystore password is
+        // already on file from Card C and shared via the H23 invariant
+        // so we read it from cfg.chains.mainchain instead of asking
+        // again. Arbiter mining address = same as reward (the schema
+        // accepts either format; one wallet's EVM-format works fine).
+        //
+        // Body shape (v0.4.5):
+        //   { rewardAddress: '0x<40 hex>', activeNet?: 'mainnet'|'testnet' }
+        //
+        // Pre-v0.4.5 body had sharedPassword + sharedRewardAddress +
+        // arbiterMiningAddress; the orchestrator was rebuilt to derive
+        // password from mainchain.dpos.keystorePasswordEncrypted and to
+        // use rewardAddress for both EVM rewards AND Arbiter mining.
+        const rewardCheck = EnmCrypto.validateEthAddress(body.rewardAddress || '');
         if (!rewardCheck.valid) {
             return res.status(400).json(errorBody(
-                `install-council: sharedRewardAddress: ${rewardCheck.warning}`,
-            ));
-        }
-        const miningCheck = EnmCrypto.validateElaAddress(body.arbiterMiningAddress || '');
-        if (!miningCheck.valid) {
-            return res.status(400).json(errorBody(
-                `install-council: arbiterMiningAddress: ${miningCheck.warning}`,
+                `install-council: rewardAddress: ${rewardCheck.warning}`,
             ));
         }
         const activeNet = body.activeNet === 'testnet' ? 'testnet' : 'mainnet';
 
-        // Pre-req: mainchain must exist + be installed.
+        // Pre-req: mainchain must exist + have a keystore password.
+        // The Council install reuses mainchain.dpos.keystorePasswordEncrypted
+        // as the shared password for all sidechain EVM keystores +
+        // Arbiter wallet (H23 invariant).
         const cfg = await ConfigStore.load();
         if (!cfg.chains || !cfg.chains.mainchain) {
             return res.status(412).json(errorBody(
@@ -1372,35 +1374,54 @@ function build(extensionHandle) {
                 + 'the Council expansion.',
             ));
         }
+        const mainEnvelope = cfg.chains.mainchain.dpos
+            && cfg.chains.mainchain.dpos.keystorePasswordEncrypted;
+        if (!mainEnvelope) {
+            return res.status(412).json(errorBody(
+                'install-council: mainchain keystore password is not on '
+                + 'file. Finish the mainchain keystore step (Card C) '
+                + 'before running the Council expansion.',
+            ));
+        }
+        // Verify the envelope decrypts (catches a corrupted state early
+        // so the operator sees an actionable error instead of an opaque
+        // install-step failure later).
+        let sharedPassword;
+        try {
+            sharedPassword = EnmCrypto.decrypt(mainEnvelope);
+        } catch (err) {
+            return res.status(412).json(errorBody(
+                'install-council: cannot decrypt the mainchain keystore '
+                + 'password (' + err.message + '). Re-enter it via '
+                + 'Settings → Identity, then retry.',
+            ));
+        }
 
         // Return 202 immediately + run the orchestrator in the background.
-        // The wizard subscribes to SSE topic `setup:council:install` for
-        // live progress + polls GET /setup/install-council/status for
-        // the final result.
         res.status(202).json(successBody({
             started: true,
             sseTopic: 'setup:council:install',
             statusEndpoint: '/api/enm/setup/install-council/status',
         }));
 
-        // Pull SSE handle from ChainRegistry — same pattern as the
-        // SetupConversation's existing SSE-driven progress wiring.
         let sseHub = null;
         try {
             const ChainRegistry = require('../services/ChainRegistry');
             sseHub = ChainRegistry.getSseHub();
-        } catch (_) { /* SSE optional; status endpoint still works */ }
+        } catch (_) { /* SSE optional */ }
 
-        // Run the full orchestrator. Catches all errors + records
-        // them in the install-council job state so the GET status
-        // endpoint surfaces them to the wizard.
         runCouncilInstall({
             extensionHandle,
             cfg,
             inputs: {
-                sharedPassword:       body.sharedPassword,
-                sharedRewardAddress:  rewardCheck.normalized || body.sharedRewardAddress,
-                arbiterMiningAddress: miningCheck.normalized || body.arbiterMiningAddress,
+                // beta.0.4.5 — internal inputs derived from a single
+                // operator-supplied address + the existing mainchain
+                // password. The orchestrator's downstream code keeps
+                // the existing variable names so the 15-step pipeline
+                // stays unchanged.
+                sharedPassword:       sharedPassword,
+                sharedRewardAddress:  rewardCheck.normalized || body.rewardAddress,
+                arbiterMiningAddress: rewardCheck.normalized || body.rewardAddress,
                 activeNet,
             },
             sseHub,
@@ -1730,7 +1751,17 @@ async function runCouncilInstall(args) {
                     ports,
                     pbft: { usesMainchainKeystore: true, ipAddress: null },
                     miner: {
-                        enabled: true,
+                        // beta.0.4.5 — default miner.enabled=false on
+                        // sidechains. Council operators earn primarily
+                        // from BPoS mainchain + Arbiter SideChainPow
+                        // heartbeats; EVM block rewards on sidechains
+                        // are marginal AND would require generating an
+                        // EVM keystore at install time (extra step the
+                        // operator's UX doesn't need today). Operator
+                        // can flip this on later via Settings → Mining
+                        // & Rewards once they've imported / generated
+                        // an EVM keystore for the chain.
+                        enabled: false,
                         rewardAddress: inputs.sharedRewardAddress,
                         rewardAddressSource: 'shared',
                         evmKeystoreAddr: '',
