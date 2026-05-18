@@ -1252,9 +1252,18 @@ function build(extensionHandle) {
             const adapter = adapterOr404(req, res, extensionHandle);
             if (!adapter) return undefined;
             const chainId = adapter.chainId;
-            if (chainId !== 'mainchain') {
-                return res.status(400).json(errorBody(
-                    'BPoS lifecycle is only defined on the ELA mainchain.',
+            // beta.3.88 — Wave M1.4 — per-class endpoint gate. BPoS
+            // operations (ActivateProducer + future producer-management
+            // routes) are Class A only. Pre-3.88 returned 400 on
+            // non-mainchain; 501 ("Not Implemented") is the semantically
+            // correct status for a request that's well-formed but maps
+            // to a feature the target resource doesn't expose. This
+            // helps clients distinguish "bad input" from "feature
+            // unavailable for this chain class".
+            if (adapter.chainClass !== 'A') {
+                return res.status(501).json(errorBody(
+                    `BPoS lifecycle is defined only for Class A (UTXO/DPoS) chains. `
+                    + `'${chainId}' is class ${adapter.chainClass || 'unknown'} — operation not implemented.`,
                 ));
             }
             const snapshot = await ChainState.snapshot(chainId);

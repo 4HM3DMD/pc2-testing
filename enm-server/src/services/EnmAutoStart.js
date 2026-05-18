@@ -101,21 +101,49 @@ async function runAutoStart(deps) {
         return { scheduled: false, reason: 'no-enabled-chains' };
     }
 
+    // beta.3.88 — Wave M1.4 — dependency-DAG ordering. Pre-3.88 we
+    // started chains in arbitrary Object.entries() order. For Council
+    // nodes this races: an oracle starting before its parent EVM chain
+    // is alive crashes on first RPC ping; Arbiter starting before all
+    // chains are reachable fails its SPV catchup. The plan's boot
+    // order (per node.sh + audited dependency graph):
+    //
+    //   mainchain → ESC | EID | PG (parallel) → their Oracles
+    //   (after parent accepts RPC) → Arbiter (last, needs all 4)
+    //
+    // Sort the enabled list by class precedence:
+    //   A (mainchain) → B (esc/eid/pg) → C (oracles) → D (arbiter) → E (spv)
+    //
+    // ChainAdapter.classOf returns null for unknown chainIds — those
+    // sort last (treated as lowest priority). startAllChains is still
+    // SEQUENTIAL within the sorted order to avoid port-bind races.
+    const ChainAdapter = require('./ChainAdapter');
+    const CLASS_ORDER = { A: 0, B: 1, C: 2, D: 3, E: 4 };
+    const orderedChainIds = enabledChainIds.slice().sort((a, b) => {
+        const ca = ChainAdapter.classOf(a);
+        const cb = ChainAdapter.classOf(b);
+        const pa = ca && CLASS_ORDER[ca] !== undefined ? CLASS_ORDER[ca] : 99;
+        const pb = cb && CLASS_ORDER[cb] !== undefined ? CLASS_ORDER[cb] : 99;
+        if (pa !== pb) return pa - pb;
+        // Stable within class: alphabetical
+        return a.localeCompare(b);
+    });
+
     log.info(
-        `${ENM_LOG_PREFIX} autoStart: scheduling ${enabledChainIds.length} chain(s) `
-        + `[${enabledChainIds.join(', ')}] to start in ${delaySec}s`,
+        `${ENM_LOG_PREFIX} autoStart: scheduling ${orderedChainIds.length} chain(s) `
+        + `[${orderedChainIds.join(' → ')}] (dependency-DAG order) to start in ${delaySec}s`,
     );
 
     setTimeout(() => {
         // Re-read config inside the timer so operator changes during the grace
         // window (e.g. they disabled a chain right after boot) take effect.
-        startAllChains({ extensionHandle, registry, chainIds: enabledChainIds })
+        startAllChains({ extensionHandle, registry, chainIds: orderedChainIds })
             .catch((err) => {
                 log.error(`${ENM_LOG_PREFIX} autoStart loop crashed: ${err.message}`);
             });
     }, delayMs);
 
-    return { scheduled: true, delayMs, chainCount: enabledChainIds.length };
+    return { scheduled: true, delayMs, chainCount: orderedChainIds.length, order: orderedChainIds };
 }
 
 /**

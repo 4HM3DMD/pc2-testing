@@ -616,18 +616,35 @@ class HealthChecker {
         // those ports held by our own ela process and didn't know to
         // skip them.
         const ourPids = new Set();
+        // beta.3.88 — Wave M1.4 — collect per-chain port list so the
+        // scanner attributes any collision to a specific chain
+        // (mainchain port 20336 vs ESC port 20636, etc.). Without
+        // this, the scanner hardcoded ELA_DEFAULT_PORTS only and
+        // missed ESC/EID/PG ports entirely on Council deployments.
+        const chainPorts = [];
         try {
+            const cfg = await this._loadConfigSafe();
             for (const chainInfo of this.listChains()) {
                 const st = this.processService.statusSync(chainInfo.chainId);
                 if (st && Number.isInteger(st.pid) && st.pid > 0) {
                     ourPids.add(st.pid);
                 }
+                const chainCfg = cfg && cfg.chains && cfg.chains[chainInfo.chainId];
+                if (chainCfg && chainCfg.ports
+                    && typeof chainCfg.ports === 'object') {
+                    for (const [role, port] of Object.entries(chainCfg.ports)) {
+                        if (Number.isInteger(port) && port > 0) {
+                            chainPorts.push({ port, role, chainId: chainInfo.chainId });
+                        }
+                    }
+                }
             }
-        } catch (_) { /* defensive — empty set is the safe fallback */ }
+        } catch (_) { /* defensive — empty sets are the safe fallback */ }
         try {
             const result = await HostConflictScanner.scan({
                 logger: this.extensionHandle.log,
                 ourPids,
+                chainPorts,
             });
             this._hostConflictsCache = { value: result, fetchedAt: now };
             return result;

@@ -111,6 +111,25 @@ async function scan(opts) {
     const ourPids = (o.ourPids instanceof Set) ? o.ourPids
         : new Set(Array.isArray(o.ourPids) ? o.ourPids.filter(Number.isInteger) : []);
 
+    // beta.3.88 — Wave M1.4 — operator-supplied dynamic port list.
+    // Pre-3.88 the scanner hardcoded ELA_DEFAULT_PORTS (6 mainchain
+    // ports). For Council nodes we need to scan every chain's
+    // configured ports — ESC's 20636/20638/etc., EID's 20646/20648,
+    // etc. HealthChecker passes opts.chainPorts (computed from
+    // ChainRegistry.listChains()) so the scanner stays decoupled
+    // from ChainRegistry. When omitted, falls back to mainchain
+    // defaults for backward compat (unit-test friendly).
+    const chainPorts = Array.isArray(o.chainPorts) && o.chainPorts.length > 0
+        ? o.chainPorts
+        : [
+            { port: ELA_DEFAULT_PORTS.rpc,      role: 'rpc',              chainId: 'mainchain' },
+            { port: ELA_DEFAULT_PORTS.nodePort, role: 'p2p (NodePort)',   chainId: 'mainchain' },
+            { port: ELA_DEFAULT_PORTS.httpInfo, role: 'HttpInfo',         chainId: 'mainchain' },
+            { port: ELA_DEFAULT_PORTS.httpRest, role: 'HttpRest',         chainId: 'mainchain' },
+            { port: ELA_DEFAULT_PORTS.httpWs,   role: 'HttpWs',           chainId: 'mainchain' },
+            { port: ELA_DEFAULT_PORTS.dpos,     role: 'DPoS p2p',         chainId: 'mainchain' },
+        ];
+
     /** @type {Array<Conflict>} */
     const conflicts = [];
 
@@ -118,7 +137,7 @@ async function scan(opts) {
         scanLegacyConfig(conflicts, log),
         scanLegacyData(conflicts, log),
         scanRogueProcesses(conflicts, run, log),
-        scanPortBindings(conflicts, run, log, ourPids),
+        scanPortBindings(conflicts, run, log, ourPids, chainPorts),
         scanSystemdUnits(conflicts, run, log),
         scanPermissions(conflicts, log),
         scanStalePidFiles(conflicts, log),
@@ -341,21 +360,23 @@ async function scanRogueProcesses(out, run, log) {
 }
 
 /** @private */
-async function scanPortBindings(out, run, log, ourPids) {
+async function scanPortBindings(out, run, log, ourPids, portsToCheck) {
     const platform = os.platform();
     if (platform !== 'linux' && platform !== 'darwin') {
         return;
     }
-    const portsToCheck = [
-        { port: ELA_DEFAULT_PORTS.rpc,      role: 'rpc' },
-        { port: ELA_DEFAULT_PORTS.nodePort, role: 'p2p (NodePort)' },
-        { port: ELA_DEFAULT_PORTS.httpInfo, role: 'HttpInfo' },
-        { port: ELA_DEFAULT_PORTS.httpRest, role: 'HttpRest' },
-        { port: ELA_DEFAULT_PORTS.httpWs,   role: 'HttpWs' },
-        { port: ELA_DEFAULT_PORTS.dpos,     role: 'DPoS p2p' },
-    ];
+    // beta.3.88 — Wave M1.4 — portsToCheck supplied by scan() caller
+    // (defaults to mainchain ports when omitted). Each entry includes
+    // an optional chainId so the conflict message attributes the
+    // collision to a specific chain (e.g. "ESC port 20636 conflict"
+    // not just "port 20636 conflict").
+    if (!Array.isArray(portsToCheck) || portsToCheck.length === 0) {
+        return;
+    }
 
-    for (const { port, role } of portsToCheck) {
+    for (const entry of portsToCheck) {
+        const { port, role } = entry;
+        const chainId = entry.chainId || 'mainchain';
         try {
             const inUse = await checkPortInUse(port, run);
             if (!inUse.bound) continue;
@@ -408,19 +429,25 @@ async function scanPortBindings(out, run, log, ourPids) {
                 }
             }
 
+            // beta.3.88 — Wave M1.4 — surface chainId in the conflict
+            // message so multi-chain operators can tell which chain's
+            // port is colliding.
+            const chainLabel = chainId === 'mainchain'
+                ? 'Mainchain'
+                : (chainId || 'unknown chain');
             out.push({
                 type: TYPES.PORT_BOUND,
                 severity: SEVERITY.CRITICAL,
-                description: `Port ${port} (${role}) is already in use`,
+                description: `${chainLabel} port ${port} (${role}) is already in use`,
                 remediation: [
                     'A different process is bound to this port.',
                     platform === 'linux'
                         ? `  sudo ss -tlnp | grep :${port}`
                         : `  sudo lsof -i :${port}`,
                     'Either stop that process, or change the port:',
-                    '  Settings → Mainchain Advanced → Ports',
+                    `  Settings → ${chainLabel} → Advanced → Ports`,
                 ],
-                details: { port, role, holder: inUse.holder },
+                details: { port, role, chainId, holder: inUse.holder },
             });
         } catch (err) {
             log.debug(`${ENM_LOG_PREFIX} port-${port} probe failed: ${err.message}`);
