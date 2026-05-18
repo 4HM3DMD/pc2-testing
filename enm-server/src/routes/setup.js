@@ -1045,6 +1045,55 @@ function build(extensionHandle) {
         }
     });
 
+    // beta.0.3.3 (Wave M4.3) — Node.js runtime endpoints. Oracles
+    // (Class C) spawn against this interpreter; without it they can't
+    // start. The wizard calls these in two steps:
+    //   GET  /setup/node-runtime          → check if a usable node is present
+    //   POST /setup/install-node-runtime  → download + install locally (idempotent)
+    router.get('/node-runtime', limit('read'), async (req, res) => {
+        if (!readActorWallet(req)) {
+            return res.status(401).json(errorBody('Authentication required.'));
+        }
+        try {
+            const NodeJsRuntime = require('../services/NodeJsRuntime');
+            const found = await NodeJsRuntime.resolveAny();
+            return res.json(successBody({
+                pinnedVersion: NodeJsRuntime.PINNED_VERSION,
+                minMajor: NodeJsRuntime.MIN_MAJOR,
+                found: found ? {
+                    path: found.path,
+                    version: found.version.raw,
+                    source: found.source,
+                } : null,
+            }));
+        } catch (err) {
+            extensionHandle.log.error(
+                `${ENM_LOG_PREFIX} GET /setup/node-runtime: ${err.message}`,
+            );
+            return res.status(500).json(errorBody(err.message));
+        }
+    });
+
+    router.post('/install-node-runtime', limit('admin'), requireOwner, async (req, res) => {
+        try {
+            const NodeJsRuntime = require('../services/NodeJsRuntime');
+            const result = await NodeJsRuntime.installLocal({
+                onProgress: (msg) => extensionHandle.log.info(
+                    `${ENM_LOG_PREFIX} node-runtime install: ${msg}`,
+                ),
+            });
+            return res.json(successBody({
+                path: result.path,
+                version: result.version.raw,
+            }));
+        } catch (err) {
+            extensionHandle.log.error(
+                `${ENM_LOG_PREFIX} POST /setup/install-node-runtime: ${err.message}`,
+            );
+            return res.status(500).json(errorBody(err.message));
+        }
+    });
+
     return router;
 }
 
