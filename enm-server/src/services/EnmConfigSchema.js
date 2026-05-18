@@ -157,6 +157,17 @@ const globalSchema = Joi.object({
     }).default(),
     // beta.3.78 — `stateSnapshot` config block removed with the snapshot
     // service. F22 is now alert-only; recovery is operator-driven.
+    //
+    // beta.3.79 — pre-3.78 configs on disk still carry global.stateSnapshot.
+    // Without a tolerant key here, Joi rejects the whole config with
+    // "stateSnapshot is not allowed" — blocking config.load(), which in
+    // turn blocked HealthChecker, AUTOSTART, and every chains/ route.
+    // Operators woke up to chain-stopped + 500s from the UI.
+    //
+    // Joi.any().strip() accepts the legacy field on read and quietly
+    // drops it from the validated output, so the next ConfigStore.save
+    // writes a clean config and the legacy field is gone for good.
+    stateSnapshot: Joi.any().strip(),
 });
 
 const setupSchema = Joi.object({
