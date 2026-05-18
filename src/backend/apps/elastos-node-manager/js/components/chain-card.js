@@ -714,14 +714,24 @@
         // (the chain has both a system state AND a producer state).
         // beta.3.92 (M2.4) — chain name now sources from (1) the
         // server-side displayName (canonical, set per-class by the
-        // adapter), (2) the static CHAIN_DISPLAY_FALLBACK table for
-        // the chainIds we know, (3) the chainId itself as last resort.
+        // adapter), (2) strings.js `chain_name.<chainId>` for i18n
+        // (M2.6), (3) the static CHAIN_DISPLAY_FALLBACK table,
+        // (4) the chainId itself as last resort.
         // Pre-3.92 the hardcoded `(chainId === 'mainchain') ? 'Mainchain'
         // : String(chainId)` ternary printed "esc" / "eid" / "arbiter"
         // as the chip text once non-mainchain dashboards land in M3+.
-        var chainNameLabel = (state && state.displayName)
-            || CHAIN_DISPLAY_FALLBACK[this.chainId]
-            || String(this.chainId || 'Chain');
+        // beta.3.94 (M2.6) — strings.js lookup inserted between server
+        // displayName and the static fallback. enmT returns `[key]` for
+        // missing entries; treat that as "no override" and fall through.
+        var chainNameLabel;
+        if (state && state.displayName) {
+            chainNameLabel = state.displayName;
+        } else {
+            var i18nName = t('chain_name.' + this.chainId);
+            chainNameLabel = (i18nName && i18nName !== ('[chain_name.' + this.chainId + ']'))
+                ? i18nName
+                : (CHAIN_DISPLAY_FALLBACK[this.chainId] || String(this.chainId || 'Chain'));
+        }
         // beta.3.92 (M2.4) — producer-state chip variant is Class A
         // (BPoS mainchain) only. EVM sidechains have a separate
         // mining/miner-address concept (M3); Oracles + Arbiter have

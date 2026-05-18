@@ -75,6 +75,31 @@
         + ')$'
     );
 
+    /**
+     * beta.3.94 (Wave M2.6) — enmT lookup with an English fallback.
+     * Returns the strings.js key value when present, otherwise the
+     * passed fallback (with {var} substitution applied to both). Used
+     * by the M2.5 per-class settings stubs so they render the right
+     * copy even if strings.js hasn't loaded yet (test rigs, defensive
+     * boot). Matches the same helper in multi-chain-overview.js to
+     * keep behavior consistent across both M2 components.
+     */
+    function _tFb(key, fallback, vars) {
+        var t = root.enmTOrFallback || root.enmT;
+        if (typeof t !== 'function') { return _formatVars(fallback, vars); }
+        var v = t(key, vars);
+        if (!v || v === key || v === ('[' + key + ']')) {
+            return _formatVars(fallback, vars);
+        }
+        return v;
+    }
+    function _formatVars(s, vars) {
+        if (!vars) { return s; }
+        return String(s).replace(/\{([a-zA-Z0-9_]+)\}/g, function (m, name) {
+            return Object.prototype.hasOwnProperty.call(vars, name) ? String(vars[name]) : m;
+        });
+    }
+
     // beta.3.93 (Wave M2.5) — frontend mirror of ChainAdapter.CHAIN_ID_
     // TO_CLASS (M1.1) for static class lookup when the caller hasn't
     // passed chainClass explicitly. Used by the constructor to route
@@ -189,18 +214,26 @@
      * @param {string} chainId — esc | eid | pg
      */
     SettingsTab.prototype._mountEvmSidechainSettings = function (chainId) {
-        var labels = { esc: 'Smart Chain (ESC)', eid: 'Identity Chain (EID)', pg: 'PG Chain' };
-        var name = labels[chainId] || chainId;
+        // beta.3.94 (M2.6) — labels + body source from strings.js
+        // (chain_name.* + settings_class_stub.evm_*) with English
+        // fallbacks if the key is missing. Same enmT-with-fallback
+        // pattern used by multi-chain-overview.js.
+        var fallbackChainNames = { esc: 'Smart Chain (ESC)', eid: 'Identity Chain (EID)', pg: 'PG Chain' };
+        var name = _tFb('chain_name.' + chainId, fallbackChainNames[chainId] || chainId);
+        var title = _tFb('settings_class_stub.evm_title', '{chainName} settings', { chainName: name });
+        var body  = _tFb(
+            'settings_class_stub.evm_body',
+            'Class B (EVM sidechain) settings land in M3.3 (beta.3.97). The layout will include Mining & Rewards (miner address, sync mode), the PBFT keystore reference (read-only — points at the mainchain keystore), and per-chain Danger Zone actions.',
+        );
+        var fallback = _tFb(
+            'settings_class_stub.evm_fallback',
+            'For now use the chain selector above to return to Main chain.',
+        );
         this.root.innerHTML = ''
             + '<div class="enm-settings-class-stub" role="status" aria-live="polite">'
-            + '<h2>' + escapeHtml(name) + ' settings</h2>'
-            + '<p>Class B (EVM sidechain) settings land in <code>M3.3</code> '
-            + '(beta.3.97). The layout will include Mining &amp; Rewards '
-            + '(miner address, sync mode), the PBFT keystore reference '
-            + '(read-only — points at the mainchain keystore), and per-chain '
-            + 'Danger Zone actions.</p>'
-            + '<p>For now use the chain selector above to return to '
-            + '<strong>Main chain</strong>.</p>'
+            + '<h2>' + escapeHtml(title) + '</h2>'
+            + '<p>' + escapeHtml(body) + '</p>'
+            + '<p>' + escapeHtml(fallback) + '</p>'
             + '</div>';
     };
 
@@ -218,21 +251,21 @@
      * @param {string} chainId — esc-oracle | eid-oracle | pg-oracle
      */
     SettingsTab.prototype._mountOracleSettings = function (chainId) {
-        var labels = {
+        var fallbackChainNames = {
             'esc-oracle': 'ESC Oracle',
             'eid-oracle': 'EID Oracle',
             'pg-oracle':  'PG Oracle',
         };
-        var name = labels[chainId] || chainId;
+        var name = _tFb('chain_name.' + chainId, fallbackChainNames[chainId] || chainId);
+        var title = _tFb('settings_class_stub.oracle_title', '{chainName} settings', { chainName: name });
+        var body  = _tFb(
+            'settings_class_stub.oracle_body',
+            'Class C (Oracle) settings land in M4.2. Oracles are normally surfaced inside their parent chain’s pane as a sub-status panel rather than a top-level row (plan §3). The Class C layout will include the Node.js runtime version pin, oracle script path, and per-oracle restart controls.',
+        );
         this.root.innerHTML = ''
             + '<div class="enm-settings-class-stub" role="status" aria-live="polite">'
-            + '<h2>' + escapeHtml(name) + ' settings</h2>'
-            + '<p>Class C (Oracle) settings land in <code>M4.2</code>. '
-            + 'Oracles are normally surfaced inside their parent chain\'s '
-            + 'pane as a sub-status panel rather than a top-level row '
-            + '(plan §3). The Class C layout will include the Node.js '
-            + 'runtime version pin, oracle script path, and per-oracle '
-            + 'restart controls.</p>'
+            + '<h2>' + escapeHtml(title) + '</h2>'
+            + '<p>' + escapeHtml(body) + '</p>'
             + '</div>';
     };
 
@@ -249,14 +282,15 @@
      * @private
      */
     SettingsTab.prototype._mountArbiterSettings = function () {
+        var title = _tFb('settings_class_stub.arbiter_title', 'Arbiter settings');
+        var body  = _tFb(
+            'settings_class_stub.arbiter_body',
+            'Class D (Arbiter cross-chain signer) settings land in M6.4. The layout will include Wallet & Mining (wallet password, mining address, ELA balance), the Cross-chain Status reachability matrix, and a Danger Zone with reset controls.',
+        );
         this.root.innerHTML = ''
             + '<div class="enm-settings-class-stub" role="status" aria-live="polite">'
-            + '<h2>Arbiter settings</h2>'
-            + '<p>Class D (Arbiter cross-chain signer) settings land in '
-            + '<code>M6.4</code>. The layout will include Wallet &amp; '
-            + 'Mining (wallet password, mining address, ELA balance), '
-            + 'the Cross-chain Status reachability matrix, and a Danger '
-            + 'Zone with reset controls.</p>'
+            + '<h2>' + escapeHtml(title) + '</h2>'
+            + '<p>' + escapeHtml(body) + '</p>'
             + '</div>';
     };
 
@@ -270,12 +304,15 @@
      * @private
      */
     SettingsTab.prototype._mountSpvSettings = function () {
+        var title = _tFb('settings_class_stub.spv_title', 'SPV settings');
+        var body  = _tFb(
+            'settings_class_stub.spv_body',
+            'Class E (SPV light client) is likely deferred indefinitely (plan §12 Q8). If shipped (M6.7) the layout will be minimal: RPC port and filter type.',
+        );
         this.root.innerHTML = ''
             + '<div class="enm-settings-class-stub" role="status" aria-live="polite">'
-            + '<h2>SPV settings</h2>'
-            + '<p>Class E (SPV light client) is likely deferred '
-            + 'indefinitely (plan §12 Q8). If shipped (<code>M6.7</code>) '
-            + 'the layout will be minimal: RPC port and filter type.</p>'
+            + '<h2>' + escapeHtml(title) + '</h2>'
+            + '<p>' + escapeHtml(body) + '</p>'
             + '</div>';
     };
 

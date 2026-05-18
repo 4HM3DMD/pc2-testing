@@ -270,6 +270,112 @@
             // (typical first ~30s after each chain start). chain-card.js
             // already handles 'starting' state with a hero-spinner.
             starting:   'Starting',
+            // beta.3.90 (Wave M2.2) — additional coarse-state buckets
+            // surfaced by CouncilOverviewService (lightweight aggregator
+            // that doesn't run RPC). The richer healthy/syncing/stalled
+            // analysis lives in the per-chain endpoint; overview uses
+            // 'running' to mean "alive and past the startup grace window
+            // — fine-grained sync state unknown at this layer".
+            running:    'Running',
+        },
+
+        // beta.3.94 (Wave M2.6) — operator-facing display names for
+        // every known chainId. Centralized here so chain-card (M2.4),
+        // multi-chain-overview (M2.3), chain-selector, and settings-tab
+        // (M2.5) all surface the SAME name. Strings used to live in
+        // three CHAIN_DISPLAY_FALLBACK maps spread across the
+        // components; M2.6 collapses them into a single source of truth.
+        //
+        // No ECO entry per H3 — ECO chain is permanently out-of-scope.
+        chain_name: {
+            mainchain:    'Main chain',
+            esc:          'Smart Chain',
+            'esc-oracle': 'ESC Oracle',
+            eid:          'Identity Chain',
+            'eid-oracle': 'EID Oracle',
+            pg:           'PG Chain',
+            'pg-oracle':  'PG Oracle',
+            arbiter:      'Arbiter Service',
+            spv:          'SPV Module',
+        },
+
+        // beta.3.94 (Wave M2.6) — section labels for the multi-chain
+        // overview pane (M2.3) class-grouped sections. Five buckets
+        // matching the 5-class taxonomy (plan §2). The '?' bucket is a
+        // safety net for unknown/legacy chain ids — used to live in
+        // CLASS_LABEL['?'] = 'Other' inside multi-chain-overview.js.
+        chain_class_label: {
+            A: 'Mainchain',
+            B: 'EVM sidechains',
+            C: 'Oracles',
+            D: 'Cross-chain',
+            E: 'Light clients',
+            unknown: 'Other',
+        },
+
+        // beta.3.94 (Wave M2.6) — operator-facing labels for the M2.2
+        // CouncilOverviewService coarseState values. Distinct from
+        // chain_state above which is for the per-chain endpoint's full
+        // analysis. Overview values: running / starting / stopped /
+        // disabled / unconfigured (server-side enum, no 'syncing' etc).
+        overview_state: {
+            running:      'Running',
+            starting:     'Starting',
+            stopped:      'Stopped',
+            disabled:     'Disabled',
+            unconfigured: 'Not configured',
+        },
+
+        // beta.3.94 (Wave M2.6) — multi-chain overview pane copy.
+        overview_pane: {
+            title:                'Council overview',
+            // Summary line uses {running}/{stopped}/{disabled}/{total}
+            // placeholders so locales can reorder.
+            summary_no_chains:    'No chains yet.',
+            // Operator-facing "section is loading" copy.
+            loading:              'Loading Council overview…',
+            empty_title:          'No chains configured yet.',
+            empty_body:           'Use the setup wizard to install your first chain. Once Mainchain is running you can add EVM sidechains, Oracles, and Arbiter from the same wizard.',
+            error_title:          'Overview unavailable',
+            error_malformed:      'Overview snapshot is malformed.',
+            // Per-row aria-label "Open <chainName> dashboard".
+            row_aria_open:        'Open {chainName} dashboard',
+            // SR announcer message after row click.
+            announce_switched_to: 'Switched to {chainName}',
+        },
+
+        // beta.3.94 (Wave M2.6) — non-mainchain dashboard pane stub
+        // (M2.1) copy + per-class settings stub (M2.5) copy. The stub
+        // is shown when a chain is selectable but its per-class
+        // dashboard / settings layout hasn't shipped yet.
+        pane_stub: {
+            // Dashboard stub title is "{chainName} dashboard".
+            dashboard_title:      '{chainName} dashboard',
+            dashboard_body:       'This chain is not yet wired in the operator UI. Per-class dashboards land in upcoming milestones (M3 — EVM sidechains, M4 — Oracles, M6 — Arbiter). For now, use the chain selector above to return to Main chain.',
+            // Multi-chain overview stub (shown only when the real
+            // EnmMultiChainOverviewPane component fails to load).
+            overview_title:       'Multi-chain overview',
+            overview_body:        'Aggregate status for every configured chain lands in M2.3 (MultiChainOverviewPane). Until then this pane is a placeholder so the chain-selector wiring (M2.1) is reachable. Use the selector above to switch back to Main chain.',
+        },
+
+        // beta.3.94 (Wave M2.6) — Class B/C/D/E settings stubs (M2.5).
+        // Each stub explains the milestone path so operators selecting
+        // a non-mainchain chain see the right "coming in MX.Y" copy
+        // rather than an empty pane.
+        settings_class_stub: {
+            // Class B (ESC/EID/PG)
+            evm_title:      '{chainName} settings',
+            evm_body:       'Class B (EVM sidechain) settings land in M3.3 (beta.3.97). The layout will include Mining & Rewards (miner address, sync mode), the PBFT keystore reference (read-only — points at the mainchain keystore), and per-chain Danger Zone actions.',
+            evm_fallback:   'For now use the chain selector above to return to Main chain.',
+            // Class C (Oracles)
+            oracle_title:   '{chainName} settings',
+            oracle_body:    'Class C (Oracle) settings land in M4.2. Oracles are normally surfaced inside their parent chain’s pane as a sub-status panel rather than a top-level row (plan §3). The Class C layout will include the Node.js runtime version pin, oracle script path, and per-oracle restart controls.',
+            // Class D (Arbiter)
+            arbiter_title:  'Arbiter settings',
+            arbiter_body:   'Class D (Arbiter cross-chain signer) settings land in M6.4. The layout will include Wallet & Mining (wallet password, mining address, ELA balance), the Cross-chain Status reachability matrix, and a Danger Zone with reset controls.',
+            // Class E (SPV)
+            spv_title:      'SPV settings',
+            spv_body:       'Class E (SPV light client) is likely deferred indefinitely (plan §12 Q8). If shipped (M6.7) the layout will be minimal: RPC port and filter type.',
         },
 
         chain_actions: {

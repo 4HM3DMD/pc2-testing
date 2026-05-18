@@ -50,11 +50,12 @@
 
     var SSE_TOPIC = 'council:overview';
 
-    // Visual section labels keyed by the 5-class taxonomy. These also
-    // exist in strings.js (chain_name.* + section_label.*) — but for
-    // M2.3 we hardcode here. M2.6 migrates to strings.js so they're
-    // localizable. The fallback strings stay in case strings.js hasn't
-    // resolved the key yet (e.g. operator's locale missing a key).
+    // beta.3.94 (Wave M2.6) — these fallback maps remain in the file
+    // for two reasons: (1) strings.js may not have loaded yet on the
+    // very first paint, and (2) tests that don't include strings.js
+    // still need a working component. Runtime always prefers
+    // enmT('chain_name.<id>') / ('chain_class_label.<X>') /
+    // ('overview_state.<state>'); these are last-resort fallbacks.
     var CLASS_LABEL = {
         A: 'Mainchain',
         B: 'EVM sidechains',
@@ -63,11 +64,6 @@
         E: 'Light clients',
         '?': 'Other',
     };
-
-    // Per-chain operator-facing display name fallback. Used when the
-    // server-side displayName is missing or matches the chainId (rare).
-    // Mirrors the chain-selector.js labels so the overview rows + the
-    // selector trigger label use identical names.
     var CHAIN_DISPLAY_FALLBACK = {
         mainchain:    'Main chain',
         esc:          'Smart Chain',
@@ -79,8 +75,6 @@
         arbiter:      'Arbiter Service',
         spv:          'SPV Module',
     };
-
-    // M2.2 coarseState → operator-facing label.
     var STATE_LABEL = {
         running:      'Running',
         starting:     'Starting',
@@ -88,6 +82,50 @@
         disabled:     'Disabled',
         unconfigured: 'Not configured',
     };
+
+    /**
+     * Look up a strings.js key; if missing or not-a-string, fall back
+     * to the provided default (the in-file English copy). Combines
+     * enmT (full lookup) with a manual fallback so missing keys don't
+     * surface "[key]" placeholder copy to the operator.
+     *
+     * @param {string} key      strings.js dot-path
+     * @param {string} fallback English fallback when key is missing
+     * @param {object} [vars]   {var} substitution
+     * @returns {string}
+     */
+    function tFb(key, fallback, vars) {
+        var t = root.enmTOrFallback || root.enmT;
+        if (typeof t !== 'function') { return formatVars(fallback, vars); }
+        var v = t(key, vars);
+        // enmTOrFallback returns key when strings missing; enmT returns
+        // "[key]" when missing. Either way we detect + fall back.
+        if (!v || v === key || v === ('[' + key + ']')) {
+            return formatVars(fallback, vars);
+        }
+        return v;
+    }
+
+    function formatVars(s, vars) {
+        if (!vars) { return s; }
+        return String(s).replace(/\{([a-zA-Z0-9_]+)\}/g, function (m, name) {
+            return Object.prototype.hasOwnProperty.call(vars, name) ? String(vars[name]) : m;
+        });
+    }
+
+    function chainNameFor(chainId, serverDisplayName) {
+        if (serverDisplayName) { return serverDisplayName; }
+        return tFb('chain_name.' + chainId, CHAIN_DISPLAY_FALLBACK[chainId] || chainId);
+    }
+    function classLabelFor(klass) {
+        var k = klass || '?';
+        var fallback = CLASS_LABEL[k] || k;
+        if (k === '?') { return tFb('chain_class_label.unknown', fallback); }
+        return tFb('chain_class_label.' + k, fallback);
+    }
+    function stateLabelFor(state) {
+        return tFb('overview_state.' + state, STATE_LABEL[state] || state || 'unknown');
+    }
 
     // Ordering for chain-class sections.
     var CLASS_ORDER = ['A', 'B', 'C', 'D', 'E', '?'];
@@ -140,7 +178,7 @@
     EnmMultiChainOverviewPane.prototype._renderLoading = function () {
         this._root.innerHTML = ''
             + '<div class="enm-overview-loading" role="status" aria-live="polite">'
-            + '<p>Loading Council overview…</p>'
+            + '<p>' + escapeHtml(tFb('overview_pane.loading', 'Loading Council overview…')) + '</p>'
             + '</div>';
     };
 
@@ -149,7 +187,7 @@
         if (!this._root) { return; }
         this._root.innerHTML = ''
             + '<div class="enm-overview-error" role="alert">'
-            + '<h2>Overview unavailable</h2>'
+            + '<h2>' + escapeHtml(tFb('overview_pane.error_title', 'Overview unavailable')) + '</h2>'
             + '<p>' + escapeHtml(String(msg)) + '</p>'
             + '</div>';
     };
@@ -189,7 +227,7 @@
     /** @private */
     EnmMultiChainOverviewPane.prototype._applySnapshot = function (snap) {
         if (!snap || !Array.isArray(snap.chains)) {
-            this._renderError('Overview snapshot is malformed.');
+            this._renderError(tFb('overview_pane.error_malformed', 'Overview snapshot is malformed.'));
             return;
         }
         this._lastSnap = snap;
@@ -217,7 +255,7 @@
 
         var html = [
             '<header class="enm-overview-header">',
-            '<h2>Council overview</h2>',
+            '<h2>' + escapeHtml(tFb('overview_pane.title', 'Council overview')) + '</h2>',
             '<p class="enm-overview-summary">',
             escapeHtml(this._summaryLine(snap.totals)),
             '</p>',
@@ -231,7 +269,7 @@
             if (!rows || rows.length === 0) { return; }
             hasRows = true;
             html.push('<section class="enm-overview-class" data-class="' + k + '">');
-            html.push('<h3>' + escapeHtml(CLASS_LABEL[k] || k) + '</h3>');
+            html.push('<h3>' + escapeHtml(classLabelFor(k)) + '</h3>');
             html.push('<ul class="enm-overview-rows" role="list">');
             rows.forEach(function (c) {
                 html.push(self._rowHtml(c));
@@ -241,10 +279,11 @@
         });
         if (!hasRows) {
             html.push('<div class="enm-overview-empty">');
-            html.push('<p><strong>No chains configured yet.</strong></p>');
-            html.push('<p>Use the setup wizard to install your first chain. ');
-            html.push('Once Mainchain is running you can add EVM sidechains, ');
-            html.push('Oracles, and Arbiter from the same wizard.</p>');
+            html.push('<p><strong>' + escapeHtml(tFb('overview_pane.empty_title', 'No chains configured yet.')) + '</strong></p>');
+            html.push('<p>' + escapeHtml(tFb('overview_pane.empty_body',
+                'Use the setup wizard to install your first chain. Once Mainchain '
+                + 'is running you can add EVM sidechains, Oracles, and Arbiter from '
+                + 'the same wizard.')) + '</p>');
             html.push('</div>');
         }
         html.push('</div>');
@@ -274,8 +313,9 @@
     EnmMultiChainOverviewPane.prototype._rowHtml = function (c) {
         var stateClass = 'state-' + escapeAttr(c.state || 'unknown');
         var uptime = c.uptimeSec != null ? formatUptime(c.uptimeSec) : '';
-        var displayName = c.displayName || CHAIN_DISPLAY_FALLBACK[c.chainId] || c.chainId;
-        var stateLabel = STATE_LABEL[c.state] || c.state || 'unknown';
+        var displayName = chainNameFor(c.chainId, c.displayName);
+        var stateLabel = stateLabelFor(c.state);
+        var ariaLabel = tFb('overview_pane.row_aria_open', 'Open {chainName} dashboard', { chainName: displayName });
         var chainIdAttr = escapeAttr(c.chainId);
         var displayHtml = escapeHtml(displayName);
         var stateLabelHtml = escapeHtml(stateLabel);
@@ -283,7 +323,7 @@
         return '<li class="enm-overview-row" data-chain-id="' + chainIdAttr
             + '" data-state="' + escapeAttr(c.state || 'unknown') + '"'
             + ' tabindex="0" role="button"'
-            + ' aria-label="Open ' + escapeAttr(displayName) + ' dashboard">'
+            + ' aria-label="' + escapeAttr(ariaLabel) + '">'
             + '<span class="enm-overview-dot ' + stateClass + '" aria-hidden="true"></span>'
             + '<span class="enm-overview-name">' + displayHtml + '</span>'
             + '<span class="enm-overview-state">' + stateLabelHtml + '</span>'
@@ -295,7 +335,13 @@
 
     /** @private */
     EnmMultiChainOverviewPane.prototype._summaryLine = function (totals) {
-        if (!totals || !totals.total) { return 'No chains yet.'; }
+        if (!totals || !totals.total) {
+            return tFb('overview_pane.summary_no_chains', 'No chains yet.');
+        }
+        // Simple " · "-joined assembly. Per-locale grammar can override
+        // by providing a 'summary_running'/'summary_of_total'/etc string
+        // template in a later i18n pass; for M2.6 English-only it's
+        // fine to construct in place.
         var bits = [];
         bits.push(totals.running + ' running');
         if (totals.stopped > 0) { bits.push(totals.stopped + ' stopped'); }
@@ -406,9 +452,11 @@
         } catch (_) { /* IE-era fallback unnecessary */ }
         if (this.announcer && typeof this.announcer.polite === 'function') {
             try {
-                this.announcer.polite(
-                    'Switched to ' + (CHAIN_DISPLAY_FALLBACK[chainId] || chainId),
-                );
+                this.announcer.polite(tFb(
+                    'overview_pane.announce_switched_to',
+                    'Switched to {chainName}',
+                    { chainName: chainNameFor(chainId, null) },
+                ));
             } catch (_) { /* ignore */ }
         }
     };

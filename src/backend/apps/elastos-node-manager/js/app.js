@@ -1255,6 +1255,9 @@
             // a "Coming soon" stub so the operator gets a clear signal
             // rather than a broken mainchain dashboard rendered for
             // the wrong chain.
+            // beta.3.94 (M2.6) — labels sourced from strings.js with
+            // English fallbacks. Falls back to the in-place table when
+            // strings.js isn't loaded yet (very first paint).
             var labelMap = {
                 esc:     'Smart Chain (ESC)',
                 eid:     'Identity Chain (EID)',
@@ -1262,15 +1265,33 @@
                 arbiter: 'Arbiter Service',
                 spv:     'SPV Module',
             };
-            var displayName = labelMap[chainId] || chainId;
+            var t = root.enmTOrFallback;
+            function _fb(key, fb, vars) {
+                if (typeof t !== 'function') {
+                    return vars ? fb.replace(/\{(\w+)\}/g, function (m, n) { return vars[n] || m; }) : fb;
+                }
+                var v = t(key, vars);
+                if (!v || v === key || v === ('[' + key + ']')) {
+                    return vars ? fb.replace(/\{(\w+)\}/g, function (m, n) { return vars[n] || m; }) : fb;
+                }
+                return v;
+            }
+            var displayName = _fb('chain_name.' + chainId, labelMap[chainId] || chainId);
+            var titleText = _fb('pane_stub.dashboard_title', '{chainName} dashboard', { chainName: displayName });
+            var bodyText = _fb('pane_stub.dashboard_body',
+                'This chain is not yet wired in the operator UI. Per-class '
+                + 'dashboards land in upcoming milestones (M3 — EVM sidechains, '
+                + 'M4 — Oracles, M6 — Arbiter). For now, use the chain selector '
+                + 'above to return to Main chain.');
+            // escape minimal — these come from our own strings, but
+            // defense in depth in case a future translation adds
+            // markup-looking chars.
+            function _esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
             pane.innerHTML =
                 '<div class="enm-pane-stub" role="status" aria-live="polite">'
-                + '<h2>' + displayName + ' dashboard</h2>'
-                + '<p>This chain is not yet wired in the operator UI. '
-                + 'Per-class dashboards land in upcoming milestones (M3 — '
-                + 'EVM sidechains, M4 — Oracles, M6 — Arbiter). For now, '
-                + 'use the chain selector above to return to <strong>Main '
-                + 'chain</strong>.</p></div>';
+                + '<h2>' + _esc(titleText) + '</h2>'
+                + '<p>' + _esc(bodyText) + '</p>'
+                + '</div>';
             return;
         }
 
@@ -1352,15 +1373,29 @@
             this._overviewPane.mount(pane);
             return;
         }
-        // M2.1 stub.
+        // M2.1 stub (rare — only reached if multi-chain-overview.js
+        // failed to load). beta.3.94 (M2.6) wires the copy through
+        // strings.js with the same fallback pattern as the dashboard
+        // stub above.
+        var t = root.enmTOrFallback;
+        function _fb(key, fb) {
+            if (typeof t !== 'function') { return fb; }
+            var v = t(key);
+            if (!v || v === key || v === ('[' + key + ']')) { return fb; }
+            return v;
+        }
+        function _esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+        var stubTitle = _fb('pane_stub.overview_title', 'Multi-chain overview');
+        var stubBody = _fb('pane_stub.overview_body',
+            'Aggregate status for every configured chain lands in M2.3 '
+            + '(MultiChainOverviewPane). Until then this pane is a placeholder '
+            + 'so the chain-selector wiring (M2.1) is reachable. Use the '
+            + 'selector above to switch back to Main chain.');
         pane.innerHTML =
             '<div class="enm-pane-stub" role="status" aria-live="polite">'
-            + '<h2>Multi-chain overview</h2>'
-            + '<p>Aggregate status for every configured chain lands in M2.3 '
-            + '(<code>MultiChainOverviewPane</code>). Until then this pane is '
-            + 'a placeholder so the chain-selector wiring (M2.1) is reachable. '
-            + 'Use the selector above to switch back to <strong>Main chain</strong>.'
-            + '</p></div>';
+            + '<h2>' + _esc(stubTitle) + '</h2>'
+            + '<p>' + _esc(stubBody) + '</p>'
+            + '</div>';
     };
 
     /**
