@@ -142,6 +142,38 @@ class NativeProcessService extends EventEmitter {
     }
 
     /**
+     * beta.3.84 — Wave E — mark every currently-tracked chain handle as
+     * manualStop=true, synchronously, without sending any signal. Used
+     * by the /teardown route + the ENM SIGTERM handler so that when
+     * pc2-node tears us down (and our child ela processes get killed
+     * as a side effect of the extension's process group dying), the
+     * subsequent exit events are correctly classified as `manual=true`
+     * instead of `manual=false`. Without this, every deploy looked
+     * like an external killer in the logs — chased as a phantom bug
+     * for the entire 2026-05-18 session until Wave B forensics proved
+     * silence (no real external SIGTERM source existed).
+     *
+     * No await, no signal — purely a metadata flip.
+     *
+     * @returns {string[]} chainIds marked
+     */
+    markAllManualStop() {
+        const marked = [];
+        for (const [chainId, handle] of this.handles.entries()) {
+            if (handle && !handle.manualStop) {
+                handle.manualStop = true;
+                marked.push(chainId);
+            }
+        }
+        if (marked.length > 0) {
+            this.extensionHandle.log.info(
+                `${ENM_LOG_PREFIX} markAllManualStop: ${marked.length} chain(s) marked: ${marked.join(', ')}`,
+            );
+        }
+        return marked;
+    }
+
+    /**
      * Stop the chain. SIGTERM → wait grace → SIGKILL. Marks as user-initiated
      * so F1 honors the stop and doesn't try to restart. Locked per chainId.
      *

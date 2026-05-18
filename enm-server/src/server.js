@@ -200,6 +200,18 @@ async function main() {
             return res.status(403).json(errorBody('teardown is loopback-only'));
         }
         try {
+            // beta.3.84 — Wave E — mark all running chains as manualStop
+            // BEFORE the keystore backup. pc2-node will SIGTERM us next; the
+            // subsequent child ela SIGTERMs must NOT look like external
+            // killers (Wave B forensics chased a phantom bug all night
+            // because deploys were the only "killer"). Synchronous; the
+            // markers must land before pc2-node sends the signal.
+            try {
+                const marked = ChainRegistry.getProcessService().markAllManualStop();
+                log('info', `teardown: pre-marked ${marked.length} chain(s) as manualStop`);
+            } catch (markErr) {
+                log('warn', `teardown: markAllManualStop failed (non-fatal): ${markErr.message}`);
+            }
             const result = backupKeystoreForTeardown();
             return res.json(successBody(result));
         } catch (err) {
@@ -384,6 +396,39 @@ async function main() {
         log('info', `enm-server listening on :${PORT}`);
         log('info', `health: http://localhost:${PORT}${ENM_API_PREFIX}/health`);
     });
+
+    // beta.3.84 — Wave E — graceful-shutdown signal handlers. The
+    // /teardown route handles the pc2-node-uninstall path (mark all
+    // chains manualStop BEFORE pc2-node SIGTERMs us). These handlers
+    // cover every OTHER way ENM can be told to shut down: systemd
+    // restart, manual SIGTERM, OOM kill, kill -INT, Ctrl+C in dev.
+    // Without them, those shutdowns would also kill child ela
+    // processes with manual=false → spurious external-SIGTERM
+    // forensic entries + spurious F1 fires after the next ENM boot.
+    //
+    // Signal handlers run before Node exits the event loop. They
+    // call markAllManualStop() synchronously (a Map iteration —
+    // sub-millisecond) then re-throw the signal to honour the
+    // operator's shutdown intent. Idempotent — installing once is
+    // safe even if init() is re-called (pre-deploy or hot-reload).
+    if (!global.__enmSignalHandlersInstalled) {
+        global.__enmSignalHandlersInstalled = true;
+        const onShutdown = (signal) => {
+            log('info', `received ${signal} — pre-marking running chains as manualStop`);
+            try {
+                const marked = ChainRegistry.getProcessService().markAllManualStop();
+                log('info', `${signal}: pre-marked ${marked.length} chain(s)`);
+            } catch (err) {
+                log('warn', `${signal}: markAllManualStop failed (non-fatal): ${err.message}`);
+            }
+            // Don't process.exit() — let the natural exit path run so any
+            // pending writes complete. The Node process exits when the
+            // event loop drains; nothing keeps it alive after listen()
+            // sockets close on signal.
+        };
+        process.on('SIGTERM', () => onShutdown('SIGTERM'));
+        process.on('SIGINT',  () => onShutdown('SIGINT'));
+    }
 }
 
 function log(level, msg) {
