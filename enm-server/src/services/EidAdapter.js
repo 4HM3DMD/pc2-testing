@@ -2,8 +2,8 @@
  * Copyright (C) 2026-present Elacity
  * SPDX-License-Identifier: AGPL-3.0
  *
- * EidAdapter — Wave M3.2 (beta.3.96) — Elastos Identity (DID) Chain
- * adapter.
+ * EidAdapter — Wave M3.2 (beta.3.96) + Wave M3.7 (beta.4.01) —
+ * Elastos Identity (DID) Chain adapter.
  *
  * Class B (EVM PBFT sidechain) — extends EvmSidechainAdapter base.
  *
@@ -17,14 +17,7 @@
  *   - The KYC precompile at EID is 0x7D7 (= decimal 2007), NOT 0x14.
  *     plan §14 corrected the earlier audit; this address belongs to
  *     EID-specific contracts, not our adapter — noted here for future
- *     contract-interaction work (out of scope for M3.2).
- *
- * EID testnet adds an `spvconfig.json` requirement (plan §17 Class B
- * row, node.sh:4356-4366). That's M3.7 — generateExtraSpawnArgs adds
- * `--spvconfig <path>` only on testnet then. For M3.2 we ship the
- * adapter without the spvconfig branch; activeNet='testnet' won't
- * produce the materialized file until M3.7. Operators on mainnet are
- * unaffected.
+ *     contract-interaction work (out of scope for M3.7).
  *
  * Canonical values (plan §14 + Elastos docs):
  *   chainId        — 'eid'
@@ -37,11 +30,50 @@
  *   20646 — HTTP-RPC (cfg.ports.rpc)
  *   20648 — P2P TCP+UDP (cfg.ports.p2p)
  *   20649 — DPoS TCP (cfg.ports.dpos)
+ *
+ * SPV CONFIG (M3.7 — beta.4.01)
+ *
+ * On testnet, EID needs an spvconfig.json file passed via --spvconfig
+ * (node.sh:4356-4366). The SPV client inside EID watches the mainchain
+ * (ELA) testnet for cross-chain transactions targeting the EID side.
+ * Mainnet has hard-coded SPV defaults baked into the EID binary, so no
+ * config file is needed; only testnet branches into here.
+ *
+ * The materialization is best-effort: we generate the file on every
+ * start, write atomically, and add --spvconfig <abs path> to the
+ * spawn args. If the operator's running mainnet, generateExtraSpawnArgs
+ * returns []; the file isn't touched.
+ *
+ * The schema we emit matches the SPV.Configuration shape used by
+ * upstream ela-spv: Magic + Foundation + ChainID + SeedList. Values
+ * derived from the ELA testnet defaults (Magic 2018201, Foundation =
+ * testnet foundation address). These were stable as of the M3.7
+ * upstream audit (plan §14); future EID releases may bake more
+ * defaults into the binary, at which point we'd drop the file.
  */
 
 'use strict';
 
+const fs = require('node:fs');
+const path = require('node:path');
+
 const EvmSidechainAdapter = require('./EvmSidechainAdapter');
+const { chainDir, atomicWrite } = require('./DataDir');
+
+const SPVCONFIG_FILENAME = 'spvconfig.json';
+
+// ELA testnet defaults sourced from the canonical Elastos.ELA repo
+// (params/testnet/config.go). Stable across recent ela releases; we
+// snapshot here so EID can resolve cross-chain transactions against
+// the testnet ELA mainchain even when the operator hasn't installed
+// our own mainchain in testnet mode.
+const ELA_TESTNET_MAGIC = 2018201;
+const ELA_TESTNET_FOUNDATION = 'EJMzC16Eorq9CuFCGtyMrFV3bGdSmTUUVj';
+const ELA_TESTNET_SEEDS = [
+    'node-testnet-002.elastos.org:21338',
+    'node-testnet-003.elastos.org:21338',
+    'node-testnet-004.elastos.org:21338',
+];
 
 class EidAdapter extends EvmSidechainAdapter {
     get chainId()        { return 'eid'; }
@@ -49,6 +81,94 @@ class EidAdapter extends EvmSidechainAdapter {
     get binaryName()     { return 'eid'; }
     get defaultRpcPort() { return 20646; }
     get chainIdValue()   { return 22; }
+
+    /**
+     * Build the SPV config JSON the EID binary reads on testnet. Pure
+     * function (no IO) so tests can verify the shape without disk
+     * interaction. Mainnet returns null — no config file needed.
+     *
+     * @param {object} cfg  chains.eid config block
+     * @returns {object|null}
+     */
+    generateSpvConfig(cfg) {
+        if (!cfg || cfg.activeNet !== 'testnet') { return null; }
+        return {
+            // Capitalised keys to match the Go struct tag conventions
+            // in ela-spv (Configuration struct in spvwrapper/config.go).
+            Magic: ELA_TESTNET_MAGIC,
+            Foundation: ELA_TESTNET_FOUNDATION,
+            ChainID: this.chainIdValue,  // 22 for EID
+            // SeedList per node.sh:4356-4366 — testnet seeds for the
+            // mainchain SPV-light-client EID embeds.
+            SeedList: ELA_TESTNET_SEEDS.slice(),
+            // Additional fields can be layered here as upstream EID
+            // adds features; conservative for now to match upstream
+            // contract.
+        };
+    }
+
+    /**
+     * Materialize the SPV config file on disk and return the absolute
+     * path. No-op (returns null) on mainnet.
+     *
+     * @param {object} cfg
+     * @returns {Promise<string|null>}
+     */
+    async writeSpvConfigIfNeeded(cfg) {
+        const obj = this.generateSpvConfig(cfg);
+        if (!obj) { return null; }
+        const out = path.join(chainDir(this.chainId), SPVCONFIG_FILENAME);
+        await atomicWrite(out, JSON.stringify(obj, null, 2), { mode: 0o600 });
+        return out;
+    }
+
+    /**
+     * Subclass hook from EvmSidechainAdapter — append --spvconfig flag
+     * only on testnet. M3.7 leaves the file-write side to start()
+     * override below (called BEFORE the base class spawns); here we
+     * only declare the flag.
+     *
+     * @param {object} cfg
+     * @returns {string[]}
+     */
+    generateExtraSpawnArgs(cfg) {
+        if (!cfg || cfg.activeNet !== 'testnet') { return []; }
+        const p = path.join(chainDir(this.chainId), SPVCONFIG_FILENAME);
+        return ['--spvconfig', p];
+    }
+
+    /**
+     * Materialize spvconfig.json on testnet BEFORE delegating to the
+     * base class spawn. The file path matches what generateExtraSpawnArgs
+     * declared so geth finds it when it parses --spvconfig.
+     *
+     * Defence-in-depth: pre-flight fail if the file isn't writable.
+     * The base class catches its own pre-flight errors and rethrows
+     * with the chainId prefix.
+     *
+     * @param {object} cfg
+     * @returns {Promise<{ pid: number, startedAt: number }>}
+     */
+    async start(cfg) {
+        if (cfg && cfg.activeNet === 'testnet') {
+            try {
+                await this.writeSpvConfigIfNeeded(cfg);
+            } catch (err) {
+                throw new Error(
+                    `eid: failed to materialize spvconfig.json: ${err.message}. `
+                    + 'Check chain dir write permissions.',
+                );
+            }
+        }
+        return super.start(cfg);
+    }
 }
 
 module.exports = EidAdapter;
+// Exported for unit tests.
+module.exports._internal = {
+    SPVCONFIG_FILENAME,
+    ELA_TESTNET_MAGIC,
+    ELA_TESTNET_FOUNDATION,
+    ELA_TESTNET_SEEDS,
+};
