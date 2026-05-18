@@ -28,7 +28,7 @@
 
 'use strict';
 
-const { spawn } = require('node:child_process');
+const { spawn, exec } = require('node:child_process');
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
@@ -361,6 +361,7 @@ class NativeProcessService extends EventEmitter {
         // managed stop; otherwise emit so SelfHealingEngine can fire F1.
         child.on('exit', (code, signal) => {
             const wasManual = handle.manualStop;
+            const exitedPid = child.pid;
             this.handles.delete(chainId);
             // best-effort cleanup; don't await inside the listener
             this._unlinkSilent(pidFilePath(chainId)).catch(() => {});
@@ -370,6 +371,23 @@ class NativeProcessService extends EventEmitter {
                 `${ENM_LOG_PREFIX} ${chainId} exited (code=${code}, signal=${signal}, manual=${wasManual})`,
             );
             this.emit('exit', { chainId, code, signal, manualStop: wasManual });
+
+            // beta.3.81 — Wave B item ⑧ — external SIGTERM forensics.
+            // When ela exits via SIGTERM but ENM didn't initiate the
+            // stop (wasManual=false), something outside ENM killed the
+            // process. Operators on srv832310 hit this repeatedly:
+            // chain dies every 30-90min, no audit row, no clue who's
+            // sending the signal. Capture a forensic snapshot to the
+            // server log so the next death event leaves a trail we
+            // can read offline. Fire-and-forget — must not block the
+            // exit handler or impact F1's restart latency.
+            if (signal === 'SIGTERM' && !wasManual) {
+                this._captureSigtermForensics(chainId, exitedPid).catch((err) => {
+                    this.extensionHandle.log.debug(
+                        `${ENM_LOG_PREFIX} ${chainId} SIGTERM forensics failed (non-fatal): ${err.message}`,
+                    );
+                });
+            }
         });
         child.on('error', (err) => {
             this.extensionHandle.log.error(`${ENM_LOG_PREFIX} ${chainId} child error: ${err.message}`);
@@ -494,6 +512,87 @@ class NativeProcessService extends EventEmitter {
                 this.extensionHandle.log.debug(`${ENM_LOG_PREFIX} unlink ${p} failed: ${err.message}`);
             }
         }
+    }
+
+    /**
+     * beta.3.81 — Wave B item ⑧ — capture forensic context when ela
+     * receives an external SIGTERM (manual=false). Goal: identify the
+     * killer, which has been mystery on srv832310 for weeks.
+     *
+     * Strategy: collect the cheapest "what was happening around the
+     * moment of death" signals available. All commands are bounded
+     * (`tail`, time-windowed `journalctl --since`) so the worst-case
+     * data volume is ~30KB per event. Fire-and-forget; nothing on
+     * the F1 / restart hot path waits for this.
+     *
+     * Output: a single structured log line prefixed with
+     * `external-sigterm-source` that operators can grep:
+     *
+     *     grep -A50 'external-sigterm-source' /var/lib/pc2/data/logs/elastos-node-manager.log
+     *
+     * @private
+     * @param {string} chainId
+     * @param {number} exitedPid
+     */
+    async _captureSigtermForensics(chainId, exitedPid) {
+        const captureStart = Date.now();
+        const log = this.extensionHandle.log;
+        // Best-effort shell capture with hard timeouts. exec uses /bin/sh
+        // which is dash on Ubuntu — keep the commands POSIX-y.
+        const runCmd = (cmd, timeoutMs) => new Promise((resolve) => {
+            exec(cmd, { timeout: timeoutMs, maxBuffer: 64 * 1024 }, (err, stdout, stderr) => {
+                if (err && err.killed) {
+                    resolve(`<timed out after ${timeoutMs}ms>`);
+                    return;
+                }
+                if (err && err.code) {
+                    resolve(`<exit ${err.code}: ${(stderr || '').slice(0, 200)}>`);
+                    return;
+                }
+                resolve(String(stdout || '').slice(0, 8 * 1024)); // cap each at 8KB
+            });
+        });
+
+        // Five forensic probes in parallel. Each is bounded; combined
+        // budget is ~5s wall-clock, almost always faster.
+        const [dmesgTail, journalTail, psTree, parentInfo, ppidProbe] = await Promise.all([
+            // dmesg: OOM kills + kernel-side signals show up here
+            runCmd('dmesg --time-format iso 2>/dev/null | tail -20', 2000),
+            // journalctl: catches systemd unit activity (e.g. another unit
+            // that stops the process, or pc2-node restarting)
+            runCmd(`journalctl --since "20 seconds ago" --no-pager 2>/dev/null | tail -60`, 3000),
+            // ps tree: see who's alive, parent relationships
+            runCmd('ps -ef --forest 2>/dev/null | head -80', 2000),
+            // /proc/<pid> may be gone already (process exited), but a
+            // partial read is informative if we win the race
+            runCmd(`cat /proc/${exitedPid}/status 2>/dev/null | head -20 || echo '<proc gone>'`, 1000),
+            // The PPID at time of exit. exec is async so PPID==1 usually;
+            // we capture it for the record.
+            runCmd(`ls -la /proc/${exitedPid} 2>/dev/null | head -5 || echo '<proc gone>'`, 1000),
+        ]);
+
+        const elapsedMs = Date.now() - captureStart;
+        // Single structured log entry, JSON-on-one-line so operators can
+        // pipe to jq if they want.
+        const payload = {
+            tag: 'external-sigterm-source',
+            chainId,
+            exitedPid,
+            capturedAt: new Date().toISOString(),
+            captureElapsedMs: elapsedMs,
+            dmesgTail: dmesgTail.split('\n').slice(-20),
+            journalTail: journalTail.split('\n').slice(-30),
+            psTree: psTree.split('\n').slice(-40),
+            procStatus: parentInfo.split('\n').slice(-10),
+            procDir: ppidProbe.split('\n').slice(-5),
+        };
+        log.warn(
+            `${ENM_LOG_PREFIX} ${chainId} external-sigterm-source forensic snapshot: ${JSON.stringify(payload)}`,
+        );
+        // Emit an event so SseHub / SelfHealingEngine can surface this
+        // to operators as a CRITICAL_NOTIFY if they want. Decoupled
+        // from this service so we don't have to know about SseHub here.
+        this.emit('external-sigterm', { chainId, exitedPid, payload });
     }
 }
 

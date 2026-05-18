@@ -322,6 +322,26 @@ function build(extensionHandle) {
 
             const syncSnapshot = { synced, alive: !!(status && status.alive), lastBlockTime };
 
+            // beta.3.81 — Wave B item ④ phase 1 — diagnostic when the
+            // chain claims alive but every downstream RPC returned null.
+            // Symptom: operator UI flashes blank widgets (height/peers/
+            // networkHeight all "—") even though the chain card claims
+            // "Healthy". Usually a startup race (RPC not bound yet) or
+            // a stalled ela process. Logging here makes the next
+            // occurrence traceable in ~/data/logs/elastos-node-manager.log
+            // by greppable tag.
+            if (status && status.alive
+                && height == null && peers == null && networkHeight == null) {
+                extensionHandle.log.warn(
+                    `${ENM_LOG_PREFIX} chain-status:alive-but-blank-rpc `
+                    + `chain=${adapter.chainId} pid=${status.pid} `
+                    + `uptimeSec=${uptimeSec} `
+                    + `producerState=${producerState} `
+                    + `synced=${synced} `
+                    + `— operator UI will render blanks; investigate RPC bind or stall`,
+                );
+            }
+
             return res.json(successBody({
                 chainId: adapter.chainId,
                 displayName: adapter.displayName,
