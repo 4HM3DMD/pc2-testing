@@ -183,15 +183,54 @@ const setupSchema = Joi.object({
     ).default('welcome'),
 });
 
+// beta.3.86 — Wave M1.2 — multi-chain config-shape opening.
+//
+// Placeholder schemas for non-mainchain classes. Each currently accepts
+// any shape (`.unknown(true)`) so M1.2 only OPENS the door for future
+// per-class fields without prescribing what they look like (that lands
+// in M3 for Class B, M4 for Class C, M5 for PG-specific, M6 for Class D).
+//
+// Why now: by introducing the pattern matchers in M1.2, the schema
+// stops rejecting any non-mainchain chainId before the per-class schemas
+// land. This lets later milestones add chain entries to the config
+// without simultaneously needing schema migration.
+//
+// The mainchain key stays as a NAMED key (not a pattern match) so the
+// existing strict mainchainSchema continues to validate exactly as
+// before. Backward compat: pre-3.86 configs with `chains.mainchain`
+// only continue to validate without any change.
+//
+// ECO is intentionally absent from the regex (H3 — operator-instructed
+// 2026-05-18); attempting to add `chains.eco: {...}` is REJECTED.
+
+const classBPlaceholderSchema = Joi.object().unknown(true);  // ESC / EID / PG (M3, M5)
+const classCPlaceholderSchema = Joi.object().unknown(true);  // Oracles (M4, M5)
+const classDPlaceholderSchema = Joi.object().unknown(true);  // Arbiter (M6)
+const classEPlaceholderSchema = Joi.object().unknown(true);  // SPV (M6-opt)
+
 const enmConfigSchema = Joi.object({
     version: Joi.number().integer().valid(1).required(),
     chains: Joi.object({
+        // Named key — preserves bit-for-bit mainchain validation. Stays
+        // as a named key forever; Class A is the only class with a
+        // singleton (only one mainchain ever).
         mainchain: mainchainSchema.optional(),
-    }).default({}),
+    })
+        // Class B chainIds — esc, eid, pg. Real schema lands in M3 (ESC,
+        // EID) and M5 (PG). For now any object shape is accepted.
+        .pattern(/^(esc|eid|pg)$/, classBPlaceholderSchema)
+        // Class C chainIds — oracles. Real schema in M4 (ESC, EID Oracle)
+        // and M5 (PG Oracle).
+        .pattern(/^(esc-oracle|eid-oracle|pg-oracle)$/, classCPlaceholderSchema)
+        // Class D — arbiter (singleton). Real schema in M6.
+        .pattern(/^arbiter$/, classDPlaceholderSchema)
+        // Class E — spv (singleton, optional). Real schema in M6-opt.
+        .pattern(/^spv$/, classEPlaceholderSchema)
+        .default({}),
     global: globalSchema.default(),
     setup: setupSchema.default(),
 })
-    .unknown(false) // reject typos
+    .unknown(false) // reject typos at the top level (chains/global/setup/version only)
     .required();
 
 /**
