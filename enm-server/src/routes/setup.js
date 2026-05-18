@@ -692,6 +692,139 @@ function build(extensionHandle) {
         }
     });
 
+    // beta.3.98 (Wave M3.4) — Layer 1 setup wizard endpoints.
+    //
+    // The Council operator answers two strategy questions BEFORE
+    // installing the first non-mainchain chain:
+    //   1. Password strategy: one EVM keystore password for all
+    //      sidechains, or per-chain.
+    //   2. Miner-address strategy: one Ethereum address for all chains,
+    //      or per-chain.
+    //
+    // GET /setup/council-strategy returns the current state (or empty
+    // object if not yet answered). POST persists answers. The M3.5
+    // install wizard checks this state before any Class B install:
+    // if either strategy is missing, the Layer 1 cards are shown first.
+
+    router.get('/council-strategy', limit('read'), async (req, res) => {
+        if (!readActorWallet(req)) {
+            return res.status(401).json(errorBody('Authentication required.'));
+        }
+        try {
+            const cfg = await ConfigStore.load();
+            const c = (cfg.global && cfg.global.council) || {};
+            // Don't echo the encrypted password back over the wire — the
+            // operator never sees ciphertext in the UI, and exposing it
+            // would let a read-only viewer attempt offline decryption.
+            // Surface a `hasSharedPassword` bool instead.
+            return res.json(successBody({
+                passwordStrategy: c.passwordStrategy || null,
+                hasSharedPassword: !!(c.sharedPasswordEncrypted),
+                minerAddressStrategy: c.minerAddressStrategy || null,
+                sharedMinerAddress: c.sharedMinerAddress || '',
+                setupCompletedAt: c.setupCompletedAt || null,
+            }));
+        } catch (err) {
+            extensionHandle.log.error(
+                `${ENM_LOG_PREFIX} GET /setup/council-strategy: ${err.message}`,
+            );
+            return res.status(500).json(errorBody(err.message));
+        }
+    });
+
+    router.post('/council-strategy', limit('admin'), requireOwner, async (req, res) => {
+        try {
+            const body = req.body || {};
+            const cfg = await ConfigStore.load();
+            const council = (cfg.global && cfg.global.council) || {};
+            // Password strategy.
+            if (body.passwordStrategy !== undefined) {
+                const ps = String(body.passwordStrategy);
+                if (!['shared', 'per-chain'].includes(ps)) {
+                    return res.status(400).json(errorBody(
+                        'passwordStrategy must be one of "shared" | "per-chain"',
+                    ));
+                }
+                council.passwordStrategy = ps;
+                if (ps === 'shared') {
+                    // Require operator to supply the actual password so we
+                    // can encrypt it now (per-chain installs reuse this
+                    // ciphertext rather than re-prompting). H24: never
+                    // store plaintext.
+                    if (typeof body.sharedPassword !== 'string' || body.sharedPassword.length < 16) {
+                        return res.status(400).json(errorBody(
+                            'sharedPassword required (16+ chars) when passwordStrategy="shared". '
+                            + 'Use EnmCrypto.generatePassword for a complexity-compliant random.',
+                        ));
+                    }
+                    const EnmCrypto = require('../services/EnmCrypto');
+                    if (!EnmCrypto.validatePasswordComplexity(body.sharedPassword)) {
+                        return res.status(400).json(errorBody(
+                            'sharedPassword fails complexity: must be 16+ chars with upper, lower, digit, non-alnum',
+                        ));
+                    }
+                    council.sharedPasswordEncrypted = EnmCrypto.encrypt(body.sharedPassword);
+                } else {
+                    // Per-chain — clear any prior shared envelope.
+                    council.sharedPasswordEncrypted = '';
+                }
+            }
+            // Miner-address strategy.
+            if (body.minerAddressStrategy !== undefined) {
+                const ms = String(body.minerAddressStrategy);
+                if (!['shared', 'per-chain'].includes(ms)) {
+                    return res.status(400).json(errorBody(
+                        'minerAddressStrategy must be one of "shared" | "per-chain"',
+                    ));
+                }
+                council.minerAddressStrategy = ms;
+                if (ms === 'shared') {
+                    if (typeof body.sharedMinerAddress !== 'string' || body.sharedMinerAddress.length === 0) {
+                        return res.status(400).json(errorBody(
+                            'sharedMinerAddress required when minerAddressStrategy="shared"',
+                        ));
+                    }
+                    const EnmCrypto = require('../services/EnmCrypto');
+                    const v = EnmCrypto.validateEthAddress(body.sharedMinerAddress);
+                    if (!v.valid) {
+                        return res.status(400).json(errorBody(
+                            `sharedMinerAddress: ${v.warning}`,
+                        ));
+                    }
+                    council.sharedMinerAddress = v.normalized || body.sharedMinerAddress;
+                } else {
+                    council.sharedMinerAddress = '';
+                }
+            }
+            // Mark setup-complete when both strategies are set + at least
+            // one of them was passed in this request (i.e. the operator
+            // just finalized).
+            if (council.passwordStrategy && council.minerAddressStrategy) {
+                council.setupCompletedAt = Date.now();
+            }
+            // Ensure the council subdoc exists on cfg.global.
+            cfg.global = cfg.global || {};
+            cfg.global.council = council;
+            await ConfigStore.save(cfg);
+            extensionHandle.log.info(
+                `${ENM_LOG_PREFIX} POST /setup/council-strategy saved: `
+                + `password=${council.passwordStrategy} address=${council.minerAddressStrategy}`,
+            );
+            return res.json(successBody({
+                passwordStrategy: council.passwordStrategy || null,
+                hasSharedPassword: !!council.sharedPasswordEncrypted,
+                minerAddressStrategy: council.minerAddressStrategy || null,
+                sharedMinerAddress: council.sharedMinerAddress || '',
+                setupCompletedAt: council.setupCompletedAt || null,
+            }));
+        } catch (err) {
+            extensionHandle.log.error(
+                `${ENM_LOG_PREFIX} POST /setup/council-strategy: ${err.message}`,
+            );
+            return res.status(500).json(errorBody(err.message));
+        }
+    });
+
     return router;
 }
 

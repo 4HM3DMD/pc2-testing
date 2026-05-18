@@ -187,6 +187,28 @@ const globalSchema = Joi.object({
     // drops it from the validated output, so the next ConfigStore.save
     // writes a clean config and the legacy field is gone for good.
     stateSnapshot: Joi.any().strip(),
+    // beta.3.98 (Wave M3.4) — Council-wide strategy answers (plan §5
+    // Layer 1). Two questions asked once on the first non-mainchain
+    // install:
+    //   1. passwordStrategy:    one password for all sidechain EVM
+    //                           keystores OR per-chain
+    //   2. minerAddressStrategy: one Ethereum address for all chains
+    //                            OR per-chain
+    // Shared values (when strategy='shared') live here so all class B
+    // install wizards can pull them; per-chain values live on each
+    // cfg.chains.<id> (M3.3 classBSchema.miner.rewardAddress etc.).
+    council: Joi.object({
+        passwordStrategy: Joi.string().valid('shared', 'per-chain').optional(),
+        // Encrypted shared password — populated when passwordStrategy
+        // ='shared'. AES-GCM envelope (EnmEncryption). Each Class B
+        // install copies this to cfg.chains.<id>.miner.evmKeystore
+        // PasswordEncrypted for backward-compat with the per-chain
+        // unlock path in EvmSidechainAdapter (M3.1).
+        sharedPasswordEncrypted: Joi.string().allow('').default(''),
+        minerAddressStrategy: Joi.string().valid('shared', 'per-chain').optional(),
+        sharedMinerAddress: Joi.string().regex(/^0x[0-9a-fA-F]{40}$/).allow('').default(''),
+        setupCompletedAt: Joi.number().integer().allow(null).default(null),
+    }).default(),
 });
 
 const setupSchema = Joi.object({
