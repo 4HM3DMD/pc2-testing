@@ -660,6 +660,54 @@ function detectF22(snap) {
 }
 
 /**
+ * F25 — Class B (EVM sidechain) miner-address-unset warning.
+ *
+ * Fires when:
+ *   - chain is Class B (esc/eid/pg)
+ *   - cfg.chains[id].enabled = true (operator wants the chain on)
+ *   - cfg.chains[id].miner.enabled = true (operator wants to mine)
+ *   - cfg.chains[id].miner.rewardAddress is empty
+ *
+ * Without a miner address, geth would either refuse to start (we throw
+ * pre-flight in EvmSidechainAdapter.start) or — worse — start with the
+ * default zero address and silently mine to nowhere. Either way the
+ * operator's intent (produce blocks for rewards) is unfulfilled. F25
+ * is alert-only — ENM cannot supply the address (operator must paste
+ * it from their wallet; H22).
+ *
+ * Tier: CRITICAL_NOTIFY — operator action required, no auto-fix.
+ *
+ * Sibling note: M3.5's install-class-b endpoint already 412s when
+ * the operator-supplied address fails validation; F25 catches the
+ * post-install case where the operator opened Settings and cleared
+ * the address (or where the install never set one because miner.
+ * enabled was false at install time and is now true).
+ */
+function detectF25(snap) {
+    if (!snap || !snap.chainConfig) return null;
+    const c = snap.chainConfig;
+    if (!c.enabled) return null;
+    if (!c.miner || c.miner.enabled !== true) return null;
+    if (typeof c.miner.rewardAddress === 'string' && c.miner.rewardAddress.length > 0) {
+        return null;
+    }
+    return {
+        ruleId: 'F25',
+        tier: HEALING_TIERS.CRITICAL_NOTIFY,
+        summaryAction: `${snap.chainId}: mining is enabled but no reward address is set`,
+        summaryReason:
+            `cfg.chains.${snap.chainId}.miner.enabled=true but miner.rewardAddress is empty. `
+            + 'Without a reward address geth either refuses to start or mines to '
+            + '0x0 (rewards are lost). Open Settings → Mining & Rewards on the '
+            + `${snap.chainId} pane and paste an Ethereum address you control.`,
+        payload: {
+            chainId: snap.chainId,
+            // No `action` field — operator-driven only (H22).
+        },
+    };
+}
+
+/**
  * Per-rule enable defaults. Per Architectural Invariant #7, healing ships
  * with F1 (auto-restart on unexpected exit) only. F2-F19 are off until
  * the operator opts in via /api/enm/healing/rules/:ruleId/enable.
@@ -715,6 +763,11 @@ const RULE_METADATA = Object.freeze({
            description: 'Another process on this host is bound to a port ela needs (20338 / 20339 / 20336). Surface critical for operator triage.' },
     F22: { tier: 'CRITICAL_NOTIFY', title: 'DPoS state desync (alert)',
            description: 'When the chain freezes with "sponsor is not in current or last arbitrators" — the signature of cp_dpos/default.dcp diverging from the block ledger — surface a critical alert with manual recovery steps. Pre-beta.3.78 this rule auto-rolled state back to a snapshot; that path was removed per operator review since it papered over upstream ela bugs and risked further desync.' },
+    // beta.4.00 (Wave M3.6) — Class B-only. miner.enabled=true but
+    // miner.rewardAddress unset. Alert-only — operator must supply
+    // the address (H22; ENM never derives a reward address).
+    F25: { tier: 'CRITICAL_NOTIFY', title: 'EVM miner address unset',
+           description: 'On an EVM sidechain (ESC/EID/PG) where mining is enabled, the miner.rewardAddress must be set or block rewards are lost. Surfaces a critical alert if the operator turned mining on without supplying an address.' },
 });
 
 // beta.3.22 — every rule is enabled by default. The operator-facing
@@ -746,6 +799,7 @@ const DEFAULT_ENABLED = Object.freeze({
     F18: true,  // BPoS no-inbound
     F19: true,  // host conflict (HostConflictScanner has its own dedup)
     F22: true,  // DPoS state desync (Phase 7) — auto-heal via snapshot restore
+    F25: true,  // beta.4.00 — Class B miner address unset (alert-only)
 });
 
 // Global rule overrides (apply to all chains). Pre-3.87 this was the only
@@ -865,6 +919,8 @@ function runAll(snap) {
         ['F10', detectF10], ['F11', detectF11], ['F12', detectF12],
         ['F13', detectF13], ['F16', detectF16], ['F18', detectF18],
         ['F19', detectF19],
+        // beta.4.00 (Wave M3.6) — Class B miner-address-unset.
+        ['F25', detectF25],
     ];
 
     // beta.3.87 — Wave M1.3 — DPoS-only rules. F11 (rotation stuck),
@@ -888,6 +944,10 @@ function runAll(snap) {
     // means HealthRules unit tests don't need ChainAdapter loaded.
     const ChainAdapter = require('./ChainAdapter');
     const DPOS_ONLY_RULES = new Set(['F11', 'F12', 'F22']);
+    // beta.4.00 (Wave M3.6) — Class B-only rules. F25 is mining-address
+    // semantics that only apply to EVM sidechains; for mainchain (Class A)
+    // or oracles (Class C) etc., the rule is silently skipped.
+    const CLASS_B_ONLY_RULES = new Set(['F25']);
     const chainId = snap && snap.chainId;
     const chainClass = chainId ? ChainAdapter.classOf(chainId) : null;
 
@@ -903,6 +963,11 @@ function runAll(snap) {
         if (DPOS_ONLY_RULES.has(ruleId)
             && chainClass !== null
             && chainClass !== 'A') {
+            continue;
+        }
+        if (CLASS_B_ONLY_RULES.has(ruleId)
+            && chainClass !== null
+            && chainClass !== 'B') {
             continue;
         }
         const d = fn(snap);
@@ -927,6 +992,7 @@ module.exports = {
     detectF11, detectF12, detectF13, detectF16, detectF18,
     detectF22,
     detectF19,
+    detectF25,  // beta.4.00 (Wave M3.6)
     PEER_ZERO_GRACE_MS,
     RPC_UNREACHABLE_GRACE_MS,
     HEIGHT_STALL_GRACE_MS,
