@@ -339,7 +339,56 @@ const classCSchema = Joi.object({
     parent: classCParentSchema,
     healing: perChainHealingSchema,
 });
-const classDPlaceholderSchema = Joi.object().unknown(true);  // Arbiter (M6)
+// beta.0.3.10 (Wave M6.1) — Class D (Arbiter cross-chain signer)
+// schema. Replaces the M1.2 placeholder. Arbiter is singleton (only
+// one per ENM install); SideNodeList is auto-derived from cfg.chains
+// at start time (M6.6) rather than carried in schema.
+//
+// node.sh parity:
+//   - wallet.usesMainchainKeystore is schema-locked to true (H8/H23
+//     style invariant — the Arbiter's signing identity = the
+//     mainchain producer identity; node.sh:5545 had a `cp keystore.dat`
+//     of the mainchain keystore which we replicate via path reference
+//     instead).
+//   - wallet.passwordSource is schema-locked to 'mainchain-ela-txt' to
+//     surface the invariant; the actual password is read from
+//     mainchain.dpos.keystorePasswordEncrypted (H24 — AES-GCM).
+//   - mining.miningAddress is an ELA MAINCHAIN address (NOT Ethereum).
+//     Regex matches the base58check shape that EnmCrypto.validateEla
+//     Address uses at the route layer. ELA addresses start with E
+//     (mainnet) or 4 (testnet) and are 34 chars.
+const classDWalletSchema = Joi.object({
+    usesMainchainKeystore: Joi.boolean().valid(true).default(true),
+    passwordSource: Joi.string().valid('mainchain-ela-txt').default('mainchain-ela-txt'),
+}).default();
+const classDMiningSchema = Joi.object({
+    miningAddress: Joi.string().regex(/^[E4][1-9A-HJ-NP-Za-km-z]{33}$/).allow('').default(''),
+    sideChainPowFeeEla: Joi.number().min(0).max(100).default(0.1),
+}).default();
+const classDPortsSchema = Joi.object({
+    rpc: PORT_RANGE.required(),
+    p2p: PORT_RANGE.required(),
+});
+const classDCrossChainSchema = Joi.object({
+    // sideNodeList auto-populated by ArbiterAdapter.generateConfig
+    // from ChainRegistry.listChains; the schema accepts an explicit
+    // override but normal flow leaves this empty.
+    sideNodeList: Joi.array().items(Joi.object().unknown(true)).default([]),
+    // SPV catchup poll interval (ms). node.sh uses 1000ms; expose for
+    // operator tuning.
+    syncIntervalMs: Joi.number().integer().min(100).max(60_000).default(1000),
+}).default();
+const classDSchema = Joi.object({
+    enabled: Joi.boolean().default(false),
+    binaryPath: Joi.string().allow('').default(''),
+    binaryVersion: Joi.string().allow('').default(''),
+    activeNet: Joi.string().valid('mainnet', 'testnet').default('mainnet'),
+    ports: classDPortsSchema.required(),
+    wallet: classDWalletSchema,
+    mining: classDMiningSchema,
+    crossChain: classDCrossChainSchema,
+    healing: perChainHealingSchema,
+});
 const classEPlaceholderSchema = Joi.object().unknown(true);  // SPV (M6-opt)
 
 const enmConfigSchema = Joi.object({
@@ -358,8 +407,8 @@ const enmConfigSchema = Joi.object({
         // Class C chainIds — oracles. M4.2 real schema; PG oracle uses
         // the same shape (M5.4 will just register the adapter).
         .pattern(/^(esc-oracle|eid-oracle|pg-oracle)$/, classCSchema)
-        // Class D — arbiter (singleton). Real schema in M6.
-        .pattern(/^arbiter$/, classDPlaceholderSchema)
+        // Class D — arbiter (singleton). Real schema landed M6.1.
+        .pattern(/^arbiter$/, classDSchema)
         // Class E — spv (singleton, optional). Real schema in M6-opt.
         .pattern(/^spv$/, classEPlaceholderSchema)
         .default({}),

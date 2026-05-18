@@ -30,6 +30,8 @@ const EidOracleAdapter = require('./EidOracleAdapter');
 // beta.0.3.6 (Wave M5.1) — PG (closed-source) + its oracle.
 const PgAdapter = require('./PgAdapter');
 const PgOracleAdapter = require('./PgOracleAdapter');
+// beta.0.3.10 (Wave M6.1) — Arbiter (Class D cross-chain signer).
+const ArbiterAdapter = require('./ArbiterAdapter');
 const { SelfHealingEngine } = require('./SelfHealingEngine');
 const { HealthChecker } = require('./HealthChecker');
 const { readNodeOwner } = require('../auth/OwnerCheckMiddleware');
@@ -297,6 +299,7 @@ function registerConfiguredAdapters(args) {
         'esc-oracle': EscOracleAdapter,
         'eid-oracle': EidOracleAdapter,
         'pg-oracle':  PgOracleAdapter,     // beta.0.3.9 (Wave M5.4)
+        arbiter:      ArbiterAdapter,      // beta.0.3.10 (Wave M6.1)
     };
     for (const [chainId, AdapterClass] of Object.entries(REGISTRABLE)) {
         if (!chains[chainId]) continue;          // not installed; skip
