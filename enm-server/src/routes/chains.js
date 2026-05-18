@@ -326,27 +326,51 @@ function build(extensionHandle) {
             // chain claims alive but every downstream RPC returned null.
             // Symptom: operator UI flashes blank widgets (height/peers/
             // networkHeight all "—") even though the chain card claims
-            // "Healthy". Usually a startup race (RPC not bound yet) or
-            // a stalled ela process. Logging here makes the next
-            // occurrence traceable in ~/data/logs/elastos-node-manager.log
-            // by greppable tag.
-            if (status && status.alive
-                && height == null && peers == null && networkHeight == null) {
+            // "Healthy". The Wave B log confirmed this is a startup
+            // race: ela process is up but RPC hasn't bound to port
+            // 20336 yet within the first ~30s.
+            const aliveButBlankRpc = status && status.alive
+                && height == null && peers == null && networkHeight == null;
+            if (aliveButBlankRpc) {
                 extensionHandle.log.warn(
                     `${ENM_LOG_PREFIX} chain-status:alive-but-blank-rpc `
                     + `chain=${adapter.chainId} pid=${status.pid} `
                     + `uptimeSec=${uptimeSec} `
                     + `producerState=${producerState} `
                     + `synced=${synced} `
-                    + `— operator UI will render blanks; investigate RPC bind or stall`,
+                    + `— treating as state='starting' (RPC bind in progress)`,
                 );
+            }
+
+            // beta.3.83 — Wave D item ④ phase 2 — startup-race state.
+            // When the chain is alive but RPC isn't responsive AND the
+            // process is young (uptime < STARTUP_GRACE_SEC), surface
+            // 'starting' instead of letting deriveCoarseState return
+            // 'syncing' (or 'healthy' if it sees synced=true from a
+            // stale snapshot). 'starting' is in CHAIN_STATES + has a
+            // dedicated frontend rendering (chain-card.js already
+            // handles it as a hero-spinner state).
+            //
+            // After uptime crosses 60s the blank RPC is no longer a
+            // startup race — it's a real stall, and we fall through to
+            // deriveCoarseState (which returns 'syncing'), so the
+            // operator sees the underlying problem rather than an
+            // optimistic 'starting' that never resolves.
+            const STARTUP_GRACE_SEC = 60;
+            let coarseState;
+            if (aliveButBlankRpc
+                && typeof uptimeSec === 'number'
+                && uptimeSec < STARTUP_GRACE_SEC) {
+                coarseState = 'starting';
+            } else {
+                coarseState = deriveCoarseState(status, chainCfg, syncSnapshot);
             }
 
             return res.json(successBody({
                 chainId: adapter.chainId,
                 displayName: adapter.displayName,
                 enabled: !!chainCfg.enabled,
-                state: deriveCoarseState(status, chainCfg, syncSnapshot),
+                state: coarseState,
                 synced,
                 lastBlockTime,
                 networkHeight,

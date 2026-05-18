@@ -266,6 +266,10 @@
             recovering: 'Recovering',
             unconfigured: 'Not configured',
             disabled:   'Disabled',
+            // beta.3.83 — Wave D — process alive but RPC not bound yet
+            // (typical first ~30s after each chain start). chain-card.js
+            // already handles 'starting' state with a hero-spinner.
+            starting:   'Starting',
         },
 
         chain_actions: {

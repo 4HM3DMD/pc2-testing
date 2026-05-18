@@ -76,6 +76,13 @@ const SEVERITY = Object.freeze({
 // Chain states for the dashboard UI (color tokens defined in CSS).
 const CHAIN_STATES = Object.freeze([
     'healthy', 'syncing', 'stalled', 'stopped', 'error', 'recovering',
+    // beta.3.83 — Wave D — chain process is alive but RPC hasn't bound
+    // yet. ela takes ~30s after launch to open the RPC port + load
+    // indexes; during that window status.alive=true but getblockcount
+    // returns null. Pre-3.83 the dashboard rendered "Healthy" with
+    // blank height/peers widgets (confusing). 'starting' is the
+    // honest answer: process is up, RPC isn't ready, give it a moment.
+    'starting',
 ]);
 
 // Health-check polling buckets (Rev 1 plan: fast/medium/slow).
