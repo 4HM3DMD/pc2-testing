@@ -348,6 +348,15 @@
             }
         }
 
+        // beta.3.89 (Wave M2.1) — install the PaneRouter listener so
+        // selector key changes route to the right pane content + tab
+        // visibility. Wired here at init time (not in _showDashboard)
+        // because the chain selector is mounted at init and could
+        // theoretically dispatch before the dashboard is up; the
+        // listener internally gates on this._dashboardMounted so events
+        // during the setup wizard period are dropped.
+        this._initPaneRouter();
+
         // Step 1: window-manager IPC contract MUST happen before anything else.
         this.services.wallet.sendReady();
         this.services.wallet.installCloseHandler();
@@ -533,8 +542,9 @@
 
     /**
      * Beta 3 — lazy-mount EnmLogViewer into pane-logs on first
-     * activation. Mainchain only for Beta 3 (chain selector pill
-     * present but inactive). Idempotent.
+     * activation. beta.3.89 (M2.1): chainId now sources from
+     * _activeChainId (PaneRouter), falling back to 'mainchain' for
+     * the legacy single-chain path. Idempotent.
      *
      * @private
      */
@@ -550,7 +560,7 @@
             api: this.services.api,
             sse: this.services.sse,
             notifications: this.services.notifications,
-            chainId: 'mainchain',
+            chainId: this._activeChainId || 'mainchain',
         });
         this._logViewer.mount(this.els.paneLogs);
     };
@@ -763,6 +773,11 @@
         // Tear down anything from the home view first (idempotent if
         // we're coming straight from boot).
         if (typeof this._teardownHomeView === 'function') { this._teardownHomeView(); }
+        // beta.3.89 (M2.1) — PaneRouter gating. While the setup wizard
+        // is up, chain selection has nothing to scope; drop the flag so
+        // any stray enm:chain-change event (e.g. selector auto-reset
+        // when /config first resolves) is a no-op until dashboard mounts.
+        this._dashboardMounted = false;
         this._revealContent();
         this._clearPanes();
         if (this.els.tabs) { this.els.tabs.hidden = true; }
@@ -927,58 +942,20 @@
         // Settings / Audit tabs that technical-view also hosted are
         // top-level Beta 3 tabs (_mountLogViewerLazy /
         // _mountSettingsTabLazy / _mountAuditTabLazy in _wireTabs).
+        //
+        // beta.3.89 (Wave M2.1) — Dashboard mount is now per-chain.
+        // _activeChainId comes from PaneRouter (init'd above, defaults
+        // to 'mainchain'). If the operator selected 'all' (Multi-chain
+        // overview) before the dashboard mounted, route into overview
+        // mode instead. _mountDashboardForActiveChain is the shared
+        // entry point used by both the initial mount and PaneRouter
+        // re-mounts triggered by selector clicks.
         var self = this;
-        var pane = this.els.paneDashboard;
-        var common = {
-            api: this.services.api,
-            sse: this.services.sse,
-            notifications: this.services.notifications,
-            chainId: 'mainchain',
-            // chain-card + height-series wire-up (BP-A invariant).
-            heightSeries: this.services.heightSeries || null,
-        };
-
-        this._dashboardMounts = [];
-        // 0.2.0-beta.3.4 — phase-03 mock puts the chain-card hero at
-        // the TOP of the dashboard pane (it's the primary affordance —
-        // the operator looks at the power button / sync ring first),
-        // with the system-status strip BELOW. The BP-E rewrite had
-        // these reversed.
-        if (root.EnmChainCard) {
-            var card = new root.EnmChainCard(common);
-            card.mount(pane);
-            this._dashboardMounts.push(card);
-        }
-        if (root.EnmSystemStatus) {
-            var sys = new root.EnmSystemStatus(common);
-            sys.mount(pane);
-            this._dashboardMounts.push(sys);
-        }
-        // beta.3.13 — Node-identity card. Always visible (no hide
-        // branch). Surfaces the public key, the keystore-derived
-        // ("bound") address with live balance, the operator's PC2
-        // login wallet, and a producer summary when registered. Sits
-        // BEFORE the BPoS card so the operator sees "who am I on
-        // chain" before any registration affordances.
-        if (root.EnmNodeIdentityCard) {
-            var ident = new root.EnmNodeIdentityCard(common);
-            ident.mount(pane);
-            this._dashboardMounts.push(ident);
-        }
-        // BPoS card — hides itself when the operator is fully active
-        // on chain (STATE_HIDE in validator-registration-card.js). The
-        // backward-compat alias EnmValidatorRegistrationCard still
-        // resolves to BposCard.
-        if (root.EnmValidatorRegistrationCard) {
-            var bpos = new root.EnmValidatorRegistrationCard(common);
-            bpos.mount(pane);
-            this._dashboardMounts.push(bpos);
-        }
-        // Tools update card — hides itself when on the latest release.
-        if (root.EnmToolsUpdateCard) {
-            var upd = new root.EnmToolsUpdateCard(common);
-            upd.mount(pane);
-            this._dashboardMounts.push(upd);
+        this._dashboardMounted = true;
+        if (this._activeChainId === 'all') {
+            this._enterOverviewMode();
+        } else {
+            this._mountDashboardForActiveChain();
         }
 
         // Notifications pipeline — keep CRITICAL proposal cards popping
@@ -1040,6 +1017,323 @@
             });
         }
         this._loadPendingProposals();
+    };
+
+    /**
+     * beta.3.89 (Wave M2.1) — PaneRouter wiring.
+     *
+     * Wires the chain selector's enm:chain-change event into:
+     *   1. Tab strip visibility (hidden when key='all')
+     *   2. Pane mount (per-chain Dashboard for chain keys, multi-chain
+     *      overview pane for 'all')
+     *
+     * The pre-M2.1 dashboard mounted unconditionally for mainchain and
+     * the selector event was silent (zero listeners). With PaneRouter,
+     * the selector becomes load-bearing: clicking "Multi-chain overview"
+     * actually swaps the dashboard for an aggregate view.
+     *
+     * Selector ↔ PaneRouter sync:
+     *   - localStorage 'enm:chain-selection' is the shared key. Selector
+     *     writes; PaneRouter reads at boot for the initial activeChainId.
+     *   - chain-selector.js dispatches enm:chain-change on user click AND
+     *     on availability auto-reset (selector's _refreshAvailability
+     *     forces back to mainchain when stored selection is invalid for
+     *     this install's mode). PaneRouter listens for both.
+     *
+     * Idempotent — _paneRouterInstalled gate stops re-wiring on Retry.
+     *
+     * @private
+     */
+    ENMApp.prototype._initPaneRouter = function () {
+        if (this._paneRouterInstalled) { return; }
+        this._paneRouterInstalled = true;
+        // Initial activeChainId from the selector's storage key. Falls
+        // back to 'mainchain' for any unknown / missing value so the
+        // dashboard always has a definite chain to mount for.
+        this._activeChainId = this._loadStoredChainSelection();
+        // overviewMode flag tracks whether we're rendering the multi-
+        // chain aggregate pane (true) or a per-chain dashboard (false).
+        // Default false; switched by _enterOverviewMode / _exitOverviewMode.
+        this._overviewMode = (this._activeChainId === 'all');
+        // _dashboardMounted gates the listener so events fired during
+        // the setup wizard period (selector mounts at init, before the
+        // dashboard exists) don't try to manipulate panes that haven't
+        // been created.
+        if (typeof this._dashboardMounted !== 'boolean') {
+            this._dashboardMounted = false;
+        }
+        var self = this;
+        // Listen at document level so the event bubbles from the
+        // selector root (which sits in the topbar, sibling of the
+        // pane container). bubbles:true is set by chain-selector.js.
+        document.addEventListener('enm:chain-change', function (ev) {
+            var key = (ev && ev.detail && ev.detail.key) || 'mainchain';
+            if (!self._dashboardMounted) {
+                // Setup wizard is up — just remember the new selection
+                // so _showDashboard picks it up on transition.
+                self._activeChainId = key;
+                self._overviewMode = (key === 'all');
+                return;
+            }
+            self._handleChainChange(key);
+        });
+    };
+
+    /**
+     * @private
+     * @returns {string} one of: 'all', 'mainchain', 'esc', 'eid', 'pg',
+     *                   'arbiter', 'spv'. Falls back to 'mainchain' on
+     *                   missing / unknown / non-string values.
+     */
+    ENMApp.prototype._loadStoredChainSelection = function () {
+        var VALID = { all: 1, mainchain: 1, esc: 1, eid: 1, pg: 1, arbiter: 1, spv: 1 };
+        try {
+            var v = root.localStorage && root.localStorage.getItem('enm:chain-selection');
+            if (typeof v === 'string' && VALID[v] === 1) { return v; }
+        } catch (_) { /* private-mode / storage disabled */ }
+        return 'mainchain';
+    };
+
+    /**
+     * Handle a chain selection change. Branches on 'all' (overview
+     * mode) vs a specific chain key (per-chain dashboard mode).
+     *
+     * @private
+     * @param {string} key — the new selector key
+     */
+    ENMApp.prototype._handleChainChange = function (key) {
+        if (key === 'all') {
+            this._activeChainId = 'all';
+            this._enterOverviewMode();
+            return;
+        }
+        // Specific chain. Exit overview mode if we were in it, then
+        // re-mount the Dashboard pane for the new chain. Only re-mounts
+        // when chainId actually changed — clicking the same chain twice
+        // is a no-op (saves a full teardown + remount cycle).
+        var prev = this._activeChainId;
+        this._activeChainId = key;
+        if (this._overviewMode) {
+            this._exitOverviewMode();
+            this._mountDashboardForActiveChain();
+            return;
+        }
+        if (prev !== key) {
+            this._remountForActiveChain();
+        }
+    };
+
+    /**
+     * Tear down per-chain dashboard + lazy pane mounts, then mount the
+     * multi-chain overview pane. Hides the tab strip — the overview is
+     * a single full-pane view, not tabbed.
+     *
+     * @private
+     */
+    ENMApp.prototype._enterOverviewMode = function () {
+        this._overviewMode = true;
+        // Hide tabs (overview has no Dashboard/Logs/Settings/Audit split).
+        if (this.els.tabs) { this.els.tabs.hidden = true; }
+        // Mirror on body for CSS hooks (M2.3 styling reads this).
+        if (document.body) { document.body.dataset.enmOverview = '1'; }
+        // Tear down per-chain mounts so their SSE subs + timers free.
+        this._teardownHomeView();
+        this._teardownLazyPanes();
+        this._clearPanes();
+        // The overview pane lives in paneDashboard slot (the only one
+        // we keep visible). The other panes stay hidden so screen
+        // readers don't announce empty regions.
+        if (this.els.paneDashboard) { this.els.paneDashboard.hidden = false; }
+        if (this.els.paneLogs)      { this.els.paneLogs.hidden = true; }
+        if (this.els.paneSettings)  { this.els.paneSettings.hidden = true; }
+        if (this.els.paneAudit)     { this.els.paneAudit.hidden = true; }
+        this._mountMultiChainOverview();
+    };
+
+    /**
+     * Inverse of _enterOverviewMode — restore tab strip + tear down
+     * the overview pane. Does NOT mount the per-chain dashboard;
+     * callers (currently only _handleChainChange) do that explicitly.
+     *
+     * @private
+     */
+    ENMApp.prototype._exitOverviewMode = function () {
+        this._overviewMode = false;
+        if (this.els.tabs) { this.els.tabs.hidden = false; }
+        if (document.body) { document.body.dataset.enmOverview = '0'; }
+        if (this._overviewPane && typeof this._overviewPane.destroy === 'function') {
+            try { this._overviewPane.destroy(); } catch (_) { /* idempotent */ }
+        }
+        this._overviewPane = null;
+        this._clearPanes();
+    };
+
+    /**
+     * Tear down + re-mount the Dashboard pane for the current
+     * _activeChainId. Also tears down lazy panes (Settings/Logs/Audit)
+     * so they re-mount with the new chainId on their next tab activation.
+     * Called when the operator switches between two specific chains
+     * (e.g. mainchain → esc).
+     *
+     * @private
+     */
+    ENMApp.prototype._remountForActiveChain = function () {
+        this._teardownHomeView();
+        this._teardownLazyPanes();
+        this._clearPanes();
+        this._mountDashboardForActiveChain();
+        // If a tab other than Dashboard was active, immediately re-mount
+        // its lazy component so the operator doesn't see an empty pane.
+        if (this.els.tabs) {
+            var activeBtn = this.els.tabs.querySelector('.enm-tab.active');
+            var activeTabId = activeBtn ? activeBtn.dataset.tab : 'dashboard';
+            if (activeTabId === 'settings') { this._mountSettingsTabLazy(); }
+            else if (activeTabId === 'logs')  { this._mountLogViewerLazy(); }
+            else if (activeTabId === 'audit') { this._mountAuditTabLazy(); }
+        }
+    };
+
+    /**
+     * Mount the per-chain Dashboard components for _activeChainId.
+     * Extracted from _showDashboard so the same shape can be re-used
+     * by PaneRouter on subsequent chain switches.
+     *
+     * Mainchain (Class A) gets the full 5-component layout: chain-
+     * card, system-status, node-identity, BPoS, tools-update. Non-
+     * mainchain chains get a stub in M2.1; M3+ replaces with per-
+     * class (B/C/D) dashboards. The selector's _isOptionEnabled
+     * gate prevents non-mainchain selection on a real install
+     * today, so the stub is only reachable via direct localStorage
+     * tampering until M3 ships.
+     *
+     * @private
+     */
+    ENMApp.prototype._mountDashboardForActiveChain = function () {
+        var pane = this.els.paneDashboard;
+        if (!pane) { return; }
+        var chainId = this._activeChainId || 'mainchain';
+        var common = {
+            api: this.services.api,
+            sse: this.services.sse,
+            notifications: this.services.notifications,
+            chainId: chainId,
+            heightSeries: this.services.heightSeries || null,
+        };
+        this._dashboardMounts = [];
+
+        if (chainId !== 'mainchain') {
+            // M2.1 stub. Per-class dashboards land in M3 (Class B —
+            // ESC/EID/PG), M4 (Class C — Oracles), M6 (Class D —
+            // Arbiter). Until then any non-mainchain selection shows
+            // a "Coming soon" stub so the operator gets a clear signal
+            // rather than a broken mainchain dashboard rendered for
+            // the wrong chain.
+            var labelMap = {
+                esc:     'Smart Chain (ESC)',
+                eid:     'Identity Chain (EID)',
+                pg:      'PG Chain',
+                arbiter: 'Arbiter Service',
+                spv:     'SPV Module',
+            };
+            var displayName = labelMap[chainId] || chainId;
+            pane.innerHTML =
+                '<div class="enm-pane-stub" role="status" aria-live="polite">'
+                + '<h2>' + displayName + ' dashboard</h2>'
+                + '<p>This chain is not yet wired in the operator UI. '
+                + 'Per-class dashboards land in upcoming milestones (M3 — '
+                + 'EVM sidechains, M4 — Oracles, M6 — Arbiter). For now, '
+                + 'use the chain selector above to return to <strong>Main '
+                + 'chain</strong>.</p></div>';
+            return;
+        }
+
+        // Class A — mainchain. Original 5-component dashboard layout.
+        // 0.2.0-beta.3.4 — phase-03 mock puts the chain-card hero at
+        // the TOP of the dashboard pane (the primary affordance —
+        // operator looks at the power button / sync ring first), with
+        // system-status BELOW. The BP-E rewrite had these reversed.
+        if (root.EnmChainCard) {
+            var card = new root.EnmChainCard(common);
+            card.mount(pane);
+            this._dashboardMounts.push(card);
+        }
+        if (root.EnmSystemStatus) {
+            var sys = new root.EnmSystemStatus(common);
+            sys.mount(pane);
+            this._dashboardMounts.push(sys);
+        }
+        if (root.EnmNodeIdentityCard) {
+            var ident = new root.EnmNodeIdentityCard(common);
+            ident.mount(pane);
+            this._dashboardMounts.push(ident);
+        }
+        if (root.EnmValidatorRegistrationCard) {
+            var bpos = new root.EnmValidatorRegistrationCard(common);
+            bpos.mount(pane);
+            this._dashboardMounts.push(bpos);
+        }
+        if (root.EnmToolsUpdateCard) {
+            var upd = new root.EnmToolsUpdateCard(common);
+            upd.mount(pane);
+            this._dashboardMounts.push(upd);
+        }
+    };
+
+    /**
+     * Tear down the lazy-mounted Settings / Logs / Audit panes. Called
+     * by _remountForActiveChain so the next tab activation re-mounts
+     * with the new chainId. Each lazy component owns its own SSE +
+     * timer cleanup via destroy(); we just need to drop our handle.
+     *
+     * @private
+     */
+    ENMApp.prototype._teardownLazyPanes = function () {
+        if (this._settingsTab && typeof this._settingsTab.destroy === 'function') {
+            try { this._settingsTab.destroy(); } catch (_) { /* idempotent */ }
+        }
+        this._settingsTab = null;
+        if (this._logViewer && typeof this._logViewer.destroy === 'function') {
+            try { this._logViewer.destroy(); } catch (_) { /* idempotent */ }
+        }
+        this._logViewer = null;
+        if (this._auditTab && typeof this._auditTab.destroy === 'function') {
+            try { this._auditTab.destroy(); } catch (_) { /* idempotent */ }
+        }
+        this._auditTab = null;
+    };
+
+    /**
+     * Mount the multi-chain overview pane. M2.1 ships a minimal stub
+     * (placeholder copy explaining the milestone path); M2.3 replaces
+     * it with EnmMultiChainOverviewPane (the real aggregate component
+     * with per-chain status rows + sparklines). Picks up the real
+     * component automatically once it lands — no app.js change needed.
+     *
+     * @private
+     */
+    ENMApp.prototype._mountMultiChainOverview = function () {
+        var pane = this.els.paneDashboard;
+        if (!pane) { return; }
+        if (root.EnmMultiChainOverviewPane) {
+            this._overviewPane = new root.EnmMultiChainOverviewPane({
+                api: this.services.api,
+                sse: this.services.sse,
+                notifications: this.services.notifications,
+                announcer: this.services.announcer,
+                heightSeries: this.services.heightSeries || null,
+            });
+            this._overviewPane.mount(pane);
+            return;
+        }
+        // M2.1 stub.
+        pane.innerHTML =
+            '<div class="enm-pane-stub" role="status" aria-live="polite">'
+            + '<h2>Multi-chain overview</h2>'
+            + '<p>Aggregate status for every configured chain lands in M2.3 '
+            + '(<code>MultiChainOverviewPane</code>). Until then this pane is '
+            + 'a placeholder so the chain-selector wiring (M2.1) is reachable. '
+            + 'Use the selector above to switch back to <strong>Main chain</strong>.'
+            + '</p></div>';
     };
 
     /**

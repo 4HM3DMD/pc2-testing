@@ -113,11 +113,30 @@
             self.root.setAttribute('data-mode', self._mode);
             // If the stored selection is no longer available for this
             // node type, fall back to mainchain.
+            //
+            // beta.3.89 (Wave M2.1) — also dispatch enm:chain-change
+            // here so PaneRouter (app.js) syncs the dashboard pane to
+            // mainchain. Pre-M2.1 the auto-reset was silent: PaneRouter
+            // didn't exist, so nobody cared. With PaneRouter listening,
+            // a silent reset would leave the dashboard rendering the
+            // overview pane (because PaneRouter's localStorage read at
+            // boot saw key='all') while the selector says "Main chain".
+            // Dispatching keeps the two in lockstep.
+            var resetHappened = false;
             if (self._mode === 'bpos-only' && self._activeKey !== 'mainchain') {
                 self._activeKey = 'mainchain';
                 self._saveStoredSelection('mainchain');
+                resetHappened = true;
             }
             self._render();
+            if (resetHappened) {
+                try {
+                    self.root.dispatchEvent(new CustomEvent('enm:chain-change', {
+                        detail: { key: 'mainchain', source: 'availability-refresh' },
+                        bubbles: true,
+                    }));
+                } catch (_) { /* IE-era fallback unnecessary */ }
+            }
         }).catch(function () {
             // Network/auth error — leave defaults. Selector still
             // functions, just stuck in safe BPoS-only state.
@@ -200,12 +219,15 @@
         this._saveStoredSelection(key);
         this._closeMenu();
         this._render();
-        // Phase B future: dispatch a custom event so other components
-        // (dashboard, audit-tab, etc.) can scope to the new chain.
-        // For now (single chain), nothing else listens.
+        // beta.3.89 (Wave M2.1) — PaneRouter in app.js listens here.
+        // On key='all' it hides the tab strip + mounts the multi-chain
+        // overview pane; on a specific chain key it shows the tab strip
+        // + re-mounts the Dashboard for that chain. Other components
+        // (audit-tab, settings-tab, log-viewer) read the active chain
+        // from PaneRouter's _activeChainId during their next mount cycle.
         try {
             this.root.dispatchEvent(new CustomEvent('enm:chain-change', {
-                detail: { key: key },
+                detail: { key: key, source: 'user-click' },
                 bubbles: true,
             }));
         } catch (_) { /* IE-era fallback unnecessary */ }

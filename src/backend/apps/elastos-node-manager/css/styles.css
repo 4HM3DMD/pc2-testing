@@ -6498,3 +6498,53 @@ body[data-app-size="compact"] .enm-app .enm-filter-chip {
     padding: 4px 8px;
     font-size: 10px;
 }
+
+/* ============================================================
+   beta.3.89 (Wave M2.1) — PaneRouter stubs
+   ============================================================
+
+   .enm-pane-stub is the M2.1 placeholder rendered in two cases:
+     1. Multi-chain overview (selector = 'all') BEFORE M2.3 ships the
+        real EnmMultiChainOverviewPane component.
+     2. Non-mainchain selection (esc / eid / pg / arbiter / spv) BEFORE
+        M3/M4/M6 ship the per-class dashboards.
+
+   Keep this minimal — M2.3 / M3 replace these stubs with real
+   components and will define their own surfaces. The styling here
+   exists only so the placeholder is readable + on-brand during the
+   weeks the stub is live. */
+.enm-app .enm-pane-stub {
+    max-width: 640px;
+    margin: var(--sp-6, 32px) auto;
+    padding: var(--sp-5, 24px);
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color, var(--border-subtle));
+    border-radius: 12px;
+    text-align: center;
+}
+.enm-app .enm-pane-stub h2 {
+    margin: 0 0 var(--sp-3, 12px) 0;
+    font-size: 18px;
+    font-weight: 600;
+}
+.enm-app .enm-pane-stub p {
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--text-muted, var(--text-primary));
+}
+.enm-app .enm-pane-stub code {
+    padding: 1px 5px;
+    background: rgba(255, 255, 255, 0.07);
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+}
+
+/* Overview mode body hook (set by PaneRouter._enterOverviewMode /
+   _exitOverviewMode via document.body.dataset.enmOverview). M2.3 will
+   layer overview-specific styles on top of this hook. */
+body[data-enm-overview="1"] .enm-app .enm-tabs {
+    display: none;
+}
