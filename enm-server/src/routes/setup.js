@@ -989,6 +989,27 @@ function build(extensionHandle) {
                 syncMode = body.sync.mode;
             }
             const minerEnabled = body.miner && body.miner.enabled === true;
+            // beta.0.3.6 (Wave M5.1) — closed-source PG requires an
+            // operator-supplied SHA256 manifest at install time. ESC +
+            // EID don't require it (build reproducibly from public
+            // source). Validated as 64-char hex.
+            let binarySha256Expected = '';
+            if (typeof body.binarySha256Expected === 'string'
+                && body.binarySha256Expected.length > 0) {
+                if (!/^[0-9a-fA-F]{64}$/.test(body.binarySha256Expected)) {
+                    return res.status(400).json(errorBody(
+                        'binarySha256Expected: must be 64-char hex string',
+                    ));
+                }
+                binarySha256Expected = body.binarySha256Expected.toLowerCase();
+            }
+            if (chainId === 'pg' && !binarySha256Expected) {
+                return res.status(412).json(errorBody(
+                    'install-class-b pg: binarySha256Expected is required for closed-source PG. '
+                    + 'Obtain the SHA256 from a trusted Elastos foundation channel + pass in body. '
+                    + '(Plan §11 risk #2 — supply chain mitigation.)',
+                ));
+            }
             // Assemble the chain cfg block.
             const ports = ClassBPorts.portsFor(chainId, activeNet);
             const chainCfg = {
@@ -1012,6 +1033,7 @@ function build(extensionHandle) {
                 sync: { mode: syncMode },
                 bootnodes: [],
                 healing: { enabledRules: {} },
+                binarySha256Expected,   // empty for esc/eid; required for pg
             };
             cfg.chains = cfg.chains || {};
             cfg.chains[chainId] = chainCfg;

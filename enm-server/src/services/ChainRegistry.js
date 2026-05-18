@@ -27,6 +27,9 @@ const EidAdapter = require('./EidAdapter');
 // gating; an oracle only joins the registry when its cfg entry exists.
 const EscOracleAdapter = require('./EscOracleAdapter');
 const EidOracleAdapter = require('./EidOracleAdapter');
+// beta.0.3.6 (Wave M5.1) — PG (closed-source) + its oracle.
+const PgAdapter = require('./PgAdapter');
+const PgOracleAdapter = require('./PgOracleAdapter');
 const { SelfHealingEngine } = require('./SelfHealingEngine');
 const { HealthChecker } = require('./HealthChecker');
 const { readNodeOwner } = require('../auth/OwnerCheckMiddleware');
@@ -290,8 +293,10 @@ function registerConfiguredAdapters(args) {
     const REGISTRABLE = {
         esc:          EscAdapter,
         eid:          EidAdapter,
+        pg:           PgAdapter,           // beta.0.3.6 (Wave M5.1)
         'esc-oracle': EscOracleAdapter,
         'eid-oracle': EidOracleAdapter,
+        'pg-oracle':  PgOracleAdapter,     // beta.0.3.9 (Wave M5.4)
     };
     for (const [chainId, AdapterClass] of Object.entries(REGISTRABLE)) {
         if (!chains[chainId]) continue;          // not installed; skip

@@ -297,6 +297,12 @@ const classBSchema = Joi.object({
     sync: classBSyncSchema,
     bootnodes: Joi.array().items(Joi.string().max(512)).default([]),
     healing: perChainHealingSchema,
+    // beta.0.3.6 (Wave M5.1) — operator-supplied SHA256 manifest for
+    // closed-source binaries (currently only PG). Required at PG start
+    // time (PgAdapter throws if unset); ESC/EID start fine without it
+    // since their binaries build reproducibly from public source.
+    // 64-char hex string, case-insensitive comparison at verify time.
+    binarySha256Expected: Joi.string().regex(/^[0-9a-fA-F]{64}$/).allow('').default(''),
 });
 
 // beta.0.3.2 (Wave M4.2) — Class C (Sidekick Oracle) schema. Replaces
