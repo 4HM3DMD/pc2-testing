@@ -315,11 +315,13 @@
                     + escapeHtml(t('friendly.setup.card_a.bpos_install_value')) + '</span>'
                 + '</div>'
               + '</button>'
-              + '<button type="button" class="enm-role-card" data-goal="council" data-disabled="true" disabled aria-disabled="true" role="radio" aria-checked="false">'
-                // 0.2.0-beta.3.6 — badge text is "Coming soon" on wide
-                // / narrow and "Soon" on compact (<480px). We emit both
-                // spans and CSS keys the right one off body[data-app-
-                // size="compact"]. Single-source-of-truth in strings.js.
+              + '<button type="button" class="enm-role-card" data-goal="council" role="radio" aria-checked="false">'
+                // beta.0.4.3 — Council card now enabled. Removed
+                // data-disabled / disabled / aria-disabled. The badge
+                // changes from "Coming soon" to "Multi-chain" (read
+                // from strings.js). Picking this card sets a setup
+                // intent which app.js consumes after mainchain setup
+                // completes to launch the Council expansion installer.
                 + '<span class="enm-role-card-badge">'
                   + '<span class="enm-role-card-badge-long">'
                     + escapeHtml(t('friendly.setup.card_a.council_meta')) + '</span>'
@@ -332,6 +334,10 @@
                 + '</div>'
                 + '<p class="enm-role-card-help">' + escapeHtml(t('friendly.setup.card_a.council_sub')) + '</p>'
                 + '<div class="enm-role-card-meta">'
+                  + '<span><b>' + escapeHtml(t('friendly.setup.card_a.council_requires_label')) + ':</b> '
+                    + escapeHtml(t('friendly.setup.card_a.council_requires_value')) + '</span>'
+                  + '<span><b>' + escapeHtml(t('friendly.setup.card_a.council_wallet_label')) + ':</b> '
+                    + escapeHtml(t('friendly.setup.card_a.council_wallet_value')) + '</span>'
                   + '<span><b>' + escapeHtml(t('friendly.setup.card_a.council_status_label')) + ':</b> '
                     + escapeHtml(t('friendly.setup.card_a.council_status_value')) + '</span>'
                 + '</div>'
@@ -355,6 +361,21 @@
                 card.setAttribute('aria-checked', 'true');
                 self._goal = card.getAttribute('data-goal');
                 self._continueBtn.disabled = false;
+                // beta.0.4.3 — persist the operator's setup intent.
+                // app.js _showDashboard reads this after mainchain
+                // setup completes; if 'council' it launches the
+                // Council expansion installer (M6.2 wizard surface);
+                // if 'bpos' it goes straight to the dashboard.
+                // localStorage chosen over backend cfg because (a) the
+                // operator hasn't completed setup yet (no cfg to write
+                // to) and (b) intent is per-browser-session anyway.
+                try {
+                    if (self._goal === 'council') {
+                        window.localStorage.setItem('enm:setup-intent', 'council');
+                    } else if (self._goal === 'bpos') {
+                        window.localStorage.setItem('enm:setup-intent', 'bpos');
+                    }
+                } catch (_) { /* private mode — no persistence */ }
             });
         });
 

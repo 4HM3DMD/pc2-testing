@@ -6549,6 +6549,76 @@ body[data-enm-overview="1"] .enm-app .enm-tabs {
 }
 
 /* ============================================================
+   beta.0.4.3 — Council continuation banner
+   ============================================================
+
+   Shown on the dashboard after mainchain setup completes IF the
+   operator picked "Council node" on the welcome card AND any of the
+   remaining Council services (ESC/EID/PG/Oracles/Arbiter) are still
+   missing from cfg.chains. Bridges the gap between mainchain-done
+   and full-Council-running. v0.4.4 ships the actual sequential
+   installer wizard. */
+.enm-app .enm-council-banner {
+    margin: var(--sp-3, 12px);
+    padding: var(--sp-4, 16px);
+    background: linear-gradient(
+        135deg,
+        rgba(80, 160, 240, 0.12),
+        rgba(80, 160, 240, 0.04)
+    );
+    border: 1px solid rgba(80, 160, 240, 0.35);
+    border-radius: 12px;
+    color: var(--text-primary);
+}
+.enm-app .enm-council-banner-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: var(--sp-2, 8px);
+}
+.enm-app .enm-council-banner-head h3 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+}
+.enm-app .enm-council-banner-dismiss {
+    background: transparent;
+    border: none;
+    color: var(--text-muted, var(--text-primary));
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 4px 8px;
+}
+.enm-app .enm-council-banner p {
+    margin: 0 0 var(--sp-2, 8px) 0;
+    font-size: 14px;
+    line-height: 1.5;
+}
+.enm-app .enm-council-banner code {
+    padding: 1px 5px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+}
+.enm-app .enm-council-banner-actions {
+    display: flex;
+    gap: var(--sp-2, 8px);
+    margin-top: var(--sp-3, 12px);
+}
+
+/* beta.0.4.3 — Council role card is no longer disabled. The "Coming
+   soon" badge text was swapped to "Multi-chain" in strings.js; the
+   badge styling should NOT use the same muted color as a disabled
+   chip. Override the disabled-badge appearance for the council card. */
+.enm-app .enm-role-card[data-goal="council"]:not([data-disabled="true"]) .enm-role-card-badge {
+    background: rgba(80, 160, 240, 0.20);
+    color: var(--text-primary);
+    opacity: 1;
+}
+
+/* ============================================================
    beta.3.91 (Wave M2.3) — Multi-chain overview pane
    ============================================================
 

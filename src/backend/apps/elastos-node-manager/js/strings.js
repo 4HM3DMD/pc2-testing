@@ -78,32 +78,36 @@
                     bpos_wallet_label:    'Wallet',
                     bpos_wallet_value:    'paired in the next step',
                     bpos_install_label:   'Auto-installs',
-                    // beta.0.4.2 — clarified: setup auto-installs mainchain only.
-                    // Sidechains (ESC/EID/PG), Oracles, and Arbiter are opt-in
-                    // via the chain selector + Settings after setup completes.
-                    // Pre-0.4.2 said "ela mainchain + arbiter" which was wrong —
-                    // Arbiter has its own 4/4-preflight install flow (M6.2).
-                    bpos_install_value:   'ela mainchain (add ESC/EID/PG/Arbiter after setup)',
-                    // beta.0.4.2 — RENAMED from "Council node" to "CR Council
-                    // delegate" to remove naming collision with the multi-chain
-                    // BPoS supernode work shipped in M1-M6 (which is "Council
-                    // operator" in informal speech but lives entirely under
-                    // the BPoS card path). This card is specifically about
-                    // Cyber Republic GOVERNANCE — voting on community treasury
-                    // proposals — a completely separate Elastos feature that
-                    // ENM does not yet implement.
-                    council_title:   'CR Council delegate',
-                    council_sub:     'Run a Cyber Republic delegate node for voting on community treasury proposals. Governance role only — distinct from running multiple chains, which is part of the BPoS supernode option on the left.',
-                    council_meta:    'Coming soon',
-                    // 0.2.0-beta.3.6 — phase-06 mock compact variant text:
-                    // "Soon" (4 chars) fits the narrow chip on <480px.
-                    council_meta_compact: 'Soon',
-                    council_status_label: 'Status',
-                    council_status_value: 'CR governance not yet implemented',
-                    council_disabled: true,
+                    bpos_install_value:   'ela mainchain only',
+                    // beta.0.4.3 — Council node is a DISTINCT role from
+                    // BPoS supernode (operator directive: "BPoS owners
+                    // don't become Council nodes; Council nodes always
+                    // run all services"). Picking Council triggers the
+                    // full multi-chain sequential install (M1-M6 work):
+                    // Mainchain → ESC/EID/PG → Oracles → Arbiter.
+                    // (CR governance voting on treasury proposals
+                    // happens via the operator's wallet app, NOT via
+                    // node setup; this card is about the infrastructure,
+                    // not the voting.)
+                    council_title:   'Council node',
+                    council_sub:     'Run the full multi-chain operator stack — Main chain, EVM sidechains (ESC/EID/PG), their Oracles, and Arbiter for cross-chain signing. ENM installs everything in sequence; you provide 3 inputs (shared password, reward address, ELA mining address).',
+                    council_meta:    'Multi-chain',
+                    council_meta_compact: 'Multi',
+                    council_status_label: 'Includes',
+                    council_status_value: 'mainchain + 3 EVM sidechains + 3 oracles + arbiter',
+                    // beta.0.4.3 — Council card is now ENABLED. The
+                    // backend install endpoints (install-class-b /
+                    // install-node-runtime / install-class-c /
+                    // install-class-d) all exist as of v0.4.1. The
+                    // CouncilSetupWizard component (M6.2 wizard surface)
+                    // walks the operator through sequentially.
+                    council_disabled: false,
+                    council_requires_label: 'Requires',
+                    council_requires_value: 'mainchain keystore (signing key, shared across chains)',
+                    council_wallet_label:   'Wallet',
+                    council_wallet_value:   'paired in the next step',
                     footer:     "* Rewards depend on votes from the community. We'll show you how after setup.\n"
-                              + "CR Council delegate (governance voting) lands in a later release. "
-                              + "Multi-chain operation (ESC/EID/PG/Oracles/Arbiter) is available now under the BPoS supernode option above.",
+                              + "Council node is the full multi-chain operator role; BPoS supernode runs Main chain only. Pick whichever matches the role you want to run.",
                 },
                 card_b: {
                     title_idle:        'Ready when you are',
