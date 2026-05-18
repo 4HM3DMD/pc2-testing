@@ -67,16 +67,25 @@ const CHAINS = Object.freeze({
         urlSlug: 'elastos-eid',
         binary:  'eid',
         cli:     null,
-        description: 'DID sidechain (EID) — decentralised identity.',
+        description: 'Identity Chain (EID) — decentralised identity (DID).',
         fallbackVersion: 'v1.2.4',
     },
-    eco: {
-        urlSlug: 'elastos-eco',
-        binary:  'eco',
+    // beta.4.02 (Wave M3.8) — PG entry added. PG is closed-source per
+    // plan §11 risk #2; the URL slug follows the elastos-* convention
+    // even though releases are pinned via the M5.1 operator-supplied
+    // SHA256 manifest (we don't trust GitHub Releases auto-resolution
+    // alone for PG; verifyChecksum will reject any mismatch). Until
+    // M5.1 ships the manifest verification, this entry is reachable
+    // only by an explicit POST /setup/install/pg.
+    pg: {
+        urlSlug: 'elastos-pg',
+        binary:  'pg',
         cli:     null,
-        description: 'ECO sidechain — community governance.',
-        fallbackVersion: 'v1.0.1',
+        description: 'PG Chain (closed-source) — operator-supplied SHA256 manifest required (M5.1).',
+        fallbackVersion: 'v1.0.0',
     },
+    // ECO entry removed per H3 (ECO chain is permanently out-of-scope
+    // for ENM; the plan §10 hard rules forbid ECO support).
 });
 
 const PHASES = Object.freeze({

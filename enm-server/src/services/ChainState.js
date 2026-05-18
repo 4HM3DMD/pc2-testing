@@ -182,7 +182,12 @@ function _binaryNameFor(chainId) {
         case 'mainchain': return 'ela';
         case 'esc':       return 'esc';
         case 'eid':       return 'eid';
-        case 'eco':       return 'eco';
+        // beta.4.02 (Wave M3.8) — PG added per the M5.1 binary
+        // download path. ECO removed per H3 (permanently out of
+        // scope).
+        case 'pg':        return 'pg';
+        case 'arbiter':   return 'arbiter';
+        case 'spv':       return 'service';   // SPV uses 'service' binary (plan §14)
         default:          return chainId;
     }
 }

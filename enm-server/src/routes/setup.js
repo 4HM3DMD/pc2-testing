@@ -252,6 +252,39 @@ function build(extensionHandle) {
                     }
                 }, 2000);
                 setTimeout(() => clearInterval(onPhase), 15 * 60 * 1000).unref?.();
+            } else if (['esc', 'eid', 'pg'].includes(chainId)) {
+                // beta.4.02 (Wave M3.8) — Class B post-install hook.
+                // Writes the resolved binaryPath + binaryVersion back into
+                // cfg.chains[chainId] so the chain becomes startable
+                // (cfg.binaryPath was empty after M3.5's install-class-b).
+                // Does NOT flip enabled=true automatically — operator
+                // decides when to bring it online via the chain-card
+                // Start button.
+                const onPhase = setInterval(async () => {
+                    const s = dl.getStatus(chainId);
+                    if (s.phase === 'done' && s.binaryPath) {
+                        clearInterval(onPhase);
+                        try {
+                            const cfg = await ConfigStore.load();
+                            if (cfg.chains && cfg.chains[chainId]) {
+                                cfg.chains[chainId].binaryPath = s.binaryPath;
+                                cfg.chains[chainId].binaryVersion = s.version || '';
+                                await ConfigStore.save(cfg);
+                                extensionHandle.log.info(
+                                    `${ENM_LOG_PREFIX} install ${chainId} (Class B): wrote `
+                                    + `binaryPath=${s.binaryPath} version=${s.version || 'unknown'} into cfg`,
+                                );
+                            }
+                        } catch (err) {
+                            extensionHandle.log.warn(
+                                `${ENM_LOG_PREFIX} install ${chainId}: cfg persist failed: ${err.message}`,
+                            );
+                        }
+                    } else if (s.phase === 'failed') {
+                        clearInterval(onPhase);
+                    }
+                }, 2000);
+                setTimeout(() => clearInterval(onPhase), 15 * 60 * 1000).unref?.();
             }
 
             return res.status(result.alreadyRunning ? 202 : 200).json(successBody({
