@@ -80,6 +80,21 @@ class SelfHealingEngine {
         // AUTOSTART when autoStart fires the start). One event per
         // deploy is enough.
         this._bootAtMs = Date.now();
+        // beta.3.82 — Wave C item ③ — at-most-one-suppression-per-boot
+        // flag. Pre-3.82 the suppression fired for ALL F1 events in the
+        // first 30s of ENM boot, hiding legitimate chain crashes that
+        // happened to land in that window. Now we suppress at most one
+        // (the actual deploy bounce); any subsequent F1 fire in the
+        // window is audited normally. Flipped to true on first
+        // suppression; never reset until ENM reboots (and the engine
+        // is reconstructed with this back at false).
+        this._postDeployF1Suppressed = false;
+        // beta.3.82 — Wave C item ⑤ — per-chain "we already told the
+        // operator this chain is stuck" timestamps so the watchdog
+        // doesn't spam CRITICAL_NOTIFY rows every 30s for the same
+        // dead chain. Rate-limit per (chain) to STUCK_NOTIFY_COOLDOWN_MS.
+        /** @type {Map<string, number>} */
+        this._stuckChainNotifiedAt = new Map();
     }
 
     /**
@@ -413,13 +428,19 @@ class SelfHealingEngine {
         // Internal log line stays so SSH-level forensics still show
         // what happened.
         const POST_DEPLOY_SUPPRESS_MS = 30_000;
-        const isPostDeployF1 = success
+        // beta.3.82 — Wave C item ③ — tighter suppression. Suppress at
+        // most ONE F1 per ENM boot (the actual deploy bounce). Any
+        // subsequent F1 within the 30s window is a legitimate chain
+        // crash and gets the full audit + SSE notification.
+        const isFirstF1InBootWindow = success
             && det && det.ruleId === 'F1'
             && this._isRestartAction(det)
-            && (Date.now() - this._bootAtMs) < POST_DEPLOY_SUPPRESS_MS;
-        if (isPostDeployF1) {
+            && (Date.now() - this._bootAtMs) < POST_DEPLOY_SUPPRESS_MS
+            && !this._postDeployF1Suppressed;
+        if (isFirstF1InBootWindow) {
+            this._postDeployF1Suppressed = true;
             this.extensionHandle.log.info(
-                `${ENM_LOG_PREFIX} ${chainId}/F1 fired within ${Math.round((Date.now() - this._bootAtMs) / 1000)}s of boot — suppressing audit row (post-deploy bounce).`,
+                `${ENM_LOG_PREFIX} ${chainId}/F1 fired within ${Math.round((Date.now() - this._bootAtMs) / 1000)}s of boot — suppressing audit row (first F1 post-deploy bounce; subsequent F1 fires in this window will be audited).`,
             );
             return;
         }
@@ -625,6 +646,79 @@ class SelfHealingEngine {
                 payload: det.payload || null,
             });
         } catch (_) { /* swallow secondary failure */ }
+    }
+
+    /**
+     * beta.3.82 — Wave C item ⑤ — stuck-chain watchdog.
+     *
+     * Background: the 23:56:42 srv832310 incident showed F1 can silently
+     * stop firing on a dead chain when an OWNER_CONFIRMS escalation
+     * proposal already exists for the same rule on that chain (the
+     * "escalationOpen" guard in _applyAutomatedSafe returns early to
+     * avoid spam). If the operator never sees that original proposal
+     * (browser closed, SSE missed, page refreshed past it), the chain
+     * sits dead indefinitely with no further notifications.
+     *
+     * This watchdog is the safety net: HealthChecker calls it from its
+     * medium-tick whenever a chain has been dead for >STUCK_GRACE_MS
+     * (5 min) and the death wasn't operator-initiated. We emit a
+     * CRITICAL_NOTIFY audit row + SSE notification at most once per
+     * STUCK_NOTIFY_COOLDOWN_MS (30 min) per chain, so the operator
+     * gets a fresh reminder every half hour the chain stays down.
+     *
+     * The watchdog's audit row uses a synthetic ruleId 'STUCK' so it's
+     * easy to filter from real F-rule activity in the Activity tab.
+     *
+     * @param {string} chainId
+     * @param {number} stoppedSinceMs  how long the chain has been dead
+     */
+    async notifyStuckChain(chainId, stoppedSinceMs) {
+        const STUCK_NOTIFY_COOLDOWN_MS = 30 * 60_000;
+        const lastAt = this._stuckChainNotifiedAt.get(chainId);
+        if (lastAt && (Date.now() - lastAt) < STUCK_NOTIFY_COOLDOWN_MS) {
+            return; // silent — operator was already notified within the cooldown
+        }
+        this._stuckChainNotifiedAt.set(chainId, Date.now());
+        const stoppedForMin = Math.max(1, Math.round(stoppedSinceMs / 60_000));
+        try {
+            const db = this.getDb();
+            await AuditLog.append(db, {
+                walletAddress: 'system',
+                chainId,
+                ruleId: 'STUCK',
+                tier: HEALING_TIERS.CRITICAL_NOTIFY,
+                decision: AUDIT_DECISION.MANUAL_ONLY,
+                executor: 'system',
+                outcome:
+                    `${chainId} has been stopped for ${stoppedForMin} min `
+                    + 'without recovery — operator intervention required.',
+                payload: {
+                    chainId,
+                    stoppedSinceMs,
+                    stoppedForMin,
+                    recoveryHints: [
+                        'Check Activity tab for an open proposal — F1 may have escalated.',
+                        `Try POST /api/enm/chains/${chainId}/start to restart manually.`,
+                        'If repeated, check the external-sigterm-source forensic log:',
+                        '  grep "external-sigterm-source" /var/lib/pc2/data/logs/elastos-node-manager.log | tail -1',
+                    ],
+                },
+            });
+        } catch (err) {
+            this.extensionHandle.log.debug(
+                `${ENM_LOG_PREFIX} stuck-chain audit write failed (non-fatal): ${err.message}`,
+            );
+        }
+        this._publishNotification({
+            chainId,
+            ruleId: 'STUCK',
+            severity: SEVERITY.CRITICAL,
+            summary: `${chainId} stopped for ${stoppedForMin} min`,
+            detail: 'Chain has been down without recovery. Check Activity tab for open proposals or restart manually.',
+        });
+        this.extensionHandle.log.warn(
+            `${ENM_LOG_PREFIX} stuck-chain watchdog: ${chainId} stopped for ${stoppedForMin}min — operator notified.`,
+        );
     }
 
     // ========================================================================

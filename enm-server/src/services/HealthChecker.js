@@ -321,6 +321,28 @@ class HealthChecker {
                 s.firstPeerZeroAt = null;
                 s.firstHeightStallAt = null;
                 s.firstNoInboundAt = null;
+                // beta.3.82 — Wave C item ⑤ — stuck-chain watchdog.
+                // If an enabled chain has been dead for >STUCK_GRACE_MS
+                // and the death wasn't operator-initiated, ask the
+                // engine to notify the operator. The engine rate-limits
+                // per chain (30min cooldown) so this fires every
+                // medium tick (30s) but only writes audit/SSE every
+                // half hour the chain stays down. Safety net for the
+                // 23:56:42 srv832310 pattern where F1 escalation
+                // happened once but the operator missed the SSE.
+                const STUCK_GRACE_MS = 5 * 60_000;
+                if (s.lastExit && !s.lastExit.manualStop && s.lastExit.at
+                    && (Date.now() - s.lastExit.at) > STUCK_GRACE_MS
+                    && this.engine
+                    && typeof this.engine.notifyStuckChain === 'function') {
+                    this.engine.notifyStuckChain(
+                        chainId, Date.now() - s.lastExit.at,
+                    ).catch((err) => {
+                        this.extensionHandle.log.debug(
+                            `${ENM_LOG_PREFIX} stuck-chain notify ${chainId} failed (non-fatal): ${err.message}`,
+                        );
+                    });
+                }
                 continue;
             }
 
