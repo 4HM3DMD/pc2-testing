@@ -15,6 +15,7 @@ const { NativeProcessService } = require('./NativeProcessService');
 const { SseHub } = require('./SseHub');
 const { ProcessLogStreamer } = require('./ProcessLogStreamer');
 const ElaMainChainAdapter = require('./ElaMainChainAdapter');
+const ChainAdapter = require('./ChainAdapter');
 const { SelfHealingEngine } = require('./SelfHealingEngine');
 const { HealthChecker } = require('./HealthChecker');
 const { readNodeOwner } = require('../auth/OwnerCheckMiddleware');
@@ -69,7 +70,14 @@ function init(extensionHandle) {
     // or cancel so a fresh bootstrap can start cleanly.
     bootstrapDownloader.cleanupOrphans().catch(() => { /* best-effort */ });
     keystoreService = new EnmKeystoreService({ logger: extensionHandle.log });
-    adapters.set('mainchain', new ElaMainChainAdapter({ processService, extensionHandle }));
+    // beta.3.85 — Wave M1.1 — register mainchain via the new
+    // registerAdapter() API instead of the previous direct
+    // `adapters.set()` call. Behaviour is identical for mainchain
+    // today (the only registered adapter); the API exists so future
+    // Class B/C/D/E adapters can be registered without touching
+    // ChainRegistry's internals. See ChainAdapter.classOf for the
+    // chainId → class lookup table.
+    registerAdapter('mainchain', new ElaMainChainAdapter({ processService, extensionHandle }));
 
     // Clear SyncTracker's height-sample buffer + HostConflictScanner's
     // dedup map on chain exit so the next start sees a clean slate. Two
@@ -243,7 +251,78 @@ function getAdapter(chainId) {
 }
 
 /**
- * @returns {Array<{ chainId: string, displayName: string }>}
+ * beta.3.85 — Wave M1.1 — public API for registering a chain adapter.
+ *
+ * Replaces the pre-3.85 pattern of `adapters.set(chainId, new XAdapter(...))`
+ * scattered across init(). Future Class B/C/D/E adapters register here
+ * (lazy registration at setup-wizard time, not at boot — uninstalled
+ * chains never appear in listChains() or the multi-chain overview).
+ *
+ * Guards:
+ *  - throws if registry not initialized (caller must wait for init())
+ *  - throws on duplicate chainId (catches accidental re-registration)
+ *  - logs the registered chainId + chainClass at info level so the
+ *    operator can grep the log for "registered adapter" to see which
+ *    adapters are live this boot
+ *
+ * @param {string} chainId
+ * @param {import('./ChainAdapter')} adapter
+ */
+function registerAdapter(chainId, adapter) {
+    if (!chainId || typeof chainId !== 'string') {
+        throw new TypeError('ChainRegistry.registerAdapter: chainId required');
+    }
+    if (!adapter || typeof adapter.chainId !== 'string') {
+        throw new TypeError('ChainRegistry.registerAdapter: adapter must be a ChainAdapter instance');
+    }
+    if (adapter.chainId !== chainId) {
+        throw new Error(
+            `ChainRegistry.registerAdapter: chainId mismatch — `
+            + `caller passed "${chainId}" but adapter.chainId is "${adapter.chainId}"`,
+        );
+    }
+    if (adapters.has(chainId)) {
+        throw new Error(`ChainRegistry.registerAdapter: chainId "${chainId}" already registered`);
+    }
+    adapters.set(chainId, adapter);
+    const klass = adapter.chainClass || '?';
+    if (extensionHandleRef && extensionHandleRef.log) {
+        extensionHandleRef.log.info(
+            `[ENM] registered adapter chainId=${chainId} class=${klass} displayName="${adapter.displayName}"`,
+        );
+    }
+}
+
+/**
+ * beta.3.85 — Wave M1.1 — list adapters filtered by chain class.
+ *
+ * Used by:
+ *  - MultiChainOverviewPane (M2) to group rows by class
+ *  - HealthChecker (M1.3) to apply DPoS-specific rules only to Class A
+ *  - CouncilOverviewService aggregator (M2)
+ *
+ * @param {string} className  one of 'A'|'B'|'C'|'D'|'E'
+ * @returns {Array<{ chainId: string, displayName: string, chainClass: string|null }>}
+ */
+function getAdaptersByClass(className) {
+    if (!initialized) return [];
+    return Array.from(adapters.values())
+        .filter((a) => a.chainClass === className)
+        .map((a) => ({
+            chainId: a.chainId,
+            displayName: a.displayName,
+            chainClass: a.chainClass,
+        }));
+}
+
+/**
+ * @returns {Array<{ chainId: string, displayName: string, chainClass: string|null, parentChainId: string|null }>}
+ *
+ * beta.3.85 — extended the return shape to include chainClass +
+ * parentChainId. Pre-3.85 callers reading only chainId+displayName
+ * are unaffected (extra fields are extra, not breaking). New M2+
+ * callers can use the class/parent fields directly without an
+ * extra getAdapter() roundtrip.
  */
 function listChains() {
     if (!initialized) {
@@ -252,6 +331,8 @@ function listChains() {
     return Array.from(adapters.values()).map((a) => ({
         chainId: a.chainId,
         displayName: a.displayName,
+        chainClass: a.chainClass,
+        parentChainId: a.parentChainId,
     }));
 }
 
@@ -294,5 +375,7 @@ module.exports = {
     getKeystoreService,
     listChains,
     snapshots,
+    registerAdapter,        // beta.3.85 — Wave M1.1
+    getAdaptersByClass,     // beta.3.85 — Wave M1.1
     _resetForTests,
 };

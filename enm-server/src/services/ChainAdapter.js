@@ -24,6 +24,45 @@
 
 const { ENM_LOG_PREFIX } = require('./EnmConstants');
 
+/**
+ * beta.3.85 — Wave M1.1 — Council-node taxonomy.
+ *
+ * Static chainId → architectural class lookup. The 5 classes (see the
+ * approved plan at ~/.claude/plans/mellow-sprouting-barto.md) are:
+ *
+ *   A — UTXO Consensus       (mainchain only)
+ *   B — EVM PBFT Sidechain   (esc, eid, pg)
+ *   C — Sidekick Oracle      (esc-oracle, eid-oracle, pg-oracle)
+ *   D — Cross-chain Signer   (arbiter)
+ *   E — Light Client         (spv)
+ *
+ * Returns null for unknown chainIds — callers must handle that case
+ * defensively (treat as "not yet supported by this ENM version").
+ */
+const CHAIN_ID_TO_CLASS = Object.freeze({
+    mainchain:    'A',
+    esc:          'B',
+    eid:          'B',
+    pg:           'B',
+    'esc-oracle': 'C',
+    'eid-oracle': 'C',
+    'pg-oracle':  'C',
+    arbiter:      'D',
+    spv:          'E',
+});
+
+/**
+ * beta.3.85 — Wave M1.1 — Oracle → parent-chain mapping. Used by
+ * ChainRegistry to wire oracle-restart-on-parent-exit and by the
+ * multi-chain overview to render oracles nested under their parent
+ * chain. Non-oracles return null.
+ */
+const CHAIN_ID_TO_PARENT = Object.freeze({
+    'esc-oracle': 'esc',
+    'eid-oracle': 'eid',
+    'pg-oracle':  'pg',
+});
+
 class ChainAdapter {
     /**
      * @param {object} deps
@@ -38,6 +77,28 @@ class ChainAdapter {
         this.extensionHandle = deps.extensionHandle;
     }
 
+    /**
+     * beta.3.85 — Static helper: which class does a given chainId belong to?
+     * Returns one of 'A'|'B'|'C'|'D'|'E' or null for unknown chainIds.
+     *
+     * @param {string} chainId
+     * @returns {string|null}
+     */
+    static classOf(chainId) {
+        return CHAIN_ID_TO_CLASS[chainId] || null;
+    }
+
+    /**
+     * beta.3.85 — Static helper: for an oracle chainId, which chain is its
+     * parent? Returns the parent chainId or null for non-oracles.
+     *
+     * @param {string} chainId
+     * @returns {string|null}
+     */
+    static parentOf(chainId) {
+        return CHAIN_ID_TO_PARENT[chainId] || null;
+    }
+
     /** Override in subclass. */
     get chainId() {
         throw new Error('ChainAdapter: subclass must override chainId');
@@ -46,6 +107,26 @@ class ChainAdapter {
     /** Override in subclass. */
     get displayName() {
         throw new Error('ChainAdapter: subclass must override displayName');
+    }
+
+    /**
+     * beta.3.85 — The chain's architectural class (A/B/C/D/E). Default
+     * resolves via ChainAdapter.classOf(this.chainId); subclasses can
+     * override if they need to declare a class for a chainId not in the
+     * canonical map (e.g. test-only adapters). Returning null is legal
+     * but means callers like CouncilOverviewService will treat the
+     * adapter as "unclassified" and skip class-specific rendering.
+     */
+    get chainClass() {
+        return ChainAdapter.classOf(this.chainId);
+    }
+
+    /**
+     * beta.3.85 — For oracles, the parent chain's chainId; null otherwise.
+     * Default resolves via the static parentOf map.
+     */
+    get parentChainId() {
+        return ChainAdapter.parentOf(this.chainId);
     }
 
     /**
