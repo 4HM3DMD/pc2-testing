@@ -660,6 +660,53 @@ function detectF22(snap) {
 }
 
 /**
+ * F24 — Class C (Oracle) parent-chain offline.
+ *
+ * Fires when:
+ *   - chain is Class C (esc-oracle / eid-oracle / pg-oracle)
+ *   - oracle process is alive
+ *   - parent chain (esc/eid/pg) is either:
+ *     - not configured in cfg.chains[parent], OR
+ *     - configured but process not alive (snap.parentAlive=false)
+ *
+ * Oracles relay cross-chain transactions FROM the parent EVM
+ * sidechain TO mainchain. If the parent isn't alive there's nothing
+ * to relay; the oracle is "orphaned" — still consuming CPU + holding
+ * a port but accomplishing nothing.
+ *
+ * Tier: CRITICAL_NOTIFY — operator action: bring the parent back up
+ * (or stop the oracle if intentional). The restart-hook in
+ * ChainRegistry (M4.5 sibling) handles the auto-restart-on-parent-
+ * back-up case so F24 should clear naturally.
+ *
+ * snap.parentAlive is set by HealthChecker's snapshot builder for
+ * Class C chains (M4.5 backend wiring).
+ */
+function detectF24(snap) {
+    if (!snap || !snap.processStatus || !snap.processStatus.alive) return null;
+    // Defensive: parentChainId comes from the adapter; if missing skip.
+    if (!snap.parentChainId) return null;
+    // snap.parentAlive is a boolean OR null (null = not yet evaluated).
+    // We only fire on an explicit false.
+    if (snap.parentAlive !== false) return null;
+    return {
+        ruleId: 'F24',
+        tier: HEALING_TIERS.CRITICAL_NOTIFY,
+        summaryAction: `${snap.chainId}: parent chain "${snap.parentChainId}" is offline`,
+        summaryReason:
+            `${snap.chainId} is an Oracle that relays from ${snap.parentChainId} `
+            + 'to mainchain. With the parent chain offline there is nothing to '
+            + 'relay; the oracle is consuming resources without producing work. '
+            + `Start ${snap.parentChainId} via its chain card or stop ${snap.chainId} `
+            + 'if you intended to take it down.',
+        payload: {
+            chainId: snap.chainId,
+            parentChainId: snap.parentChainId,
+        },
+    };
+}
+
+/**
  * F25 — Class B (EVM sidechain) miner-address-unset warning.
  *
  * Fires when:
@@ -768,6 +815,11 @@ const RULE_METADATA = Object.freeze({
     // the address (H22; ENM never derives a reward address).
     F25: { tier: 'CRITICAL_NOTIFY', title: 'EVM miner address unset',
            description: 'On an EVM sidechain (ESC/EID/PG) where mining is enabled, the miner.rewardAddress must be set or block rewards are lost. Surfaces a critical alert if the operator turned mining on without supplying an address.' },
+    // beta.0.3.5 (Wave M4.5) — Class C-only. Oracle alive but its
+    // parent EVM sidechain is offline. Auto-clears once parent
+    // restarts (ChainRegistry exit-hook handles the restart side).
+    F24: { tier: 'CRITICAL_NOTIFY', title: 'Oracle parent chain offline',
+           description: 'An Oracle (ESC/EID/PG) relays from its parent EVM sidechain to mainchain. If the parent is stopped while the oracle is running, surface a critical alert so the operator can bring the parent back online (or stop the orphaned oracle intentionally).' },
 });
 
 // beta.3.22 — every rule is enabled by default. The operator-facing
@@ -800,6 +852,7 @@ const DEFAULT_ENABLED = Object.freeze({
     F19: true,  // host conflict (HostConflictScanner has its own dedup)
     F22: true,  // DPoS state desync (Phase 7) — auto-heal via snapshot restore
     F25: true,  // beta.4.00 — Class B miner address unset (alert-only)
+    F24: true,  // beta.0.3.5 — Class C oracle parent offline (alert-only)
 });
 
 // Global rule overrides (apply to all chains). Pre-3.87 this was the only
@@ -921,6 +974,8 @@ function runAll(snap) {
         ['F19', detectF19],
         // beta.4.00 (Wave M3.6) — Class B miner-address-unset.
         ['F25', detectF25],
+        // beta.0.3.5 (Wave M4.5) — Class C oracle parent offline.
+        ['F24', detectF24],
     ];
 
     // beta.3.87 — Wave M1.3 — DPoS-only rules. F11 (rotation stuck),
@@ -948,6 +1003,10 @@ function runAll(snap) {
     // semantics that only apply to EVM sidechains; for mainchain (Class A)
     // or oracles (Class C) etc., the rule is silently skipped.
     const CLASS_B_ONLY_RULES = new Set(['F25']);
+    // beta.0.3.5 (Wave M4.5) — Class C-only rules. F24 fires only for
+    // oracles (esc-oracle/eid-oracle/pg-oracle) where the parent-
+    // chain abstraction exists.
+    const CLASS_C_ONLY_RULES = new Set(['F24']);
     const chainId = snap && snap.chainId;
     const chainClass = chainId ? ChainAdapter.classOf(chainId) : null;
 
@@ -968,6 +1027,11 @@ function runAll(snap) {
         if (CLASS_B_ONLY_RULES.has(ruleId)
             && chainClass !== null
             && chainClass !== 'B') {
+            continue;
+        }
+        if (CLASS_C_ONLY_RULES.has(ruleId)
+            && chainClass !== null
+            && chainClass !== 'C') {
             continue;
         }
         const d = fn(snap);
@@ -993,6 +1057,7 @@ module.exports = {
     detectF22,
     detectF19,
     detectF25,  // beta.4.00 (Wave M3.6)
+    detectF24,  // beta.0.3.5 (Wave M4.5)
     PEER_ZERO_GRACE_MS,
     RPC_UNREACHABLE_GRACE_MS,
     HEIGHT_STALL_GRACE_MS,

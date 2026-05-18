@@ -267,6 +267,7 @@ class HealthChecker {
                 chainConfig: chainCfg,
                 ruleState: s,
             };
+            this._enrichOracleSnap(snap, chainCfg);
 
             // F1 + F2 fire here.
             const dets = HealthRules.runAll(snap)
@@ -448,11 +449,12 @@ class HealthChecker {
                 ruleState: s,
                 dposDesyncDetected,
             };
+            this._enrichOracleSnap(snap, chainCfg);
 
             const dets = HealthRules.runAll(snap).filter((d) =>
                 d.ruleId === 'F3' || d.ruleId === 'F4' || d.ruleId === 'F9'
                 || d.ruleId === 'F10' || d.ruleId === 'F16' || d.ruleId === 'F18'
-                || d.ruleId === 'F22');
+                || d.ruleId === 'F22' || d.ruleId === 'F24');
             if (dets.length > 0) {
                 await this.engine.apply(chainId, dets, chainCfg);
             }
@@ -501,11 +503,12 @@ class HealthChecker {
                 clockSkew,
                 hostConflicts,
             };
+            this._enrichOracleSnap(snap, chainCfg);
 
             const dets = HealthRules.runAll(snap).filter((d) =>
                 d.ruleId === 'F5'  || d.ruleId === 'F6'  || d.ruleId === 'F8'
                 || d.ruleId === 'F11' || d.ruleId === 'F12' || d.ruleId === 'F13'
-                || d.ruleId === 'F19');
+                || d.ruleId === 'F19' || d.ruleId === 'F25');
             if (dets.length > 0) {
                 await this.engine.apply(chainId, dets, chainCfg);
             }
@@ -780,6 +783,44 @@ class HealthChecker {
                     `${ENM_LOG_PREFIX} auto-resolve failed for ${row.id}: ${err.message}`,
                 );
             }
+        }
+    }
+
+    /**
+     * beta.0.3.5 (Wave M4.5) — enrich a snapshot with parent-chain
+     * fields for Class C (oracle) chains. F24 reads snap.parentChainId
+     * + snap.parentAlive. For non-oracle chains this is a no-op.
+     *
+     * Best-effort: looks up parentChainId via ChainAdapter.parentOf
+     * (static map), then queries processService.statusSync(parent) for
+     * alive state. If the parent isn't in the registry, parentAlive
+     * stays null (F24 only fires on explicit false, so null is safe).
+     *
+     * @private
+     * @param {object} snap
+     * @param {object|null} chainCfg
+     */
+    _enrichOracleSnap(snap, chainCfg) {
+        if (!snap || !snap.chainId) { return; }
+        // Prefer adapter-supplied parentChainId (subclass override) but
+        // fall back to the static map for safety.
+        let parentChainId = null;
+        try {
+            const ChainAdapter = require('./ChainAdapter');
+            parentChainId = ChainAdapter.parentOf(snap.chainId);
+            // chainCfg.parentChainId may override if the operator
+            // pointed the oracle at a custom parent (rare; covered).
+            if (chainCfg && chainCfg.parentChainId) {
+                parentChainId = chainCfg.parentChainId;
+            }
+        } catch (_) { /* swallow — parent stays null */ }
+        if (!parentChainId) { return; }
+        snap.parentChainId = parentChainId;
+        try {
+            const st = this.processService.statusSync(parentChainId);
+            snap.parentAlive = !!(st && st.alive);
+        } catch (_) {
+            snap.parentAlive = null;  // unknown — F24 won't fire
         }
     }
 
