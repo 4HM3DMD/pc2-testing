@@ -53,7 +53,15 @@ function looksLikeEvm(addr) {
 // route (TOPIC_REGEX miss) AND the downloaders were calling a non-
 // existent .broadcast() method anyway. Both fixed in beta.3.9; the
 // regex now matches the topic names the downloaders publish.
-const TOPIC_REGEX = /^(?:system|notifications|audit|chains:[a-z0-9-]+:(?:status|logs|height)|setup:(?:install|bootstrap):[a-z0-9-]+)$/;
+//
+// 0.2.0-beta.3.90 (Wave M2.2) — `council:overview` topic added.
+// CouncilOverviewService publishes a snapshot every 5s + on every
+// chain exit. MultiChainOverviewPane (M2.3) subscribes here to
+// keep the aggregate dashboard live without polling. Topic is
+// fixed-name (not parameterized) — there's a single Council scope
+// per ENM install. Future per-class topics (e.g. council:dpos)
+// would extend this disjunction.
+const TOPIC_REGEX = /^(?:system|notifications|audit|chains:[a-z0-9-]+:(?:status|logs|height)|setup:(?:install|bootstrap):[a-z0-9-]+|council:overview)$/;
 const MAX_TOPICS_PER_REQUEST = 16;
 
 /**

@@ -87,6 +87,9 @@ const maintenanceRouter = require('./routes/maintenance');
 // beta.3.43 — Settings → Identity tab backend (unlock / backup /
 // import / reset). Mounted at /api/enm/identity/* below.
 const identityRouter = require('./routes/identity');
+// beta.3.90 (Wave M2.2) — Council scope endpoints (multi-chain
+// overview aggregator). Mounted at /api/enm/council/* below.
+const councilRouter = require('./routes/council');
 // beta.3.78 — snapshots routes + EnmStateSnapshot service removed.
 // Per operator review: a chain server's canonical recovery is resync
 // from peers, not a 1-hour-old cache rollback. The snapshot system
@@ -256,6 +259,16 @@ async function main() {
     // backup, import, full reset). All routes owner-gated; destructive
     // ones check producer state + audit-log.
     api.use('/identity', identityRouter.build({ extensionHandle, getDb }));
+    // beta.3.90 (Wave M2.2) — Council overview aggregator. GET-only;
+    // lazy resolver because the CouncilOverviewService is built AFTER
+    // ChainRegistry.initHealing() in the post-boot block below, so
+    // the router has to mount during this build-up phase + find the
+    // service later via the resolver.
+    let _overviewService = null;
+    api.use('/council', councilRouter.build({
+        extensionHandle,
+        getOverviewService: () => _overviewService,
+    }));
     // beta.3.78 — /snapshots route removed (see top-of-file comment).
 
     // EVM placeholder (v0.5+). Reserves /api/enm/evm/* so future cross-chain
@@ -281,6 +294,28 @@ async function main() {
         ChainRegistry.getHealthChecker().start();
     } catch (err) {
         log('error', `healing init failed: ${err.message}`);
+    }
+
+    // beta.3.90 (Wave M2.2) — start the Council overview aggregator.
+    // Periodic 5s tick + immediate re-publish on any chain exit.
+    // Started AFTER ChainRegistry.init() (the registry is what the
+    // aggregator reads) but doesn't depend on the healing engine, so
+    // ordering relative to initHealing isn't load-bearing — placed
+    // here for grouping with other post-boot service starts. The
+    // closure in api.use('/council', ...) above captures the local
+    // _overviewService variable so the GET endpoint sees the live
+    // instance once it's built.
+    try {
+        const { CouncilOverviewService } = require('./services/CouncilOverviewService');
+        _overviewService = new CouncilOverviewService({
+            extensionHandle,
+            registry: ChainRegistry,
+            sseHub,
+        });
+        _overviewService.start();
+        log('info', 'council-overview service started (tick=5s + exit-hook)');
+    } catch (err) {
+        log('error', `council-overview init failed: ${err.message}`);
     }
 
     // beta.3.51 — autoStart loop. Schema's `global.autoStart.onBoot` (default
