@@ -1074,6 +1074,111 @@ function build(extensionHandle) {
         }
     });
 
+    // beta.0.3.4 (Wave M4.4) — Class C (oracle) install endpoint.
+    // Creates the cfg.chains.<oracle-id> entry once the parent EVM
+    // sidechain is configured AND Node.js runtime is detected. Mirrors
+    // install-class-b's prereq pattern.
+    //
+    // Body:
+    //   {
+    //     chainId: 'esc-oracle' | 'eid-oracle' | 'pg-oracle',
+    //     scriptPath: string,          // absolute dir holding crosschain_*.js
+    //     port?: number,               // default per chain (20632/20642/20672)
+    //     activeNet?: 'mainnet'|'testnet',
+    //   }
+    router.post('/install-class-c', limit('admin'), requireOwner, async (req, res) => {
+        try {
+            const body = req.body || {};
+            const chainId = String(body.chainId || '');
+            const KNOWN = { 'esc-oracle': 'esc', 'eid-oracle': 'eid', 'pg-oracle': 'pg' };
+            if (!KNOWN[chainId]) {
+                return res.status(400).json(errorBody(
+                    `install-class-c: chainId must be one of ${Object.keys(KNOWN).join('|')}, got "${chainId}".`,
+                ));
+            }
+            const parentChainId = KNOWN[chainId];
+            const activeNet = body.activeNet === 'testnet' ? 'testnet' : 'mainnet';
+            const DEFAULT_PORTS = {
+                'esc-oracle': activeNet === 'testnet' ? 21632 : 20632,
+                'eid-oracle': activeNet === 'testnet' ? 21642 : 20642,
+                'pg-oracle':  activeNet === 'testnet' ? 21672 : 20672,
+            };
+            const httpRpc = Number.isInteger(body.port) ? body.port : DEFAULT_PORTS[chainId];
+            if (!Number.isInteger(httpRpc) || httpRpc < 1024 || httpRpc > 65535) {
+                return res.status(400).json(errorBody('install-class-c: port must be 1024..65535'));
+            }
+            const scriptPath = String(body.scriptPath || '').trim();
+            if (!scriptPath) {
+                return res.status(400).json(errorBody(
+                    'install-class-c: scriptPath is required (absolute path to directory '
+                    + 'containing crosschain_*.js)',
+                ));
+            }
+
+            const cfg = await ConfigStore.load();
+            // Pre-req 1 — parent chain must be configured.
+            if (!cfg.chains || !cfg.chains[parentChainId]) {
+                return res.status(412).json(errorBody(
+                    `install-class-c: parent chain "${parentChainId}" not configured. `
+                    + `Install ${parentChainId} (M3.5) before installing its oracle.`,
+                ));
+            }
+            // Pre-req 2 — already-installed idempotency.
+            if (cfg.chains[chainId]) {
+                return res.status(409).json(errorBody(
+                    `install-class-c: oracle "${chainId}" is already configured.`,
+                ));
+            }
+            // Pre-req 3 — Node.js runtime must be resolvable.
+            const NodeJsRuntime = require('../services/NodeJsRuntime');
+            const runtime = await NodeJsRuntime.resolveAny();
+            if (!runtime) {
+                return res.status(412).json(errorBody(
+                    'install-class-c: no Node.js runtime detected. POST '
+                    + '/api/enm/setup/install-node-runtime first (M4.3) or '
+                    + 'install Node.js v23.10.0 on the host.',
+                ));
+            }
+            // Compose cfg block.
+            cfg.chains[chainId] = {
+                enabled: false,                  // operator flips after install
+                binaryPath: runtime.path,         // the node interpreter
+                binaryVersion: runtime.version.raw,
+                activeNet,
+                parentChainId,
+                scriptPath,
+                nodejsVersion: NodeJsRuntime.PINNED_VERSION,
+                ports: { httpRpc },
+                parent: { chainRpcUrl: '', mainchainRpcUrl: '' },
+                healing: { enabledRules: {} },
+            };
+            await ConfigStore.save(cfg);
+            // Register the adapter immediately so it appears in listChains.
+            try {
+                const ChainRegistry = require('../services/ChainRegistry');
+                ChainRegistry.registerConfiguredAdapters({ cfg });
+            } catch (err) {
+                extensionHandle.log.warn(
+                    `${ENM_LOG_PREFIX} install-class-c ${chainId}: registerConfiguredAdapters failed: ${err.message}`,
+                );
+            }
+            extensionHandle.log.info(
+                `${ENM_LOG_PREFIX} install-class-c ${chainId} installed `
+                + `(parent=${parentChainId}, port=${httpRpc}, node=${runtime.version.raw} @ ${runtime.source})`,
+            );
+            return res.json(successBody({
+                chainId,
+                chainCfg: cfg.chains[chainId],
+                next: 'POST /api/enm/chains/' + chainId + '/start to bring it online',
+            }));
+        } catch (err) {
+            extensionHandle.log.error(
+                `${ENM_LOG_PREFIX} POST /setup/install-class-c: ${err.message}`,
+            );
+            return res.status(500).json(errorBody(err.message));
+        }
+    });
+
     router.post('/install-node-runtime', limit('admin'), requireOwner, async (req, res) => {
         try {
             const NodeJsRuntime = require('../services/NodeJsRuntime');
