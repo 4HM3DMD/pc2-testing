@@ -1302,6 +1302,127 @@ function build(extensionHandle) {
         }
     });
 
+    // beta.0.4.4 — POST /api/enm/setup/install-council — single
+    // orchestrator endpoint that runs the full Council install
+    // sequence (Layer 1 strategy → ESC + EID + PG cfg+binary → Node
+    // runtime → oracle scripts → 3 Class C cfg + Class D cfg + start
+    // every chain) in the background. Emits SSE on the topic
+    // `setup:council:install` with per-step { step, total, status,
+    // message, percent } so the Card F stepper in the wizard renders
+    // real progress (operator directive 2026-05-18: no spinners; every
+    // destructive/long action must show step-by-step progress).
+    //
+    // BODY:
+    //   { sharedPassword:        '<16+ chars complexity-compliant>',
+    //     sharedRewardAddress:   '0x<40 hex>',
+    //     arbiterMiningAddress:  'E<33 base58>',
+    //     activeNet:             'mainnet' | 'testnet' (default mainnet) }
+    //
+    // PRE-REQUISITES:
+    //   - mainchain must be configured + binary installed (Card D
+    //     completes mainchain before this endpoint is callable).
+    //   - mainchain.dpos.keystorePasswordEncrypted must be set
+    //     (Arbiter reuses it; Class B sidechains reuse the wallet via
+    //     stdin pipe at start time — but this endpoint doesn't gate on
+    //     keystore presence because Layer 1 strategy can be 'shared'
+    //     with a per-chain password instead).
+    //
+    // IDEMPOTENCY: every sub-step checks if already done (skip + emit
+    // a 'skip' event). Operator can re-run on failure; partial state
+    // resumes from the failing step.
+    //
+    // ERROR HANDLING: each sub-step's failure emits 'error' event then
+    // re-throws; the background job logs + sets a sticky failure
+    // status the GET endpoint surfaces. Operator's wizard sees the
+    // failure step + retries from that step (no full re-run needed).
+    router.post('/install-council', limit('admin'), requireOwner, async (req, res) => {
+        const body = req.body || {};
+        const EnmCrypto = require('../services/EnmCrypto');
+        const ClassBPorts = require('../services/ClassBPorts');
+
+        // Input validation upfront (412 = pre-req fail).
+        if (typeof body.sharedPassword !== 'string'
+            || !EnmCrypto.validatePasswordComplexity(body.sharedPassword)) {
+            return res.status(400).json(errorBody(
+                'install-council: sharedPassword required, 16+ chars with '
+                + 'upper + lower + digit + non-alnum (EnmCrypto.generatePassword '
+                + 'produces a compliant random).',
+            ));
+        }
+        const rewardCheck = EnmCrypto.validateEthAddress(body.sharedRewardAddress || '');
+        if (!rewardCheck.valid) {
+            return res.status(400).json(errorBody(
+                `install-council: sharedRewardAddress: ${rewardCheck.warning}`,
+            ));
+        }
+        const miningCheck = EnmCrypto.validateElaAddress(body.arbiterMiningAddress || '');
+        if (!miningCheck.valid) {
+            return res.status(400).json(errorBody(
+                `install-council: arbiterMiningAddress: ${miningCheck.warning}`,
+            ));
+        }
+        const activeNet = body.activeNet === 'testnet' ? 'testnet' : 'mainnet';
+
+        // Pre-req: mainchain must exist + be installed.
+        const cfg = await ConfigStore.load();
+        if (!cfg.chains || !cfg.chains.mainchain) {
+            return res.status(412).json(errorBody(
+                'install-council: mainchain not yet configured. Finish '
+                + 'the mainchain setup wizard (Cards B-D) before running '
+                + 'the Council expansion.',
+            ));
+        }
+
+        // Return 202 immediately + run the orchestrator in the background.
+        // The wizard subscribes to SSE topic `setup:council:install` for
+        // live progress + polls GET /setup/install-council/status for
+        // the final result.
+        res.status(202).json(successBody({
+            started: true,
+            sseTopic: 'setup:council:install',
+            statusEndpoint: '/api/enm/setup/install-council/status',
+        }));
+
+        // Pull SSE handle from ChainRegistry — same pattern as the
+        // SetupConversation's existing SSE-driven progress wiring.
+        let sseHub = null;
+        try {
+            const ChainRegistry = require('../services/ChainRegistry');
+            sseHub = ChainRegistry.getSseHub();
+        } catch (_) { /* SSE optional; status endpoint still works */ }
+
+        // Run the full orchestrator. Catches all errors + records
+        // them in the install-council job state so the GET status
+        // endpoint surfaces them to the wizard.
+        runCouncilInstall({
+            extensionHandle,
+            cfg,
+            inputs: {
+                sharedPassword:       body.sharedPassword,
+                sharedRewardAddress:  rewardCheck.normalized || body.sharedRewardAddress,
+                arbiterMiningAddress: miningCheck.normalized || body.arbiterMiningAddress,
+                activeNet,
+            },
+            sseHub,
+        }).catch((err) => {
+            extensionHandle.log.error(
+                `${ENM_LOG_PREFIX} install-council orchestrator crashed: ${err.message}`,
+            );
+        });
+    });
+
+    // beta.0.4.4 — GET /api/enm/setup/install-council/status —
+    // expose the orchestrator's current job state. The wizard polls
+    // this as a fallback when SSE isn't connected; SSE is the
+    // primary live channel.
+    router.get('/install-council/status', limit('read'), async (req, res) => {
+        if (!readActorWallet(req)) {
+            return res.status(401).json(errorBody('Authentication required.'));
+        }
+        const state = getCouncilInstallState();
+        return res.json(successBody(state));
+    });
+
     router.post('/install-node-runtime', limit('admin'), requireOwner, async (req, res) => {
         try {
             const NodeJsRuntime = require('../services/NodeJsRuntime');
@@ -1447,6 +1568,375 @@ async function upsertSetupState(db, walletAddress, fields) {
     );
 }
 
+// ============================================================
+// beta.0.4.4 — Council install orchestrator
+// ============================================================
+
+/**
+ * In-memory state for the install-council job. There's only ever one
+ * running at a time per ENM process (single Council operator per
+ * install), so a module-level singleton is fine. Wizard fetches via
+ * GET /install-council/status; SSE drives live updates.
+ */
+let _councilInstallState = {
+    running: false,
+    startedAt: null,
+    finishedAt: null,
+    success: false,
+    error: null,
+    currentStep: null,    // string label of the current step
+    completedSteps: [],   // array of step labels that succeeded
+    totalSteps: 0,
+};
+
+function getCouncilInstallState() {
+    return Object.assign({}, _councilInstallState, {
+        completedSteps: _councilInstallState.completedSteps.slice(),
+    });
+}
+
+/**
+ * Run the full Council install pipeline.
+ *
+ * Steps (idempotent — each checks if already done):
+ *   1.  POST council-strategy (Layer 1: shared password + reward)
+ *   2.  install-class-b esc  + binary download
+ *   3.  install-class-b eid  + binary download
+ *   4.  install-class-b pg   + binary download (operator may opt-out
+ *       in a future flag; for v0.4.4 we install all 3)
+ *   5.  install-node-runtime (skip if host has Node 18+)
+ *   6.  download oracle scripts (ESC + EID + PG)
+ *   7.  install-class-c esc-oracle
+ *   8.  install-class-c eid-oracle
+ *   9.  install-class-c pg-oracle
+ *   10. install-class-d arbiter + arbiter binary
+ *   11. start mainchain + esc + eid + pg + arbiter + 3 oracles
+ *
+ * @param {object} args
+ * @param {object} args.extensionHandle
+ * @param {object} args.cfg                   pre-loaded ConfigStore.load()
+ * @param {object} args.inputs                { sharedPassword, sharedRewardAddress, arbiterMiningAddress, activeNet }
+ * @param {object|null} args.sseHub
+ */
+async function runCouncilInstall(args) {
+    const { extensionHandle, inputs, sseHub } = args;
+    const log = extensionHandle.log;
+    const EnmCrypto = require('../services/EnmCrypto');
+    const ClassBPorts = require('../services/ClassBPorts');
+    const NodeJsRuntime = require('../services/NodeJsRuntime');
+    const OracleScriptDownloader = require('../services/OracleScriptDownloader');
+    const ChainRegistry = require('../services/ChainRegistry');
+
+    if (_councilInstallState.running) {
+        throw new Error('install-council: another job is already running');
+    }
+
+    // Static step plan — keep in sync with the wizard's stepper UI.
+    const PLAN = [
+        'council-strategy',
+        'install-esc-cfg',     'install-esc-binary',
+        'install-eid-cfg',     'install-eid-binary',
+        'install-pg-cfg',      'install-pg-binary',
+        'install-node-runtime',
+        'download-oracle-scripts',
+        'install-esc-oracle',
+        'install-eid-oracle',
+        'install-pg-oracle',
+        'install-arbiter-cfg', 'install-arbiter-binary',
+        'start-chains',
+    ];
+
+    _councilInstallState = {
+        running: true,
+        startedAt: Date.now(),
+        finishedAt: null,
+        success: false,
+        error: null,
+        currentStep: null,
+        completedSteps: [],
+        totalSteps: PLAN.length,
+    };
+
+    function emit(step, status, message) {
+        const payload = {
+            step,
+            status,                          // 'start' | 'skip' | 'done' | 'error'
+            message: message || '',
+            total: PLAN.length,
+            completed: _councilInstallState.completedSteps.length,
+            percent: Math.round(
+                (_councilInstallState.completedSteps.length / PLAN.length) * 100,
+            ),
+            ts: Date.now(),
+        };
+        if (sseHub && typeof sseHub.publish === 'function') {
+            try { sseHub.publish('setup:council:install', payload); }
+            catch (_) { /* SSE best-effort */ }
+        }
+        log.info(`${ENM_LOG_PREFIX} install-council ${step}: ${status}`
+            + (message ? ` — ${message}` : ''));
+    }
+
+    async function runStep(step, fn) {
+        _councilInstallState.currentStep = step;
+        emit(step, 'start');
+        try {
+            const r = await fn();
+            _councilInstallState.completedSteps.push(step);
+            emit(step, r && r.skipped ? 'skip' : 'done', r && r.message);
+            return r;
+        } catch (err) {
+            const msg = err && err.message ? err.message : String(err);
+            emit(step, 'error', msg);
+            _councilInstallState.error = `${step}: ${msg}`;
+            throw err;
+        }
+    }
+
+    try {
+        // ---- STEP 1 — Layer 1 council strategy ----
+        await runStep('council-strategy', async () => {
+            const cfg2 = await ConfigStore.load();
+            cfg2.global = cfg2.global || {};
+            const c = cfg2.global.council = cfg2.global.council || {};
+            if (c.passwordStrategy === 'shared'
+                && c.minerAddressStrategy === 'shared'
+                && c.sharedPasswordEncrypted && c.sharedMinerAddress) {
+                return { skipped: true, message: 'already set' };
+            }
+            c.passwordStrategy = 'shared';
+            c.sharedPasswordEncrypted = EnmCrypto.encrypt(inputs.sharedPassword);
+            c.minerAddressStrategy = 'shared';
+            c.sharedMinerAddress = inputs.sharedRewardAddress;
+            c.setupCompletedAt = Date.now();
+            await ConfigStore.save(cfg2);
+            return { message: 'shared strategy saved' };
+        });
+
+        // ---- STEPS 2-7 — ESC + EID + PG cfg + binary download ----
+        for (const chainId of ['esc', 'eid', 'pg']) {
+            await runStep(`install-${chainId}-cfg`, async () => {
+                const cfg2 = await ConfigStore.load();
+                if (cfg2.chains && cfg2.chains[chainId]) {
+                    return { skipped: true, message: 'cfg already present' };
+                }
+                cfg2.chains = cfg2.chains || {};
+                const ports = ClassBPorts.portsFor(chainId, inputs.activeNet);
+                cfg2.chains[chainId] = {
+                    enabled: false,
+                    binaryPath: '',
+                    binaryVersion: '',
+                    activeNet: inputs.activeNet,
+                    ports,
+                    pbft: { usesMainchainKeystore: true, ipAddress: null },
+                    miner: {
+                        enabled: true,
+                        rewardAddress: inputs.sharedRewardAddress,
+                        rewardAddressSource: 'shared',
+                        evmKeystoreAddr: '',
+                        evmKeystorePasswordEncrypted:
+                            (cfg2.global && cfg2.global.council
+                                && cfg2.global.council.sharedPasswordEncrypted) || '',
+                        threads: 1,
+                    },
+                    sync: { mode: 'fast' },
+                    bootnodes: [],
+                    healing: { enabledRules: {} },
+                    binarySha256Expected: '',
+                };
+                await ConfigStore.save(cfg2);
+                try { ChainRegistry.registerConfiguredAdapters({ cfg: cfg2 }); }
+                catch (_) { /* registration best-effort */ }
+                return { message: `cfg.chains.${chainId} written` };
+            });
+            await runStep(`install-${chainId}-binary`, async () => {
+                const cfg2 = await ConfigStore.load();
+                if (cfg2.chains[chainId] && cfg2.chains[chainId].binaryPath) {
+                    return { skipped: true, message: 'binary already on disk' };
+                }
+                const dl = ChainRegistry.getBinaryDownloader();
+                await dl.start(chainId);
+                // Wait for binary install to finish (poll every 2s).
+                await waitForBinaryInstall(dl, chainId, log);
+                // Persist binaryPath into cfg.
+                const status = dl.getStatus(chainId);
+                if (!status || status.phase !== 'done' || !status.binaryPath) {
+                    throw new Error(`binary install ended with phase=${status && status.phase}`);
+                }
+                const cfg3 = await ConfigStore.load();
+                cfg3.chains[chainId].binaryPath = status.binaryPath;
+                cfg3.chains[chainId].binaryVersion = status.version || '';
+                await ConfigStore.save(cfg3);
+                return { message: `binary at ${status.binaryPath}` };
+            });
+        }
+
+        // ---- STEP 8 — Node.js runtime (skip if host has v18+) ----
+        await runStep('install-node-runtime', async () => {
+            const found = await NodeJsRuntime.resolveAny();
+            if (found && found.source === 'host') {
+                return { skipped: true, message: `host has ${found.version.raw} at ${found.path}` };
+            }
+            if (found && found.source === 'local') {
+                return { skipped: true, message: `local install present (${found.version.raw})` };
+            }
+            const r = await NodeJsRuntime.installLocal({
+                onProgress: (m) => log.info(`${ENM_LOG_PREFIX} node-runtime: ${m}`),
+            });
+            return { message: `installed ${r.version.raw} at ${r.path}` };
+        });
+
+        // ---- STEP 9 — Download oracle scripts ----
+        const scriptPaths = {};
+        await runStep('download-oracle-scripts', async () => {
+            const paths = await OracleScriptDownloader.downloadAll({
+                onProgress: (m) => log.info(`${ENM_LOG_PREFIX} oracle-scripts: ${m}`),
+            });
+            Object.assign(scriptPaths, paths);
+            return { message: `downloaded ${Object.keys(paths).length} script(s)` };
+        });
+
+        // ---- STEPS 10-12 — Class C oracles ----
+        for (const oracleId of ['esc-oracle', 'eid-oracle', 'pg-oracle']) {
+            await runStep(`install-${oracleId}`, async () => {
+                const cfg2 = await ConfigStore.load();
+                if (cfg2.chains && cfg2.chains[oracleId]) {
+                    return { skipped: true, message: 'cfg already present' };
+                }
+                const parent = oracleId === 'esc-oracle' ? 'esc'
+                             : oracleId === 'eid-oracle' ? 'eid' : 'pg';
+                const portMap = { 'esc-oracle': 20632, 'eid-oracle': 20642, 'pg-oracle': 20672 };
+                const port = inputs.activeNet === 'testnet'
+                    ? portMap[oracleId] + 1000 : portMap[oracleId];
+                const runtime = await NodeJsRuntime.resolveAny();
+                if (!runtime) {
+                    throw new Error('no Node.js runtime resolvable (step 8 should have ensured one)');
+                }
+                cfg2.chains = cfg2.chains || {};
+                cfg2.chains[oracleId] = {
+                    enabled: false,
+                    binaryPath: runtime.path,
+                    binaryVersion: runtime.version.raw,
+                    activeNet: inputs.activeNet,
+                    parentChainId: parent,
+                    scriptPath: OracleScriptDownloader.scriptsDir(),
+                    nodejsVersion: NodeJsRuntime.PINNED_VERSION,
+                    ports: { httpRpc: port },
+                    parent: { chainRpcUrl: '', mainchainRpcUrl: '' },
+                    healing: { enabledRules: {} },
+                };
+                await ConfigStore.save(cfg2);
+                try { ChainRegistry.registerConfiguredAdapters({ cfg: cfg2 }); }
+                catch (_) { /* best-effort */ }
+                return { message: `cfg.chains.${oracleId} written (parent=${parent}, port=${port})` };
+            });
+        }
+
+        // ---- STEP 13 — Arbiter cfg ----
+        await runStep('install-arbiter-cfg', async () => {
+            const cfg2 = await ConfigStore.load();
+            if (cfg2.chains && cfg2.chains.arbiter) {
+                return { skipped: true, message: 'cfg already present' };
+            }
+            const ports = inputs.activeNet === 'testnet'
+                ? { rpc: 21536, p2p: 21538 }
+                : { rpc: 20536, p2p: 20538 };
+            cfg2.chains = cfg2.chains || {};
+            cfg2.chains.arbiter = {
+                enabled: false,
+                binaryPath: '',
+                binaryVersion: '',
+                activeNet: inputs.activeNet,
+                ports,
+                wallet: { usesMainchainKeystore: true, passwordSource: 'mainchain-ela-txt' },
+                mining: { miningAddress: inputs.arbiterMiningAddress, sideChainPowFeeEla: 0.1 },
+                crossChain: { sideNodeList: [], syncIntervalMs: 1000 },
+                healing: { enabledRules: {} },
+            };
+            await ConfigStore.save(cfg2);
+            try { ChainRegistry.registerConfiguredAdapters({ cfg: cfg2 }); }
+            catch (_) { /* best-effort */ }
+            return { message: 'cfg.chains.arbiter written' };
+        });
+
+        // ---- STEP 14 — Arbiter binary ----
+        await runStep('install-arbiter-binary', async () => {
+            const cfg2 = await ConfigStore.load();
+            if (cfg2.chains.arbiter && cfg2.chains.arbiter.binaryPath) {
+                return { skipped: true, message: 'binary already on disk' };
+            }
+            const dl = ChainRegistry.getBinaryDownloader();
+            await dl.start('arbiter');
+            await waitForBinaryInstall(dl, 'arbiter', log);
+            const status = dl.getStatus('arbiter');
+            if (!status || status.phase !== 'done' || !status.binaryPath) {
+                throw new Error(`arbiter binary install ended with phase=${status && status.phase}`);
+            }
+            const cfg3 = await ConfigStore.load();
+            cfg3.chains.arbiter.binaryPath = status.binaryPath;
+            cfg3.chains.arbiter.binaryVersion = status.version || '';
+            await ConfigStore.save(cfg3);
+            return { message: `binary at ${status.binaryPath}` };
+        });
+
+        // ---- STEP 15 — Start all chains (DAG order: A → B → C → D) ----
+        await runStep('start-chains', async () => {
+            const cfg2 = await ConfigStore.load();
+            // Flip enabled=true so AUTOSTART/restart logic respects it.
+            for (const cid of ['esc', 'eid', 'pg', 'esc-oracle', 'eid-oracle', 'pg-oracle', 'arbiter']) {
+                if (cfg2.chains[cid]) { cfg2.chains[cid].enabled = true; }
+            }
+            await ConfigStore.save(cfg2);
+
+            const startOrder = ['esc', 'eid', 'pg', 'esc-oracle', 'eid-oracle', 'pg-oracle', 'arbiter'];
+            const started = [];
+            for (const cid of startOrder) {
+                try {
+                    const adapter = ChainRegistry.getAdapter(cid);
+                    const chainCfg = cfg2.chains[cid];
+                    await adapter.start(chainCfg);
+                    started.push(cid);
+                } catch (err) {
+                    log.warn(`${ENM_LOG_PREFIX} install-council start ${cid} failed: ${err.message} `
+                        + '(non-fatal; F1 self-heal will retry)');
+                }
+            }
+            return { message: `${started.length}/${startOrder.length} chains started` };
+        });
+
+        _councilInstallState.success = true;
+    } finally {
+        _councilInstallState.running = false;
+        _councilInstallState.finishedAt = Date.now();
+        emit('finalize', _councilInstallState.success ? 'done' : 'error',
+            _councilInstallState.error || '');
+    }
+}
+
+/**
+ * Wait until the EnmBinaryDownloader's job for a chainId finishes
+ * (phase='done' or 'failed'). Polls every 2s, times out after 15min.
+ *
+ * @param {object} dl   EnmBinaryDownloader
+ * @param {string} chainId
+ * @param {object} log
+ */
+async function waitForBinaryInstall(dl, chainId, log) {
+    const startedAt = Date.now();
+    const TIMEOUT_MS = 15 * 60_000;
+    while (Date.now() - startedAt < TIMEOUT_MS) {
+        const status = dl.getStatus(chainId);
+        if (status && status.phase === 'done') { return status; }
+        if (status && status.phase === 'failed') {
+            throw new Error(`binary install failed: ${status.error || 'unknown'}`);
+        }
+        await new Promise((r) => setTimeout(r, 2000));
+    }
+    throw new Error(`binary install timed out after ${TIMEOUT_MS / 60000} min`);
+}
+
 module.exports = {
     build,
+    // Exported for tests.
+    _internal: { getCouncilInstallState, runCouncilInstall, waitForBinaryInstall },
 };

@@ -84,6 +84,17 @@ const CHAINS = Object.freeze({
         description: 'PG Chain (closed-source) — operator-supplied SHA256 manifest required (M5.1).',
         fallbackVersion: 'v1.0.0',
     },
+    // beta.0.4.4 — Arbiter binary entry. node.sh's URL slug for the
+    // Arbiter is 'elastos-arbiter' (per build/skeleton/node.sh §arbiter).
+    // No CLI — Arbiter is a single binary that reads its config.json
+    // from cwd. Used by the install-council orchestrator step 12.
+    arbiter: {
+        urlSlug: 'elastos-arbiter',
+        binary:  'arbiter',
+        cli:     null,
+        description: 'Arbiter — cross-chain signer (multisig 1-of-N across all 4 chains).',
+        fallbackVersion: 'v1.4.1',
+    },
     // ECO entry removed per H3 (ECO chain is permanently out-of-scope
     // for ENM; the plan §10 hard rules forbid ECO support).
 });

@@ -61,7 +61,11 @@ function looksLikeEvm(addr) {
 // fixed-name (not parameterized) — there's a single Council scope
 // per ENM install. Future per-class topics (e.g. council:dpos)
 // would extend this disjunction.
-const TOPIC_REGEX = /^(?:system|notifications|audit|chains:[a-z0-9-]+:(?:status|logs|height)|setup:(?:install|bootstrap):[a-z0-9-]+|council:overview)$/;
+// beta.0.4.4 — `setup:council:install` added. The install-council
+// orchestrator (routes/setup.js runCouncilInstall) emits per-step
+// progress on this topic; the wizard's Card F stepper subscribes for
+// live updates. Fixed name (single orchestrator per ENM install).
+const TOPIC_REGEX = /^(?:system|notifications|audit|chains:[a-z0-9-]+:(?:status|logs|height)|setup:(?:install|bootstrap):[a-z0-9-]+|council:overview|setup:council:install)$/;
 const MAX_TOPICS_PER_REQUEST = 16;
 
 /**

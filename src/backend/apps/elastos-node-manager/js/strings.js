@@ -191,6 +191,37 @@
                     sub_done:        'Your ElastOS is now a node and is starting up.',
                     cta:             'Take me home',
                 },
+                // beta.0.4.4 — Council install cards (E + F). Reachable
+                // only when the operator picked "Council node" on
+                // Card A AND mainchain setup (Cards B-D) completed.
+                card_e: {
+                    title: 'Council inputs',
+                    sub:   'Three inputs ENM needs to install the multi-chain stack. '
+                         + 'You can change any of these later via Settings.',
+                    pw_label:        'Shared EVM keystore password',
+                    pw_hint:         '16+ characters; must include upper, lower, digit, and a non-alphanumeric. '
+                                   + 'Encrypts the EVM keystores for ESC/EID/PG.',
+                    reward_label:    'Shared EVM reward address',
+                    reward_hint:     'Ethereum-style address that receives EVM block rewards. '
+                                   + 'Paste from your wallet — ENM never holds the private key.',
+                    mining_label:    'Arbiter mining address (ELA mainchain)',
+                    mining_hint:     'ELA mainchain address that funds SideChainPow heartbeats. '
+                                   + 'Distinct from the EVM reward address above.',
+                    cta:             'Install Council stack',
+                },
+                card_f: {
+                    title:           'Installing Council stack',
+                    sub:             'ENM is installing the remaining services. '
+                                   + 'This usually takes 5–10 minutes depending on your network speed. '
+                                   + 'Each step is real progress — not a spinner.',
+                    cta_done:        'Open dashboard',
+                    cta_retry:       'Retry',
+                    cta_working:     'Working…',
+                    summary_done:    'All chains installed. Click Continue to open the dashboard.',
+                    summary_error:   'Install failed at one of the steps above. '
+                                   + 'Click Retry to resume from where it stopped — '
+                                   + 'completed steps are skipped on retry.',
+                },
             },
 
             // v0.5 reset notes:

@@ -6619,6 +6619,131 @@ body[data-enm-overview="1"] .enm-app .enm-tabs {
 }
 
 /* ============================================================
+   beta.0.4.4 — Council install cards (Card E inputs + Card F stepper)
+   ============================================================ */
+
+/* Card E — inputs form */
+.enm-app .enm-council-form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-4, 16px);
+    max-width: 640px;
+    margin: 0 auto;
+}
+.enm-app .enm-council-form-row {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-1, 4px);
+}
+.enm-app .enm-council-form-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+.enm-app .enm-council-form-row input {
+    padding: 8px 12px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color, var(--border-subtle));
+    border-radius: 8px;
+    color: var(--text-primary);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13px;
+}
+.enm-app .enm-council-form-row input:focus {
+    outline: none;
+    border-color: rgba(80, 160, 240, 0.6);
+    box-shadow: 0 0 0 2px rgba(80, 160, 240, 0.2);
+}
+.enm-app .enm-council-form-hint {
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--text-muted, var(--text-primary));
+}
+.enm-app .enm-council-form-error {
+    font-size: 12px;
+    color: var(--state-error, #ef5350);
+}
+
+/* Card F — stepper */
+.enm-app .enm-council-stepper {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 var(--sp-4, 16px) 0;
+    max-width: 640px;
+    margin-left: auto;
+    margin-right: auto;
+}
+.enm-app .enm-council-step {
+    display: grid;
+    grid-template-columns: 24px 1fr auto;
+    gap: var(--sp-3, 12px);
+    align-items: center;
+    padding: var(--sp-2, 8px) var(--sp-3, 12px);
+    border-bottom: 1px solid var(--border-color, var(--border-subtle));
+    font-size: 13px;
+    color: var(--text-primary);
+}
+.enm-app .enm-council-step:last-child {
+    border-bottom: none;
+}
+.enm-app .enm-council-step-icon {
+    font-size: 14px;
+    text-align: center;
+    color: var(--text-muted, var(--text-primary));
+}
+.enm-app .enm-council-step[data-status="start"] .enm-council-step-icon {
+    color: var(--state-syncing, #ffb74d);
+    animation: enm-overview-pulse 1.4s ease-in-out infinite;
+}
+.enm-app .enm-council-step[data-status="done"] .enm-council-step-icon {
+    color: var(--state-healthy, #4caf50);
+}
+.enm-app .enm-council-step[data-status="skip"] .enm-council-step-icon {
+    color: var(--text-muted, var(--text-primary));
+    opacity: 0.7;
+}
+.enm-app .enm-council-step[data-status="error"] .enm-council-step-icon {
+    color: var(--state-error, #ef5350);
+}
+.enm-app .enm-council-step-label {
+    font-weight: 500;
+}
+.enm-app .enm-council-step-message {
+    font-size: 12px;
+    color: var(--text-muted, var(--text-primary));
+    text-align: right;
+    max-width: 280px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Card F — summary box (overall progress bar + message) */
+.enm-app .enm-council-summary {
+    max-width: 640px;
+    margin: 0 auto;
+    padding: var(--sp-3, 12px);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color, var(--border-subtle));
+    border-radius: 10px;
+}
+.enm-app .enm-council-summary .enm-install-bar-fill {
+    transition: width 300ms ease-out;
+    background: var(--state-syncing, #ffb74d);
+}
+.enm-app .enm-council-summary[data-state="done"] .enm-install-bar-fill {
+    background: var(--state-healthy, #4caf50);
+}
+.enm-app .enm-council-summary[data-state="error"] .enm-install-bar-fill {
+    background: var(--state-error, #ef5350);
+}
+.enm-app .enm-council-summary-text {
+    margin-top: var(--sp-2, 8px);
+    font-size: 13px;
+    color: var(--text-primary);
+}
+
+/* ============================================================
    beta.3.91 (Wave M2.3) — Multi-chain overview pane
    ============================================================
 

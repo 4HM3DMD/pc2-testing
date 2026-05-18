@@ -229,6 +229,10 @@
         else if (card === 'b3') { this._renderCardB3(seq); }
         else if (card === 'c')  { this._renderCardC(seq); }
         else if (card === 'd')  { this._renderCardD(seq); }
+        // beta.0.4.4 — Council expansion cards. Reachable only when
+        // self._goal === 'council' on Card D completion.
+        else if (card === 'e')  { this._renderCardE(seq); }
+        else if (card === 'f')  { this._renderCardF(seq); }
 
         // a11y/focus: every card swap re-renders `_body.innerHTML`,
         // destroying the previously-focused control. Without an
@@ -387,7 +391,13 @@
         var continueBtn = this._continueBtn;
         continueBtn.addEventListener('click', function () {
             if (self._destroyed || !self._stillRendering(seq)) { return; }
-            if (!self._goal || self._goal === 'council') { return; }
+            // beta.0.4.4 — Council picks now have a destination.
+            // Both roles install mainchain first (Cards B → B2 → B3 →
+            // C → D); the Council role continues to Cards E + F after
+            // mainchain completes. Card D's _renderCardD handler
+            // (line ~1245) branches on self._goal to decide between
+            // onComplete (BPoS) and self._goto('e') (Council).
+            if (!self._goal) { return; }
             // alpha.28 enmRunOnce — disable + label-swap while the
             // install request is in flight so double-clicks can't
             // fire /setup/install/mainchain twice.
@@ -1311,7 +1321,14 @@
                 self._continueBtn.addEventListener('click', function onDone() {
                     if (self._destroyed || !self._stillRendering(seq)) { return; }
                     self._continueBtn.removeEventListener('click', onDone);
-                    self.onComplete();
+                    // beta.0.4.4 — branch by setup intent. BPoS lands
+                    // on the dashboard now; Council continues into
+                    // the multi-chain expansion installer (Cards E+F).
+                    if (self._goal === 'council') {
+                        self._goto('e');
+                    } else {
+                        self.onComplete();
+                    }
                 });
             })
             .catch(function (err) {
@@ -1326,6 +1343,292 @@
                     self._renderCardD(self._cardSeq);
                 });
             });
+    };
+
+    // ====================================================================
+    // beta.0.4.4 — Card E: Council inputs (3 form fields)
+    // ====================================================================
+    //
+    // Card E is reachable only when goal === 'council' AND Card D has
+    // completed (mainchain is up). Collects 3 inputs upfront so the
+    // install-council orchestrator (Card F) can run unattended:
+    //
+    //   1. sharedPassword — encrypts the EVM keystores (ESC/EID/PG)
+    //      and is reused by Arbiter via the mainchain keystore. 16+
+    //      chars, all 4 complexity classes.
+    //   2. sharedRewardAddress — Ethereum address that receives EVM
+    //      block rewards (0x + 40 hex). Validated against EIP-55 on
+    //      the server side.
+    //   3. arbiterMiningAddress — ELA mainchain address that funds
+    //      the SideChainPow heartbeats (E... + 33 chars base58).
+    //
+    // All inputs are validated client-side before Continue. Backend
+    // re-validates in install-council and 400s on any miss.
+
+    /** @private */
+    SetupConversation.prototype._renderCardE = function (seq) {
+        var t = root.enmT;
+        var heading = t('friendly.setup.card_e.title') || 'Council inputs';
+        var sub = t('friendly.setup.card_e.sub')
+            || 'Three inputs ENM needs to install the multi-chain stack. '
+            + 'You can change any of these later via Settings.';
+        this.root.setAttribute('aria-label', heading);
+        this._body.innerHTML = ''
+            + '<h2 class="enm-wiz-heading" id="enm-wiz-heading-e">' + escapeHtml(heading) + '</h2>'
+            + '<p class="enm-wiz-para">' + escapeHtml(sub) + '</p>'
+            + '<form class="enm-council-form" novalidate>'
+            +   '<label class="enm-council-form-row">'
+            +     '<span class="enm-council-form-label">Shared EVM keystore password</span>'
+            +     '<input type="password" id="enm-council-pw" autocomplete="new-password" '
+            +       'spellcheck="false" required minlength="16">'
+            +     '<span class="enm-council-form-hint">16+ chars, must include upper + lower + digit + non-alnum. '
+            +       'Encrypts the EVM keystores for ESC/EID/PG.</span>'
+            +     '<span class="enm-council-form-error" data-for="pw" hidden></span>'
+            +   '</label>'
+            +   '<label class="enm-council-form-row">'
+            +     '<span class="enm-council-form-label">Shared EVM reward address</span>'
+            +     '<input type="text" id="enm-council-reward" spellcheck="false" autocomplete="off" '
+            +       'placeholder="0x…40 hex characters" required>'
+            +     '<span class="enm-council-form-hint">Ethereum-style address that receives EVM block rewards. '
+            +       'Paste from your wallet — ENM never holds the private key (H7).</span>'
+            +     '<span class="enm-council-form-error" data-for="reward" hidden></span>'
+            +   '</label>'
+            +   '<label class="enm-council-form-row">'
+            +     '<span class="enm-council-form-label">Arbiter mining address (ELA mainchain)</span>'
+            +     '<input type="text" id="enm-council-mining" spellcheck="false" autocomplete="off" '
+            +       'placeholder="E…34 chars base58 (starts with E for mainnet, 4 for testnet)" required>'
+            +     '<span class="enm-council-form-hint">ELA mainchain address that funds SideChainPow '
+            +       'heartbeats. Distinct from the EVM reward address above.</span>'
+            +     '<span class="enm-council-form-error" data-for="mining" hidden></span>'
+            +   '</label>'
+            + '</form>';
+        var self = this;
+        var pwEl = this._body.querySelector('#enm-council-pw');
+        var rewardEl = this._body.querySelector('#enm-council-reward');
+        var miningEl = this._body.querySelector('#enm-council-mining');
+
+        function showError(field, msg) {
+            var el = self._body.querySelector('.enm-council-form-error[data-for="' + field + '"]');
+            if (el) { el.textContent = msg; el.hidden = !msg; }
+        }
+        function clearErrors() {
+            ['pw', 'reward', 'mining'].forEach(function (f) { showError(f, ''); });
+        }
+        function validatePassword(s) {
+            if (typeof s !== 'string' || s.length < 16) {
+                return 'Must be 16+ characters.';
+            }
+            if (!/[A-Z]/.test(s)) return 'Missing an uppercase letter.';
+            if (!/[a-z]/.test(s)) return 'Missing a lowercase letter.';
+            if (!/[0-9]/.test(s)) return 'Missing a digit.';
+            if (!/[^A-Za-z0-9]/.test(s)) return 'Missing a special character (e.g. ! @ #).';
+            return null;
+        }
+        function validateEth(s) {
+            if (typeof s !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(s)) {
+                return 'Must be 0x + 40 hexadecimal characters.';
+            }
+            return null;
+        }
+        function validateEla(s) {
+            if (typeof s !== 'string' || !/^[E4][1-9A-HJ-NP-Za-km-z]{33}$/.test(s)) {
+                return 'Must start with E (mainnet) or 4 (testnet), 34 chars base58check.';
+            }
+            return null;
+        }
+
+        this._cancelBtn.hidden = true;
+        this._continueBtn.hidden = false;
+        this._continueBtn.disabled = false;
+        this._continueBtn.textContent = 'Install Council stack';
+
+        this._continueBtn.addEventListener('click', function () {
+            if (self._destroyed || !self._stillRendering(seq)) { return; }
+            clearErrors();
+            var pw = pwEl.value;
+            var reward = rewardEl.value.trim();
+            var mining = miningEl.value.trim();
+            var pwErr = validatePassword(pw);
+            var rewardErr = validateEth(reward);
+            var miningErr = validateEla(mining);
+            if (pwErr) { showError('pw', pwErr); }
+            if (rewardErr) { showError('reward', rewardErr); }
+            if (miningErr) { showError('mining', miningErr); }
+            if (pwErr || rewardErr || miningErr) { return; }
+            // Stash inputs for Card F's POST.
+            self._councilInputs = {
+                sharedPassword: pw,
+                sharedRewardAddress: reward,
+                arbiterMiningAddress: mining,
+                activeNet: 'mainnet',
+            };
+            self._goto('f');
+        });
+    };
+
+    // ====================================================================
+    // beta.0.4.4 — Card F: Council install progress (stepper)
+    // ====================================================================
+    //
+    // Card F is the operator-facing surface for the install-council
+    // orchestrator. POSTs the inputs from Card E to /setup/install-
+    // council, then subscribes to SSE topic `setup:council:install`
+    // and renders each step as a row in a stepper:
+    //
+    //   ◯ Council strategy (Layer 1)
+    //   ◯ Smart Chain (ESC) — cfg
+    //   ◯ Smart Chain (ESC) — binary
+    //   ...
+    //
+    // Each row's icon updates on SSE events: spinner during 'start',
+    // checkmark on 'done' or 'skip', red-X on 'error'. Continue button
+    // stays disabled until the orchestrator emits 'finalize done'.
+    //
+    // Honours the operator's feedback that destructive/long actions
+    // must show real progress, not spinners (saved as feedback memory
+    // 2026-05-18 — feedback_destructive_ui_needs_progress.md).
+
+    var COUNCIL_STEP_LABELS = {
+        'council-strategy':       'Council strategy (Layer 1)',
+        'install-esc-cfg':        'Smart Chain (ESC) — config',
+        'install-esc-binary':     'Smart Chain (ESC) — binary',
+        'install-eid-cfg':        'Identity Chain (EID) — config',
+        'install-eid-binary':     'Identity Chain (EID) — binary',
+        'install-pg-cfg':         'PG Chain — config',
+        'install-pg-binary':      'PG Chain — binary',
+        'install-node-runtime':   'Node.js v23.10.0 runtime',
+        'download-oracle-scripts': 'Oracle scripts (crosschain_*.js)',
+        'install-esc-oracle':     'ESC Oracle',
+        'install-eid-oracle':     'EID Oracle',
+        'install-pg-oracle':      'PG Oracle',
+        'install-arbiter-cfg':    'Arbiter — config',
+        'install-arbiter-binary': 'Arbiter — binary',
+        'start-chains':           'Start all chains',
+    };
+    var COUNCIL_STEP_ORDER = Object.keys(COUNCIL_STEP_LABELS);
+
+    /** @private */
+    SetupConversation.prototype._renderCardF = function (seq) {
+        var t = root.enmT;
+        var heading = t('friendly.setup.card_f.title') || 'Installing Council stack';
+        var sub = t('friendly.setup.card_f.sub')
+            || 'ENM is installing the remaining services. This usually takes 5–10 minutes '
+            + 'depending on your network speed. Each step is real progress — not a spinner.';
+        this.root.setAttribute('aria-label', heading);
+        var stepsHtml = COUNCIL_STEP_ORDER.map(function (step) {
+            return '<li class="enm-council-step" data-step="' + escapeHtml(step) + '" data-status="pending">'
+                + '<span class="enm-council-step-icon" aria-hidden="true">◯</span>'
+                + '<span class="enm-council-step-label">' + escapeHtml(COUNCIL_STEP_LABELS[step]) + '</span>'
+                + '<span class="enm-council-step-message"></span>'
+                + '</li>';
+        }).join('');
+        this._body.innerHTML = ''
+            + '<h2 class="enm-wiz-heading" id="enm-wiz-heading-f">' + escapeHtml(heading) + '</h2>'
+            + '<p class="enm-wiz-para">' + escapeHtml(sub) + '</p>'
+            + '<ol class="enm-council-stepper" role="status" aria-live="polite">'
+            +   stepsHtml
+            + '</ol>'
+            + '<div class="enm-council-summary" data-state="running">'
+            +   '<div class="enm-install-bar" aria-hidden="true">'
+            +     '<div class="enm-install-bar-fill" style="width:0%"></div>'
+            +   '</div>'
+            +   '<div class="enm-council-summary-text">Starting…</div>'
+            + '</div>';
+        var self = this;
+
+        this._cancelBtn.hidden = true;
+        this._continueBtn.hidden = false;
+        this._continueBtn.disabled = true;
+        this._continueBtn.textContent = 'Working…';
+
+        function setStep(step, status, message) {
+            var row = self._body.querySelector('.enm-council-step[data-step="' + step + '"]');
+            if (!row) { return; }
+            row.setAttribute('data-status', status);
+            var iconEl = row.querySelector('.enm-council-step-icon');
+            var msgEl = row.querySelector('.enm-council-step-message');
+            if (status === 'start')      { iconEl.textContent = '⏵'; }
+            else if (status === 'done')  { iconEl.textContent = '✓'; }
+            else if (status === 'skip')  { iconEl.textContent = '⊘'; }
+            else if (status === 'error') { iconEl.textContent = '✗'; }
+            if (msgEl) { msgEl.textContent = message || ''; }
+        }
+        function setSummary(state, text, percent) {
+            var box = self._body.querySelector('.enm-council-summary');
+            if (!box) { return; }
+            box.setAttribute('data-state', state);
+            var bar = box.querySelector('.enm-install-bar-fill');
+            if (bar && typeof percent === 'number') { bar.style.width = percent + '%'; }
+            var t = box.querySelector('.enm-council-summary-text');
+            if (t) { t.textContent = text || ''; }
+        }
+
+        // Subscribe to SSE BEFORE POSTing so we don't miss early events.
+        this._teardownCouncilSse = null;
+        if (this.sse && typeof this.sse.subscribe === 'function') {
+            this._teardownCouncilSse = this.sse.subscribe(
+                'setup:council:install',
+                function (payload) {
+                    if (self._destroyed || !self._stillRendering(seq)) { return; }
+                    if (!payload || !payload.step) { return; }
+                    if (payload.step === 'finalize') {
+                        if (payload.status === 'done') {
+                            setSummary('done', 'All chains installed. Click Continue to open the dashboard.', 100);
+                            self._continueBtn.disabled = false;
+                            self._continueBtn.textContent = 'Open dashboard';
+                        } else {
+                            setSummary('error', payload.message || 'Install failed', payload.percent || 0);
+                            self._continueBtn.disabled = false;
+                            self._continueBtn.textContent = 'Retry';
+                        }
+                        return;
+                    }
+                    setStep(payload.step, payload.status, payload.message);
+                    setSummary('running',
+                        payload.message
+                            ? (COUNCIL_STEP_LABELS[payload.step] + ' — ' + payload.message)
+                            : COUNCIL_STEP_LABELS[payload.step] || payload.step,
+                        payload.percent || 0);
+                },
+            );
+        }
+
+        // POST install-council with the inputs from Card E.
+        var inputs = this._councilInputs || {};
+        this.api.post('/setup/install-council', inputs)
+            .then(function (r) {
+                if (self._destroyed) { return; }
+                if (r && r.success === false) {
+                    setSummary('error', r.error || 'Server rejected install', 0);
+                    self._continueBtn.disabled = false;
+                    self._continueBtn.textContent = 'Retry';
+                    return;
+                }
+                // 202 — orchestrator running in background; SSE events
+                // drive progress from here.
+            })
+            .catch(function (err) {
+                if (self._destroyed) { return; }
+                setSummary('error', (err && err.message) || 'Network error', 0);
+                self._continueBtn.disabled = false;
+                self._continueBtn.textContent = 'Retry';
+            });
+
+        // Continue button — either Open dashboard (success) or Retry (error).
+        this._continueBtn.addEventListener('click', function () {
+            if (self._destroyed || !self._stillRendering(seq)) { return; }
+            var state = self._body.querySelector('.enm-council-summary').getAttribute('data-state');
+            if (state === 'done') {
+                if (self._teardownCouncilSse) {
+                    try { self._teardownCouncilSse(); } catch (_) {}
+                }
+                // Clear the setup-intent flag — Council install completed.
+                try { window.localStorage.removeItem('enm:setup-intent'); } catch (_) {}
+                self.onComplete();
+            } else if (state === 'error') {
+                self._renderCardF(self._cardSeq);
+            }
+        });
     };
 
     // ====================================================================
