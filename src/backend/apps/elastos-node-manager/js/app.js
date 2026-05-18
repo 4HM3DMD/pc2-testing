@@ -533,9 +533,22 @@
                 + 'Hard-refresh the page (Ctrl-Shift-R).</p>';
             return;
         }
+        // beta.3.93 (M2.5) — pass chainId + chainClass so the settings
+        // tab dispatches to the right per-class mount entry point.
+        // Falls back to mainchain/A for the legacy single-chain path
+        // (PaneRouter init defaults _activeChainId to 'mainchain'
+        // when nothing's stored in localStorage).
+        var chainId = this._activeChainId || 'mainchain';
+        var CHAIN_CLASS = {
+            mainchain: 'A', esc: 'B', eid: 'B', pg: 'B',
+            'esc-oracle': 'C', 'eid-oracle': 'C', 'pg-oracle': 'C',
+            arbiter: 'D', spv: 'E',
+        };
         this._settingsTab = new root.EnmSettingsTab({
             api: this.services.api,
             notifications: this.services.notifications,
+            chainId: chainId,
+            chainClass: CHAIN_CLASS[chainId] || 'A',
         });
         this._settingsTab.mount(this.els.paneSettings);
     };

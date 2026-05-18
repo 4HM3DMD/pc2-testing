@@ -6742,3 +6742,42 @@ body[data-app-size="compact"] .enm-app .enm-overview-row .enm-overview-uptime,
 body[data-app-size="compact"] .enm-app .enm-overview-row .enm-overview-spark {
     display: none;
 }
+
+/* ============================================================
+   beta.3.93 (Wave M2.5) — Settings class stubs
+   ============================================================
+
+   .enm-settings-class-stub is the Class B/C/D/E placeholder rendered
+   by SettingsTab._mountEvmSidechainSettings / _mountOracleSettings /
+   _mountArbiterSettings / _mountSpvSettings. M3.3/M4.2/M6.4 replace
+   each stub with the real per-class layout; until then a centered
+   card explains the milestone path. */
+.enm-app .enm-settings-class-stub {
+    max-width: 640px;
+    margin: var(--sp-6, 32px) auto;
+    padding: var(--sp-5, 24px);
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color, var(--border-subtle));
+    border-radius: 12px;
+    text-align: center;
+}
+.enm-app .enm-settings-class-stub h2 {
+    margin: 0 0 var(--sp-3, 12px) 0;
+    font-size: 18px;
+    font-weight: 600;
+}
+.enm-app .enm-settings-class-stub p {
+    margin: 0 0 var(--sp-2, 8px) 0;
+    font-size: 14px;
+    line-height: 1.55;
+    color: var(--text-muted, var(--text-primary));
+}
+.enm-app .enm-settings-class-stub p:last-child { margin-bottom: 0; }
+.enm-app .enm-settings-class-stub code {
+    padding: 1px 5px;
+    background: rgba(255, 255, 255, 0.07);
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+}

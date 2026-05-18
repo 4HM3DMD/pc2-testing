@@ -75,14 +75,44 @@
         + ')$'
     );
 
+    // beta.3.93 (Wave M2.5) — frontend mirror of ChainAdapter.CHAIN_ID_
+    // TO_CLASS (M1.1) for static class lookup when the caller hasn't
+    // passed chainClass explicitly. Used by the constructor to route
+    // _renderShell → per-class mount method without waiting for a server
+    // roundtrip. No ECO entry per H3.
+    var CHAIN_ID_TO_CLASS = {
+        mainchain:    'A',
+        esc:          'B',
+        eid:          'B',
+        pg:           'B',
+        'esc-oracle': 'C',
+        'eid-oracle': 'C',
+        'pg-oracle':  'C',
+        arbiter:      'D',
+        spv:          'E',
+    };
+
     function SettingsTab(opts) {
         if (!opts || !opts.api || !opts.notifications) {
             throw new TypeError('SettingsTab: { api, notifications } required');
         }
         this.api = opts.api;
         this.notifications = opts.notifications;
+        // beta.3.93 (M2.5) — per-chain Settings. chainId defaults to
+        // 'mainchain' so the pre-3.93 single-chain callers (which never
+        // passed chainId) keep working. chainClass falls back to the
+        // static lookup so the dispatcher can route to the right per-
+        // class mount method without waiting for a server roundtrip.
+        this.chainId = (opts && opts.chainId) || 'mainchain';
+        this.chainClass = (opts && opts.chainClass)
+            || CHAIN_ID_TO_CLASS[this.chainId]
+            || 'A'; // Defensive — assume Class A behavior when class unknown.
         this.root = document.createElement('section');
         this.root.className = 'enm-settings-wrap';
+        // Surface the active chain + class on the root so CSS can layer
+        // per-class styles + tests can assert which path mounted.
+        this.root.dataset.chainId = this.chainId;
+        this.root.dataset.chainClass = this.chainClass;
         this._cfg = null;
         this._creds = null;
         this._destroyed = false;
@@ -90,13 +120,163 @@
         this._sections = {};
         this._navItems = {};
         this._pills = {};
-        this._renderShell();
+        // beta.3.93 (M2.5) — dispatch by class. Class A keeps the full
+        // existing 7-card settings (network / identity / security /
+        // alerts / storage / advanced / danger). Classes B/C/D/E render
+        // M2.5 stubs explaining the milestone path; M3.3/M4.2/M6.4
+        // replace each stub with the real per-class layout.
+        switch (this.chainClass) {
+            case 'A':
+                this._mountMainchainSettings();
+                break;
+            case 'B':
+                this._mountEvmSidechainSettings(this.chainId);
+                break;
+            case 'C':
+                this._mountOracleSettings(this.chainId);
+                break;
+            case 'D':
+                this._mountArbiterSettings();
+                break;
+            case 'E':
+                this._mountSpvSettings();
+                break;
+            default:
+                this._mountMainchainSettings(); // safest fallback
+                break;
+        }
     }
 
     SettingsTab.prototype.mount = function (parent) {
         parent.appendChild(this.root);
-        this.refresh();
+        // beta.3.93 (M2.5) — only Class A has refresh logic today
+        // (loads /config + /config/rpc/credentials). The B/C/D/E stubs
+        // are static markup; calling refresh() would hit endpoints that
+        // either 501 or aren't relevant. M3.3+ wires per-class refresh.
+        if (this.chainClass === 'A') {
+            this.refresh();
+        }
         return this;
+    };
+
+    /**
+     * beta.3.93 (Wave M2.5) — Class A (mainchain) settings mount.
+     *
+     * Today's full 7-card settings layout: Access · Identity · Security ·
+     * Network · Alerts · Storage · Advanced · Danger. Identical to the
+     * pre-3.93 _renderShell behavior — this is a rename + dispatch
+     * indirection, not a layout change.
+     *
+     * @private
+     */
+    SettingsTab.prototype._mountMainchainSettings = function () {
+        this._renderShell();
+    };
+
+    /**
+     * beta.3.93 (Wave M2.5) — Class B (EVM sidechains: ESC / EID / PG)
+     * settings mount.
+     *
+     * M2.5 ships a stub explaining the milestone path. M3.3 (beta.3.97)
+     * replaces this with the Class B layout per plan §6:
+     *   - Mining & Rewards (miner address, sync mode)
+     *   - PBFT keystore reference (read-only — points at mainchain
+     *     keystore.dat per node.sh:2144 / H23)
+     *   - Advanced (RPC creds, ports)
+     *   - Danger (per-chain wipe)
+     *
+     * @private
+     * @param {string} chainId — esc | eid | pg
+     */
+    SettingsTab.prototype._mountEvmSidechainSettings = function (chainId) {
+        var labels = { esc: 'Smart Chain (ESC)', eid: 'Identity Chain (EID)', pg: 'PG Chain' };
+        var name = labels[chainId] || chainId;
+        this.root.innerHTML = ''
+            + '<div class="enm-settings-class-stub" role="status" aria-live="polite">'
+            + '<h2>' + escapeHtml(name) + ' settings</h2>'
+            + '<p>Class B (EVM sidechain) settings land in <code>M3.3</code> '
+            + '(beta.3.97). The layout will include Mining &amp; Rewards '
+            + '(miner address, sync mode), the PBFT keystore reference '
+            + '(read-only — points at the mainchain keystore), and per-chain '
+            + 'Danger Zone actions.</p>'
+            + '<p>For now use the chain selector above to return to '
+            + '<strong>Main chain</strong>.</p>'
+            + '</div>';
+    };
+
+    /**
+     * beta.3.93 (Wave M2.5) — Class C (Oracle: esc-oracle, eid-oracle,
+     * pg-oracle) settings mount.
+     *
+     * Oracles don't normally appear in the chain selector — they're
+     * surfaced inside their parent chain's pane as a sub-status panel
+     * (plan §3 Smart UI Behavior). This mount exists for completeness
+     * + the rare case of direct deep-linking (e.g. localStorage
+     * tampering). M4.2 (beta.3.2) will deliver the real layout.
+     *
+     * @private
+     * @param {string} chainId — esc-oracle | eid-oracle | pg-oracle
+     */
+    SettingsTab.prototype._mountOracleSettings = function (chainId) {
+        var labels = {
+            'esc-oracle': 'ESC Oracle',
+            'eid-oracle': 'EID Oracle',
+            'pg-oracle':  'PG Oracle',
+        };
+        var name = labels[chainId] || chainId;
+        this.root.innerHTML = ''
+            + '<div class="enm-settings-class-stub" role="status" aria-live="polite">'
+            + '<h2>' + escapeHtml(name) + ' settings</h2>'
+            + '<p>Class C (Oracle) settings land in <code>M4.2</code>. '
+            + 'Oracles are normally surfaced inside their parent chain\'s '
+            + 'pane as a sub-status panel rather than a top-level row '
+            + '(plan §3). The Class C layout will include the Node.js '
+            + 'runtime version pin, oracle script path, and per-oracle '
+            + 'restart controls.</p>'
+            + '</div>';
+    };
+
+    /**
+     * beta.3.93 (Wave M2.5) — Class D (Arbiter cross-chain signer)
+     * settings mount.
+     *
+     * M6.4 (beta.3.13) will deliver the real layout per plan §6:
+     *   - Wallet &amp; Mining (wallet password, mining address, ELA balance)
+     *   - Cross-chain Status reachability matrix (4/4 chains green)
+     *   - Danger Zone (wallet reset — most security-critical key per
+     *     plan §11 risk #1)
+     *
+     * @private
+     */
+    SettingsTab.prototype._mountArbiterSettings = function () {
+        this.root.innerHTML = ''
+            + '<div class="enm-settings-class-stub" role="status" aria-live="polite">'
+            + '<h2>Arbiter settings</h2>'
+            + '<p>Class D (Arbiter cross-chain signer) settings land in '
+            + '<code>M6.4</code>. The layout will include Wallet &amp; '
+            + 'Mining (wallet password, mining address, ELA balance), '
+            + 'the Cross-chain Status reachability matrix, and a Danger '
+            + 'Zone with reset controls.</p>'
+            + '</div>';
+    };
+
+    /**
+     * beta.3.93 (Wave M2.5) — Class E (SPV light client) settings mount.
+     *
+     * SPV is likely deferred indefinitely per plan §12 open question Q8
+     * (recommend defer; selector entry routes to "advanced only" dialog).
+     * If shipped (M6.7), the layout is minimal: ports + filter type.
+     *
+     * @private
+     */
+    SettingsTab.prototype._mountSpvSettings = function () {
+        this.root.innerHTML = ''
+            + '<div class="enm-settings-class-stub" role="status" aria-live="polite">'
+            + '<h2>SPV settings</h2>'
+            + '<p>Class E (SPV light client) is likely deferred '
+            + 'indefinitely (plan §12 Q8). If shipped (<code>M6.7</code>) '
+            + 'the layout will be minimal: RPC port and filter type.</p>'
+            + '</div>';
     };
 
     SettingsTab.prototype.destroy = function () {
