@@ -748,22 +748,74 @@ const DEFAULT_ENABLED = Object.freeze({
     F22: true,  // DPoS state desync (Phase 7) — auto-heal via snapshot restore
 });
 
+// Global rule overrides (apply to all chains). Pre-3.87 this was the only
+// override mechanism. Beta.3.87 adds per-chain overrides below — per-chain
+// wins over global wins over DEFAULT_ENABLED.
 const _enabledOverrides = new Map();
-function setRuleEnabled(ruleId, enabled) {
-    _enabledOverrides.set(ruleId, !!enabled);
+
+// beta.3.87 — Wave M1.3 — per-chain rule overrides keyed by
+// `${chainId}:${ruleId}`. Lookup order in isRuleEnabled(ruleId, chainId):
+//   1. per-chain override (if chainId given AND key present)
+//   2. global override (legacy `cfg.global.healing.enabledRules`)
+//   3. DEFAULT_ENABLED
+//
+// This preserves the pre-3.87 behaviour exactly when callers don't pass
+// chainId (per-chain map is just empty) AND when no per-chain config
+// migration has happened yet (the migration in HealthChecker copies
+// global → cfg.chains.mainchain.healing.enabledRules on first boot).
+const _perChainEnabledOverrides = new Map();
+
+/**
+ * @param {string} ruleId
+ * @param {boolean} enabled
+ * @param {string} [chainId] — beta.3.87 — when provided, sets a per-chain
+ *   override; when omitted, sets the legacy global override. Per-chain
+ *   override wins over global at read time.
+ */
+function setRuleEnabled(ruleId, enabled, chainId) {
+    if (chainId) {
+        _perChainEnabledOverrides.set(`${chainId}:${ruleId}`, !!enabled);
+    } else {
+        _enabledOverrides.set(ruleId, !!enabled);
+    }
 }
-function isRuleEnabled(ruleId) {
+
+/**
+ * @param {string} ruleId
+ * @param {string} [chainId] — beta.3.87 — when provided, per-chain override
+ *   is checked first. Fall-back chain: per-chain → global → DEFAULT_ENABLED.
+ */
+function isRuleEnabled(ruleId, chainId) {
+    if (chainId) {
+        const perChainKey = `${chainId}:${ruleId}`;
+        if (_perChainEnabledOverrides.has(perChainKey)) {
+            return _perChainEnabledOverrides.get(perChainKey);
+        }
+    }
     if (_enabledOverrides.has(ruleId)) return _enabledOverrides.get(ruleId);
     return !!DEFAULT_ENABLED[ruleId];
 }
-function listRuleStates() {
+
+function listRuleStates(chainId) {
     const all = Object.keys(DEFAULT_ENABLED);
     return all.map((ruleId) => ({
         ruleId,
         defaultEnabled: DEFAULT_ENABLED[ruleId],
-        currentlyEnabled: isRuleEnabled(ruleId),
-        overridden: _enabledOverrides.has(ruleId),
+        currentlyEnabled: isRuleEnabled(ruleId, chainId),
+        overridden: chainId
+            ? (_perChainEnabledOverrides.has(`${chainId}:${ruleId}`)
+               || _enabledOverrides.has(ruleId))
+            : _enabledOverrides.has(ruleId),
     }));
+}
+
+/**
+ * beta.3.87 — test helper to wipe per-chain overrides. Used by unit tests
+ * to ensure isolation between cases. Not exported for production callers.
+ * @private
+ */
+function _clearPerChainOverridesForTest() {
+    _perChainEnabledOverrides.clear();
 }
 
 /**
@@ -814,8 +866,45 @@ function runAll(snap) {
         ['F13', detectF13], ['F16', detectF16], ['F18', detectF18],
         ['F19', detectF19],
     ];
+
+    // beta.3.87 — Wave M1.3 — DPoS-only rules. F11 (rotation stuck),
+    // F12 (producer Inactive), F22 (DPoS state desync) ONLY make sense
+    // for Class A chains (ELA mainchain with BPoS). For non-Class-A
+    // chains they short-circuit silently — even though the existing
+    // detectors already self-gate via snap-field presence (snap.bpos,
+    // snap.dposDesyncDetected populated only for mainchain), making
+    // the class gate explicit prevents accidental misfires if a future
+    // Class B/C/D chain populates a bpos-shaped snap field by mistake.
+    //
+    // F18 stays HYBRID (audited): the existing detector dispatches its
+    // own CRITICAL-vs-INFO severity based on `chainConfig.dpos.enableArbiter`.
+    // For Class B chains lacking a `dpos` config block, the BPoS-CRITICAL
+    // path falls through to INFO automatically. No explicit gate needed
+    // for F18 at this layer.
+    //
+    // Import here (function scope) instead of at module top to avoid
+    // a circular: ChainAdapter requires EnmConstants which... actually,
+    // no cycle today; static import safe. But function-scope require
+    // means HealthRules unit tests don't need ChainAdapter loaded.
+    const ChainAdapter = require('./ChainAdapter');
+    const DPOS_ONLY_RULES = new Set(['F11', 'F12', 'F22']);
+    const chainId = snap && snap.chainId;
+    const chainClass = chainId ? ChainAdapter.classOf(chainId) : null;
+
     for (const [ruleId, fn] of detectors) {
-        if (!isRuleEnabled(ruleId)) continue;
+        // Per-chain enable check — falls back to global override then
+        // DEFAULT_ENABLED if no per-chain override exists. Pre-3.87
+        // behaviour preserved when no per-chain override set.
+        if (!isRuleEnabled(ruleId, chainId)) continue;
+        // beta.3.87 — Class A gate for DPoS-only rules. chainClass is
+        // 'A' for mainchain, 'B/C/D/E' for sidechains/oracles/arbiter/spv,
+        // null for unknown chainIds (treat null as legacy-permissive
+        // since pre-3.85 didn't have classification — backward compat).
+        if (DPOS_ONLY_RULES.has(ruleId)
+            && chainClass !== null
+            && chainClass !== 'A') {
+            continue;
+        }
         const d = fn(snap);
         if (d) out.push(d);
     }
@@ -848,4 +937,7 @@ module.exports = {
     CLOCK_SKEW_WARN_MS,
     PRODUCER_INACTIVE_WARN,
     PRODUCER_INACTIVE_CRITICAL,
+    // beta.3.87 — Wave M1.3 — test-only helper to clear per-chain
+    // override state between cases. Not for production callers.
+    _clearPerChainOverridesForTest,
 };

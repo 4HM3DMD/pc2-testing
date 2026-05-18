@@ -70,6 +70,23 @@ const portsSchema = Joi.object({
     dpos:     PORT_RANGE.default(ELA_DEFAULT_PORTS.dpos),
 });
 
+// beta.3.87 — Wave M1.3 — per-chain healing rule overrides. Shape mirrors
+// cfg.global.healing.enabledRules (which becomes legacy fallback). Keys
+// are F-rule IDs (F1..F22) plus AUTOSTART. Values are booleans. Any
+// rule omitted falls back to the global override, then DEFAULT_ENABLED.
+//
+// HealthChecker._loadConfigSafe does a ONE-SHOT migration on first
+// boot under this schema: if cfg.chains.mainchain.healing.enabledRules
+// is absent AND cfg.global.healing.enabledRules has entries, the global
+// map is copied here, an SSE notification fires, and an audit row is
+// written. Operators' existing per-chain toggles survive the upgrade.
+const perChainHealingSchema = Joi.object({
+    enabledRules: Joi.object().pattern(
+        Joi.string().regex(/^(F\d{1,2}|AUTOSTART)$/),
+        Joi.boolean(),
+    ).default({}),
+}).default({});
+
 const mainchainSchema = Joi.object({
     enabled: Joi.boolean().default(true),
     binaryPath: Joi.string().min(1).required(),
@@ -82,6 +99,8 @@ const mainchainSchema = Joi.object({
     memoryLimitMb: Joi.number().integer().min(512).max(32_768).default(4096),
     archiveMode: Joi.boolean().default(false),
     logLevel: Joi.string().valid('debug', 'info', 'warn', 'error').default('info'),
+    // beta.3.87 — per-chain healing rule overrides.
+    healing: perChainHealingSchema,
 });
 
 const globalSchema = Joi.object({

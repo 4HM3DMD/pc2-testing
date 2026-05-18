@@ -822,17 +822,85 @@ class HealthChecker {
                 && cfg.global.notifications.thresholds) {
                 HealthRules.setThresholds(cfg.global.notifications.thresholds);
             }
-            // beta.3.76 — push per-rule enabled overrides into HealthRules
-            // so runAll() honours the operator's toggles. Same idempotent
-            // pattern as the threshold push above. When the operator clears
-            // a toggle by removing the key, the schema defaults to {}, the
-            // rule falls back to DEFAULT_ENABLED, and isRuleEnabled returns
-            // the original default.
+            // beta.3.76 — push GLOBAL per-rule enabled overrides into
+            // HealthRules. Pre-3.87 this was the only path; beta.3.87
+            // retains it as the legacy fallback. Per-chain overrides
+            // (pushed below) take precedence at read time.
             if (cfg && cfg.global && cfg.global.healing
                 && cfg.global.healing.enabledRules) {
                 const map = cfg.global.healing.enabledRules;
                 for (const ruleId of Object.keys(map)) {
                     HealthRules.setRuleEnabled(ruleId, !!map[ruleId]);
+                }
+            }
+            // beta.3.87 — Wave M1.3 — push PER-CHAIN per-rule enabled
+            // overrides into HealthRules. Same idempotent pattern as the
+            // global push above. When the operator clears a per-chain
+            // toggle by removing the key, isRuleEnabled falls back to
+            // the global override, then DEFAULT_ENABLED.
+            if (cfg && cfg.chains) {
+                for (const cId of Object.keys(cfg.chains)) {
+                    const chainCfg = cfg.chains[cId];
+                    if (chainCfg && chainCfg.healing
+                        && chainCfg.healing.enabledRules) {
+                        const map = chainCfg.healing.enabledRules;
+                        for (const ruleId of Object.keys(map)) {
+                            HealthRules.setRuleEnabled(ruleId, !!map[ruleId], cId);
+                        }
+                    }
+                }
+            }
+            // beta.3.87 — Wave M1.3 — ONE-SHOT MIGRATION of legacy
+            // cfg.global.healing.enabledRules → cfg.chains.mainchain.
+            // healing.enabledRules. Only runs once per ENM lifetime
+            // (guarded by an in-process flag — survives until next
+            // reboot). The legacy global key is preserved for one
+            // release as a fallback; M2+ removes it.
+            if (!this._healingRulesMigrationDone) {
+                this._healingRulesMigrationDone = true;
+                try {
+                    const globalRules = cfg && cfg.global && cfg.global.healing
+                        && cfg.global.healing.enabledRules;
+                    const mainchainCfg = cfg && cfg.chains && cfg.chains.mainchain;
+                    if (globalRules && Object.keys(globalRules).length > 0
+                        && mainchainCfg
+                        && (!mainchainCfg.healing
+                            || !mainchainCfg.healing.enabledRules
+                            || Object.keys(mainchainCfg.healing.enabledRules).length === 0)) {
+                        // Need a save — copy globalRules into mainchain.healing.
+                        // ConfigStore is required lazily to avoid the cycle.
+                        const ConfigStore = require('./ConfigStore');
+                        const fresh = await ConfigStore.load();
+                        if (fresh && fresh.chains && fresh.chains.mainchain) {
+                            fresh.chains.mainchain.healing = fresh.chains.mainchain.healing || {};
+                            fresh.chains.mainchain.healing.enabledRules =
+                                Object.assign({}, globalRules);
+                            await ConfigStore.save(fresh, { logger: this.extensionHandle.log });
+                            this.extensionHandle.log.info(
+                                `${ENM_LOG_PREFIX} healing-rules migration (Wave M1.3): copied `
+                                + `${Object.keys(globalRules).length} rule(s) from cfg.global.`
+                                + `healing.enabledRules → cfg.chains.mainchain.healing.enabledRules`,
+                            );
+                            // Best-effort SSE notification so the operator
+                            // sees the migration happened. Don't block on it.
+                            if (this.sseHub && typeof this.sseHub.publish === 'function') {
+                                try {
+                                    this.sseHub.publish('notifications', {
+                                        severity: 'INFO',
+                                        summary: 'Healing rules moved to per-chain Settings',
+                                        detail: 'Your existing rule toggles now live under '
+                                            + 'Settings → Mainchain → Healing. Future per-chain toggles '
+                                            + '(ESC/EID/PG) will be independent.',
+                                        timestamp: Date.now(),
+                                    });
+                                } catch (_) { /* swallow */ }
+                            }
+                        }
+                    }
+                } catch (migErr) {
+                    this.extensionHandle.log.warn(
+                        `${ENM_LOG_PREFIX} healing-rules migration failed (non-fatal): ${migErr.message}`,
+                    );
                 }
             }
             return cfg;
