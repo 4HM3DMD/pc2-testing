@@ -23,6 +23,10 @@ const ChainAdapter = require('./ChainAdapter');
 // overview. Plan §17 Class B row.
 const EscAdapter = require('./EscAdapter');
 const EidAdapter = require('./EidAdapter');
+// beta.0.3.1 (Wave M4.1) — Class C oracles. Same lazy-registration
+// gating; an oracle only joins the registry when its cfg entry exists.
+const EscOracleAdapter = require('./EscOracleAdapter');
+const EidOracleAdapter = require('./EidOracleAdapter');
 const { SelfHealingEngine } = require('./SelfHealingEngine');
 const { HealthChecker } = require('./HealthChecker');
 const { readNodeOwner } = require('../auth/OwnerCheckMiddleware');
@@ -281,10 +285,15 @@ function registerConfiguredAdapters(args) {
         throw new TypeError('registerConfiguredAdapters: { cfg } required');
     }
     const chains = (args.cfg.chains && typeof args.cfg.chains === 'object') ? args.cfg.chains : {};
-    // Map cfg-key → adapter class. Future Class C/D/E entries register
-    // here too once M4/M6 ship; for M3.2 only Class B is wired.
-    const CLASS_B = { esc: EscAdapter, eid: EidAdapter };
-    for (const [chainId, AdapterClass] of Object.entries(CLASS_B)) {
+    // Map cfg-key → adapter class. M3.2 wired Class B; M4.1 adds
+    // Class C oracles. Class D (Arbiter) lands in M6.1.
+    const REGISTRABLE = {
+        esc:          EscAdapter,
+        eid:          EidAdapter,
+        'esc-oracle': EscOracleAdapter,
+        'eid-oracle': EidOracleAdapter,
+    };
+    for (const [chainId, AdapterClass] of Object.entries(REGISTRABLE)) {
         if (!chains[chainId]) continue;          // not installed; skip
         if (adapters.has(chainId)) continue;     // already registered
         try {

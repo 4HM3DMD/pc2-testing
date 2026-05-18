@@ -342,9 +342,29 @@ class NativeProcessService extends EventEmitter {
                 spawnArgs.push(arg);
             }
         }
+        // beta.0.3.1 (Wave M4.1) — chainConfig.spawnEnv support. Oracles
+        // (Class C) need env vars like ENM_PARENT_RPC + ENM_MAINCHAIN_RPC
+        // since their script reads connectivity from env, not config
+        // files. The safe env baseline (PATH/HOME/locale) stays as the
+        // base; spawnEnv extras layer on top with same-key precedence
+        // going to the explicit spawnEnv (so adapters can override TZ,
+        // NODE_OPTIONS, etc.).
+        var childEnv = buildSafeChildEnv();
+        if (chainConfig.spawnEnv && typeof chainConfig.spawnEnv === 'object') {
+            for (const k of Object.keys(chainConfig.spawnEnv)) {
+                const v = chainConfig.spawnEnv[k];
+                if (typeof v !== 'string') {
+                    throw new TypeError(
+                        'NativeProcessService.start: spawnEnv.' + k
+                        + ' must be string, got ' + typeof v,
+                    );
+                }
+                childEnv[k] = v;
+            }
+        }
         const child = spawn(binaryPath, spawnArgs, {
             cwd,
-            env: buildSafeChildEnv(),
+            env: childEnv,
             stdio: ['pipe', 'pipe', 'pipe'],
             detached: true,
         });
