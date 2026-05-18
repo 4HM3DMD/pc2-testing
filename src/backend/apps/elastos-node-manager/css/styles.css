@@ -6543,8 +6543,202 @@ body[data-app-size="compact"] .enm-app .enm-filter-chip {
 }
 
 /* Overview mode body hook (set by PaneRouter._enterOverviewMode /
-   _exitOverviewMode via document.body.dataset.enmOverview). M2.3 will
-   layer overview-specific styles on top of this hook. */
+   _exitOverviewMode via document.body.dataset.enmOverview). */
 body[data-enm-overview="1"] .enm-app .enm-tabs {
+    display: none;
+}
+
+/* ============================================================
+   beta.3.91 (Wave M2.3) — Multi-chain overview pane
+   ============================================================
+
+   Rendered by MultiChainOverviewPane (js/components/
+   multi-chain-overview.js) in pane-dashboard when the chain selector
+   key is 'all'. Replaces the M2.1 stub.
+
+   Layout:
+     enm-overview
+       enm-overview-header   (h2 title + summary line)
+       enm-overview-body
+         enm-overview-class[data-class="A"|"B"|...]  (section per class)
+           h3 class label
+           ul.enm-overview-rows
+             li.enm-overview-row  (one per chain)
+               .enm-overview-dot[.state-running|.state-stopped|...]
+               .enm-overview-name
+               .enm-overview-state
+               .enm-overview-uptime
+               .enm-overview-spark  (EnmSparkline mounted here per-chain)
+               .enm-overview-arrow */
+.enm-app .enm-overview {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: var(--sp-5, 24px) var(--sp-4, 16px);
+}
+.enm-app .enm-overview-header {
+    margin: 0 0 var(--sp-4, 16px) 0;
+    padding-bottom: var(--sp-3, 12px);
+    border-bottom: 1px solid var(--border-color, var(--border-subtle));
+}
+.enm-app .enm-overview-header h2 {
+    margin: 0 0 var(--sp-1, 4px) 0;
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+.enm-app .enm-overview-summary {
+    margin: 0;
+    font-size: 13px;
+    color: var(--text-muted, var(--text-primary));
+}
+.enm-app .enm-overview-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-4, 16px);
+}
+.enm-app .enm-overview-class {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color, var(--border-subtle));
+    border-radius: 10px;
+    padding: var(--sp-3, 12px) var(--sp-4, 16px);
+}
+.enm-app .enm-overview-class > h3 {
+    margin: 0 0 var(--sp-2, 8px) 0;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted, var(--text-primary));
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+.enm-app .enm-overview-rows {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-1, 4px);
+}
+.enm-app .enm-overview-row {
+    display: grid;
+    grid-template-columns: 16px minmax(150px, 1fr) 100px 60px 1fr 16px;
+    align-items: center;
+    gap: var(--sp-3, 12px);
+    padding: var(--sp-2, 8px) var(--sp-3, 12px);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background-color 120ms, border-color 120ms;
+    color: var(--text-primary);
+}
+.enm-app .enm-overview-row:hover,
+.enm-app .enm-overview-row:focus-visible {
+    background: rgba(255, 255, 255, 0.04);
+    border-color: var(--border-color, var(--border-subtle));
+    outline: none;
+}
+.enm-app .enm-overview-row:focus-visible {
+    box-shadow: 0 0 0 2px rgba(80, 160, 240, 0.4);
+}
+.enm-app .enm-overview-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--text-muted, #888);
+    flex: 0 0 auto;
+}
+.enm-app .enm-overview-dot.state-running {
+    background: var(--state-healthy, #4caf50);
+    box-shadow: 0 0 6px rgba(76, 175, 80, 0.5);
+}
+.enm-app .enm-overview-dot.state-starting {
+    background: var(--state-syncing, #ffb74d);
+    animation: enm-overview-pulse 1.4s ease-in-out infinite;
+}
+.enm-app .enm-overview-dot.state-stopped {
+    background: var(--state-error, #ef5350);
+}
+.enm-app .enm-overview-dot.state-disabled,
+.enm-app .enm-overview-dot.state-unconfigured,
+.enm-app .enm-overview-dot.state-unknown {
+    background: var(--text-muted, #888);
+    opacity: 0.6;
+}
+@keyframes enm-overview-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.35; }
+}
+.enm-app .enm-overview-name {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.enm-app .enm-overview-state {
+    font-size: 12px;
+    color: var(--text-muted, var(--text-primary));
+}
+.enm-app .enm-overview-uptime {
+    font-size: 12px;
+    color: var(--text-muted, var(--text-primary));
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+}
+.enm-app .enm-overview-spark {
+    display: block;
+    height: 24px;
+    min-width: 60px;
+    color: var(--state-healthy, #4caf50);
+}
+.enm-app .enm-overview-spark svg {
+    width: 100%;
+    height: 100%;
+}
+.enm-app .enm-overview-arrow {
+    color: var(--text-muted, var(--text-primary));
+    font-size: 16px;
+    opacity: 0.5;
+    transition: opacity 120ms;
+}
+.enm-app .enm-overview-row:hover .enm-overview-arrow,
+.enm-app .enm-overview-row:focus-visible .enm-overview-arrow {
+    opacity: 1;
+}
+.enm-app .enm-overview-loading,
+.enm-app .enm-overview-error,
+.enm-app .enm-overview-empty {
+    max-width: 600px;
+    margin: var(--sp-5, 24px) auto;
+    padding: var(--sp-4, 16px);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color, var(--border-subtle));
+    border-radius: 10px;
+    color: var(--text-primary);
+    text-align: center;
+}
+.enm-app .enm-overview-error h2 {
+    margin: 0 0 var(--sp-2, 8px) 0;
+    font-size: 16px;
+    color: var(--state-error, #ef5350);
+}
+.enm-app .enm-overview-empty p {
+    margin: 0 0 var(--sp-2, 8px) 0;
+    font-size: 14px;
+    line-height: 1.5;
+}
+.enm-app .enm-overview-empty p:last-child { margin-bottom: 0; }
+
+/* Compact viewport: hide uptime + sparkline columns, give name+state
+   more room. Row still tappable, still routes on click. */
+.enm-app[data-app-size="compact"] .enm-overview-row,
+body[data-app-size="compact"] .enm-app .enm-overview-row {
+    grid-template-columns: 16px 1fr auto 16px;
+}
+.enm-app[data-app-size="compact"] .enm-overview-row .enm-overview-uptime,
+.enm-app[data-app-size="compact"] .enm-overview-row .enm-overview-spark,
+body[data-app-size="compact"] .enm-app .enm-overview-row .enm-overview-uptime,
+body[data-app-size="compact"] .enm-app .enm-overview-row .enm-overview-spark {
     display: none;
 }

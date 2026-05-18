@@ -247,10 +247,14 @@
     <!--   ↑ kept commented for one release as audit-trail; remove in BP-E. -->
 
     <script defer src="js/components/tools-update-card.js?ts=20260515b3e"></script>
+    <!-- beta.3.91 (Wave M2.3) — Multi-chain overview pane. PaneRouter
+         (M2.1) mounts this when the chain selector key is 'all'; until
+         this script loads PaneRouter renders the M2.1 stub instead. -->
+    <script defer src="js/components/multi-chain-overview.js?ts=20260518b391a"></script>
     <!-- BP-E — technical-view.js retired. Beta 3 top-level tabs
          (Dashboard / Logs / Settings / Audit) replaced its 4-sub-tab
          wrapper; the Dashboard pane now mounts SystemStatus + ChainCard
          + BPoS card + ToolsUpdate directly from app.js._showDashboard. -->
-    <script defer src="js/app.js?ts=20260517b370a"></script>
+    <script defer src="js/app.js?ts=20260518b391a"></script>
 </body>
 </html>
