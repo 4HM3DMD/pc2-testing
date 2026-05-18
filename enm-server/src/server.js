@@ -280,6 +280,18 @@ async function main() {
     // --- Post-boot work — same as the old extension's 'ready' handler. -----
     // Wired here BEFORE listen() so we don't accept traffic until reattach
     // has had a chance to scan; sweepers run on their own timers either way.
+    // beta.3.96 (Wave M3.2) — register Class B adapters that have a cfg
+    // entry. Runs BEFORE reattach + autoStart so those see ESC/EID as
+    // registered chains and can drive their lifecycle. On mainchain-only
+    // installs (default today) it's a no-op.
+    try {
+        const ConfigStore = require('./services/ConfigStore');
+        const cfg = await ConfigStore.load();
+        ChainRegistry.registerConfiguredAdapters({ cfg });
+    } catch (err) {
+        log('error', `registerConfiguredAdapters failed (non-fatal): ${err.message}`);
+    }
+
     try {
         const reattached = await ChainRegistry.getProcessService().reattach();
         if (reattached.length > 0) {

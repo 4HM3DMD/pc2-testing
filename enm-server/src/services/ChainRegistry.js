@@ -16,6 +16,13 @@ const { SseHub } = require('./SseHub');
 const { ProcessLogStreamer } = require('./ProcessLogStreamer');
 const ElaMainChainAdapter = require('./ElaMainChainAdapter');
 const ChainAdapter = require('./ChainAdapter');
+// beta.3.96 (Wave M3.2) — Class B adapters. Required up-front so the
+// require() cost is paid at boot rather than at registration time;
+// registration itself is gated on cfg.chains[id] presence to avoid
+// listing uninstalled chains in listChains() / the multi-chain
+// overview. Plan §17 Class B row.
+const EscAdapter = require('./EscAdapter');
+const EidAdapter = require('./EidAdapter');
 const { SelfHealingEngine } = require('./SelfHealingEngine');
 const { HealthChecker } = require('./HealthChecker');
 const { readNodeOwner } = require('../auth/OwnerCheckMiddleware');
@@ -251,6 +258,51 @@ function getAdapter(chainId) {
 }
 
 /**
+ * beta.3.96 — Wave M3.2 — register Class B adapters when their cfg is
+ * present. Called from server.js post-boot after ConfigStore.load
+ * succeeds (cfg load is async; ChainRegistry.init is sync). On a
+ * mainchain-only install (the default today) this is a no-op: cfg.chains
+ * has no esc/eid keys so neither adapter registers; listChains() stays
+ * exactly mainchain.
+ *
+ * Idempotent — re-calls are safe; registerAdapter() throws on duplicates
+ * but we check has() first. The function never throws on partial
+ * success: per-chain registration failures are logged + skipped so a
+ * single broken cfg entry doesn't block the rest of boot.
+ *
+ * @param {object} args
+ * @param {object} args.cfg  ConfigStore.load() result
+ */
+function registerConfiguredAdapters(args) {
+    if (!initialized) {
+        throw new Error('ChainRegistry: must call init() before registerConfiguredAdapters()');
+    }
+    if (!args || !args.cfg || typeof args.cfg !== 'object') {
+        throw new TypeError('registerConfiguredAdapters: { cfg } required');
+    }
+    const chains = (args.cfg.chains && typeof args.cfg.chains === 'object') ? args.cfg.chains : {};
+    // Map cfg-key → adapter class. Future Class C/D/E entries register
+    // here too once M4/M6 ship; for M3.2 only Class B is wired.
+    const CLASS_B = { esc: EscAdapter, eid: EidAdapter };
+    for (const [chainId, AdapterClass] of Object.entries(CLASS_B)) {
+        if (!chains[chainId]) continue;          // not installed; skip
+        if (adapters.has(chainId)) continue;     // already registered
+        try {
+            registerAdapter(chainId, new AdapterClass({
+                processService,
+                extensionHandle: extensionHandleRef,
+            }));
+        } catch (err) {
+            if (extensionHandleRef && extensionHandleRef.log) {
+                extensionHandleRef.log.warn(
+                    `[ENM] failed to register ${chainId} adapter: ${err.message}`,
+                );
+            }
+        }
+    }
+}
+
+/**
  * beta.3.85 — Wave M1.1 — public API for registering a chain adapter.
  *
  * Replaces the pre-3.85 pattern of `adapters.set(chainId, new XAdapter(...))`
@@ -375,7 +427,8 @@ module.exports = {
     getKeystoreService,
     listChains,
     snapshots,
-    registerAdapter,        // beta.3.85 — Wave M1.1
-    getAdaptersByClass,     // beta.3.85 — Wave M1.1
+    registerAdapter,             // beta.3.85 — Wave M1.1
+    getAdaptersByClass,          // beta.3.85 — Wave M1.1
+    registerConfiguredAdapters,  // beta.3.96 — Wave M3.2
     _resetForTests,
 };
