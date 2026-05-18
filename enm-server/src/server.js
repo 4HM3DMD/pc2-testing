@@ -87,9 +87,13 @@ const maintenanceRouter = require('./routes/maintenance');
 // beta.3.43 — Settings → Identity tab backend (unlock / backup /
 // import / reset). Mounted at /api/enm/identity/* below.
 const identityRouter = require('./routes/identity');
-// beta.3.67 — Phase 7 Auto-heal status + manual take/restore. Mounted
-// at /api/enm/snapshots/* below.
-const snapshotsRouter = require('./routes/snapshots');
+// beta.3.78 — snapshots routes + EnmStateSnapshot service removed.
+// Per operator review: a chain server's canonical recovery is resync
+// from peers, not a 1-hour-old cache rollback. The snapshot system
+// was a band-aid for an upstream ela bug (crash-on-corrupt cp_dpos)
+// and auto-rollback could mask real corruption. F22 detection stays
+// (operators want to KNOW about DPoS desync) but its action is now
+// CRITICAL_NOTIFY — operator decides what to do.
 
 const PORT = parseInt(process.env.PORT || '4180', 10);
 // Single source of truth for ENM's data location: DataDir.enmDataDir().
@@ -240,8 +244,7 @@ async function main() {
     // backup, import, full reset). All routes owner-gated; destructive
     // ones check producer state + audit-log.
     api.use('/identity', identityRouter.build({ extensionHandle, getDb }));
-    // beta.3.67 — Phase 7 visibility + manual triggers.
-    api.use('/snapshots', snapshotsRouter.build({ extensionHandle }));
+    // beta.3.78 — /snapshots route removed (see top-of-file comment).
 
     // EVM placeholder (v0.5+). Reserves /api/enm/evm/* so future cross-chain
     // routes can land without naming collisions. Returns 501 today.
@@ -299,35 +302,11 @@ async function main() {
         log('error', `storage maintenance init failed: ${err.message}`);
     }
 
-    // beta.3.63 — Phase 7 Layer 2: hourly state snapshot service. Periodic
-    // backup of cp_dpos/default.dcp + cp_cr/default.cr + cp_txPool/default.txpcp
-    // so the auto-heal layer can roll forward when the live state desyncs
-    // with the block ledger (root cause of the chain stuck pattern that
-    // bit srv832310 multiple times). Storage is bounded (~6MB × retention),
-    // takes seconds, gated on chain-healthy preconditions.
-    try {
-        const { EnmStateSnapshot } = require('./services/EnmStateSnapshot');
-        const ConfigStore = require('./services/ConfigStore');
-        const cfg = await ConfigStore.load();
-        const snapshotCfg = cfg && cfg.global && cfg.global.stateSnapshot;
-        if (snapshotCfg && snapshotCfg.enabled !== false) {
-            const stateSnapshot = new EnmStateSnapshot({
-                extensionHandle,
-                processService: ChainRegistry.getProcessService(),
-                getAdapter: (id) => ChainRegistry.getAdapter(id),
-                listChains: () => ChainRegistry.listChains(),
-            });
-            stateSnapshot.applyConfig(cfg);
-            stateSnapshot.start();
-            // Expose on the registry so SelfHealingEngine (Layer 4 restore)
-            // can reach it without a require cycle.
-            ChainRegistry._stateSnapshot = stateSnapshot;
-        } else {
-            log('info', 'state snapshot service disabled in config — skipping');
-        }
-    } catch (err) {
-        log('error', `state snapshot init failed (non-fatal): ${err.message}`);
-    }
+    // beta.3.78 — EnmStateSnapshot service removed. The hourly cache-
+    // file backup was a band-aid for an upstream ela bug (crash on
+    // corrupt cp_dpos read) and auto-rollback risked masking real
+    // corruption. F22 still detects the desync signal via the log
+    // probe but now alerts the operator instead of rolling state back.
 
     // 0.2.0-beta.3.8 — wire AuditLog → SseHub bridge. Every audit row
     // inserted via EnmAuditLog.append() now also publishes on the

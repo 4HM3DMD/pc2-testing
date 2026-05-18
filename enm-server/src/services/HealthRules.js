@@ -596,7 +596,7 @@ function detectF19(snap) {
 }
 
 /**
- * F22 — DPoS state desync (Phase 7, beta.3.63).
+ * F22 — DPoS state desync (alert-only, beta.3.78 onwards).
  *
  * Fires when ALL of:
  *   - process alive
@@ -611,9 +611,21 @@ function detectF19(snap) {
  * within the last ~2 minutes of log lines. Either is a definitive marker
  * of the local arbitrator-state-vs-block-ledger inconsistency.
  *
- * F22 takes precedence over F4 (both fire on height stall). F22's action
- * is 'state-restore' (uses EnmStateSnapshot.restore), F4's is 'restart'
- * (won't fix this failure mode). Engine dispatches accordingly.
+ * Pre-beta.3.78 F22 dispatched a 'state-restore' action that rolled the
+ * cp_dpos checkpoint back to a snapshot. Per operator review:
+ *   - the snapshot service was a band-aid for an upstream ela bug
+ *     (crash on corrupt cp_dpos read instead of rebuilding from blocks);
+ *   - auto-rollback to a stale state could mask real corruption AND
+ *     cause further desync against blocks the chain already advanced past;
+ *   - manual recovery (stop chain, delete corrupt cache, restart, let
+ *     ela rebuild) is more honest than silently rolling state back.
+ *
+ * So F22 now tiers as CRITICAL_NOTIFY — the engine alerts the operator
+ * with recovery steps; it does not act. Action field is omitted entirely
+ * (rather than 'alert') so the dispatcher's _isRestartAction / similar
+ * guards short-circuit cleanly. F22 still takes precedence over F4 in
+ * the detector queue so the operator sees the DPoS-specific alert
+ * rather than the generic restart proposal.
  */
 function detectF22(snap) {
     if (!snap || !snap.processStatus || !snap.processStatus.alive) return null;
@@ -626,16 +638,23 @@ function detectF22(snap) {
     if (!snap.dposDesyncDetected) return null;
     return {
         ruleId: 'F22',
-        tier: HEALING_TIERS.AUTOMATED_SAFE,
-        summaryAction: `Auto-heal ${snap.chainId} DPoS state desync`,
+        tier: HEALING_TIERS.CRITICAL_NOTIFY,
+        summaryAction: `${snap.chainId}: DPoS state appears desynced`,
         summaryReason:
             `Height ${snap.rpcSummary.height} has been stalled for >10 min and `
             + 'the ela log shows the arbitrator-state-vs-ledger desync signature. '
-            + 'Restoring most-recent snapshot — cheaper than bootstrap.',
+            + 'Manual recovery: stop the chain, delete the corrupt cp_dpos '
+            + 'checkpoint files, restart the chain, and let ela rebuild '
+            + 'state from blocks.',
         payload: {
-            action: 'state-restore',
             chainId: snap.chainId,
             stuckHeight: snap.rpcSummary.height,
+            // No `action` field — F22 is alert-only as of beta.3.78.
+            recoverySteps: [
+                'systemctl stop pc2-node  # or: kill the ela PID',
+                'rm -rf <chain-dir>/elastos/elastos/data/checkpoints/cp_dpos',
+                'systemctl start pc2-node  # let ela rebuild cp_dpos from blocks',
+            ],
         },
     };
 }
@@ -694,8 +713,8 @@ const RULE_METADATA = Object.freeze({
            description: 'BPoS needs inbound peers to publish proposals. Surface a critical alert if there have been none for 5 minutes.' },
     F19: { tier: 'CRITICAL_NOTIFY', title: 'Host port conflict',
            description: 'Another process on this host is bound to a port ela needs (20338 / 20339 / 20336). Surface critical for operator triage.' },
-    F22: { tier: 'AUTOMATED_SAFE',  title: 'DPoS state desync auto-heal',
-           description: 'When the chain freezes with "sponsor is not in current or last arbitrators" — the signature of cp_dpos/default.dcp diverging from the block ledger — restore the most-recent state snapshot and let ela re-fetch the small delta from peers. Much cheaper than bootstrap (~3 min vs 30 min).' },
+    F22: { tier: 'CRITICAL_NOTIFY', title: 'DPoS state desync (alert)',
+           description: 'When the chain freezes with "sponsor is not in current or last arbitrators" — the signature of cp_dpos/default.dcp diverging from the block ledger — surface a critical alert with manual recovery steps. Pre-beta.3.78 this rule auto-rolled state back to a snapshot; that path was removed per operator review since it papered over upstream ela bugs and risked further desync.' },
 });
 
 // beta.3.22 — every rule is enabled by default. The operator-facing
@@ -783,11 +802,11 @@ function runAll(snap) {
     const out = [];
     const detectors = [
         ['F1',  detectF1],  ['F2',  detectF2],  ['F3',  detectF3],
-        // F22 evaluates BEFORE F4 so when both could fire (height stalled +
-        // desync signal present), F22's action='state-restore' wins over
-        // F4's action='restart'. Engine handles only the first detection
-        // per rule_id per chain per tick; same chain can't have both F4
-        // and F22 propose conflicting actions.
+        // F22 evaluates BEFORE F4 so when both could fire (height stalled
+        // + desync signal present), F22's specific DPoS-desync alert wins
+        // over F4's generic restart proposal. Operator gets the
+        // alert with manual recovery steps; F4 stays suppressed by the
+        // "one detection per rule per chain per tick" gate.
         ['F22', detectF22],
         ['F4',  detectF4],  ['F5',  detectF5],  ['F6',  detectF6],
         ['F7',  detectF7],  ['F8',  detectF8],  ['F9',  detectF9],

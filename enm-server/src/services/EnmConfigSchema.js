@@ -155,21 +155,8 @@ const globalSchema = Joi.object({
         gzipAfterDays: Joi.number().integer().min(1).max(365).default(7),
         purgeAfterDays: Joi.number().integer().min(1).max(3650).default(30),
     }).default(),
-    // beta.3.63 — Phase 7 Layer 2 + 4. Periodic backup of the live DPoS/CR/
-    // txPool state files so the auto-heal layer can roll forward to a recent
-    // known-good state when default.dcp gets out-of-sync with the block
-    // ledger (the failure mode that caused multiple hours-long chain
-    // outages on srv832310). Cheap (~6MB per snapshot) and decoupled from
-    // bootstrap (which is a 10GB last-resort).
-    stateSnapshot: Joi.object({
-        enabled: Joi.boolean().default(true),
-        intervalSec: Joi.number().integer().min(60).max(86400).default(3600), // 1hr
-        retention: Joi.number().integer().min(1).max(168).default(24),         // 24 snapshots
-        // When true (default), F22 detection of "sponsor not in arbitrators"
-        // pattern auto-restores the most-recent snapshot instead of escalating
-        // to OWNER-CONFIRMS. False = always propose, never auto-execute.
-        autoRestore: Joi.boolean().default(true),
-    }).default(),
+    // beta.3.78 — `stateSnapshot` config block removed with the snapshot
+    // service. F22 is now alert-only; recovery is operator-driven.
 });
 
 const setupSchema = Joi.object({

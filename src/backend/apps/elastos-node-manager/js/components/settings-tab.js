@@ -368,11 +368,7 @@
             if (typeof this._refreshHealingActivity === 'function') {
                 this._refreshHealingActivity();
             }
-            // beta.3.67 — also refresh the Phase 7 snapshot panel on
-            // every Security tab activation.
-            if (typeof this._refreshSnapshotStatus === 'function') {
-                this._refreshSnapshotStatus();
-            }
+            // beta.3.78 — snapshot panel removed; no refresh needed.
         }
         // beta.3.33 — Danger Zone: pull latest version info from GitHub
         // each time the section opens so the operator never sees a stale
@@ -2062,24 +2058,11 @@
         this._security.activityHost = activityHost;
         this._security.activitySummary = activitySummary;
 
-        // beta.3.67 — Phase 7 visibility. New collapsible panel showing
-        // the snapshot service state + last/total snapshots + two action
-        // buttons (take-now, restore-now). Loaded from GET /snapshots/
-        // mainchain whenever the panel opens.
-        var snapshotDetails = document.createElement('details');
-        snapshotDetails.className = 'enm-healing-details';
-        var snapshotSummary = document.createElement('summary');
-        snapshotSummary.className = 'enm-healing-details-summary';
-        snapshotSummary.textContent = t('settings.snapshot_heading') + ' · …';
-        snapshotDetails.appendChild(snapshotSummary);
-        var snapshotHost = document.createElement('div');
-        snapshotHost.className = 'enm-snapshot-host';
-        snapshotHost.setAttribute('aria-live', 'polite');
-        snapshotHost.textContent = '…';
-        snapshotDetails.appendChild(snapshotHost);
-        sec.body.appendChild(snapshotDetails);
-        this._security.snapshotHost = snapshotHost;
-        this._security.snapshotSummary = snapshotSummary;
+        // beta.3.78 — snapshot panel removed. The auto-heal snapshot
+        // service was deleted server-side; the panel + take/restore
+        // actions had no backend to talk to. F22 (DPoS desync) is now
+        // surfaced as a critical alert with manual recovery steps —
+        // see the Activity (audit) tab when it fires.
 
         // Row 3 — Critical alerts require ack (with a callout).
         var ackCallout = document.createElement('div');
@@ -2120,275 +2103,31 @@
         // tab (hooked in _activate).
         this._refreshHealingRules();
         this._refreshHealingActivity();
-        // beta.3.67 — Phase 7 snapshot status panel.
-        this._refreshSnapshotStatus();
+        // beta.3.78 — _refreshSnapshotStatus call removed with the panel.
 
         return sec.card;
     };
 
-    /**
-     * beta.3.67 — fetch GET /snapshots/mainchain and render the
-     * Auto-heal status panel. Shows: service running state, cadence,
-     * retention, last snapshot timestamp + size, total count + size,
-     * plus action buttons for take-now and restore.
-     * @private
-     */
-    SettingsTab.prototype._refreshSnapshotStatus = function () {
-        var self = this;
-        if (!this._security || !this._security.snapshotHost) { return; }
-        var host = this._security.snapshotHost;
-        var summary = this._security.snapshotSummary;
-        var t = root.enmTOrFallback;
-        host.textContent = '…';
-
-        if (!this.services || !this.services.api
-            || typeof this.services.api.get !== 'function') {
-            host.textContent = t('settings.snapshot_load_failed');
-            return;
-        }
-        this.services.api.get('/snapshots/mainchain', { skipCache: true })
-            .then(function (data) {
-                var d = (data && data.result) || data || {};
-                self._renderSnapshotStatus(host, summary, d);
-            })
-            .catch(function (err) {
-                host.textContent = t('settings.snapshot_load_failed');
-                if (summary) {
-                    summary.textContent = t('settings.snapshot_heading') + ' · ' + t('settings.snapshot_load_failed');
-                }
-            });
-    };
-
-    /**
-     * @private
-     * @param {HTMLElement} host
-     * @param {HTMLElement} summary
-     * @param {object} d  shape from GET /snapshots/:chainId
-     */
-    SettingsTab.prototype._renderSnapshotStatus = function (host, summary, d) {
-        var self = this;
-        var t = root.enmTOrFallback;
-        var enabled = d.enabled !== false;
-        var auto = d.autoRestore !== false;
-        var count = d.count || 0;
-        var totalKb = Math.round((d.totalSizeBytes || 0) / 1024);
-        var cadenceMin = Math.round((d.intervalSec || 3600) / 60);
-        var retention = d.retention || 24;
-        var latest = d.latest;
-        var latestTimeStr = latest
-            ? new Date(latest.takenAt).toLocaleString()
-            : t('settings.snapshot_none_yet');
-        var latestSizeKb = latest ? Math.round((latest.sizeBytes || 0) / 1024) : 0;
-
-        // Summary line — collapsed view.
-        if (summary) {
-            summary.textContent = t('settings.snapshot_heading')
-                + ' · ' + (enabled ? t('settings.snapshot_enabled') : t('settings.snapshot_disabled'))
-                + ' · ' + count + ' ' + t('settings.snapshot_count_suffix');
-        }
-
-        // Body — full panel.
-        host.innerHTML = '';
-        var grid = document.createElement('div');
-        grid.className = 'enm-snapshot-grid';
-        function addRow(label, value) {
-            var row = document.createElement('div');
-            row.className = 'enm-snapshot-row';
-            var l = document.createElement('span');
-            l.className = 'enm-snapshot-label';
-            l.textContent = label;
-            var v = document.createElement('span');
-            v.className = 'enm-snapshot-value';
-            v.textContent = value;
-            row.appendChild(l);
-            row.appendChild(v);
-            grid.appendChild(row);
-        }
-        addRow(t('settings.snapshot_status'),     enabled ? t('settings.snapshot_enabled') : t('settings.snapshot_disabled'));
-        addRow(t('settings.snapshot_auto_restore'), auto ? t('settings.snapshot_on') : t('settings.snapshot_off'));
-        addRow(t('settings.snapshot_cadence'),    cadenceMin + ' min');
-        addRow(t('settings.snapshot_retention'),  retention + ' max');
-        addRow(t('settings.snapshot_count'),      count + ' (' + totalKb + ' KB total)');
-        addRow(t('settings.snapshot_latest'),     latestTimeStr + (latest ? ' (' + latestSizeKb + ' KB)' : ''));
-        host.appendChild(grid);
-
-        // Help text — what auto-heal does, why these matter.
-        var help = document.createElement('p');
-        help.className = 'enm-snapshot-help';
-        help.textContent = t('settings.snapshot_help');
-        host.appendChild(help);
-
-        // Buttons — take + restore. Reuse the styling from other action buttons.
-        var btnRow = document.createElement('div');
-        btnRow.className = 'enm-snapshot-actions';
-        var btnTake = document.createElement('button');
-        btnTake.type = 'button';
-        btnTake.className = 'enm-btn enm-btn-secondary';
-        btnTake.textContent = t('settings.snapshot_take_now');
-        btnTake.disabled = !enabled;
-        btnTake.addEventListener('click', function () { self._handleSnapshotTake(btnTake); });
-        btnRow.appendChild(btnTake);
-        var btnRestore = document.createElement('button');
-        btnRestore.type = 'button';
-        btnRestore.className = 'enm-btn enm-btn-danger';
-        btnRestore.textContent = t('settings.snapshot_restore_now');
-        btnRestore.disabled = !enabled || count === 0;
-        btnRestore.addEventListener('click', function () { self._handleSnapshotRestore(btnRestore); });
-        btnRow.appendChild(btnRestore);
-        host.appendChild(btnRow);
-
-        // beta.3.76 — snapshot inventory + per-row restore-by-id.
-        // GET /snapshots/:chainId now returns `snapshots: [{name,
-        // takenAt, sizeBytes, files}]` (pre-3.76 only `latest` was
-        // exposed). Render an inventory table so the operator can pick
-        // a specific historical snapshot to restore instead of always
-        // the newest. Each row's button hits the new POST endpoint
-        // /snapshots/:chainId/restore/:snapshotName.
-        var items = Array.isArray(d.snapshots) ? d.snapshots : [];
-        if (items.length > 0) {
-            var listHead = document.createElement('div');
-            listHead.className = 'enm-snapshot-inventory-head';
-            listHead.textContent = t('settings.snapshot_inventory') || 'All snapshots';
-            host.appendChild(listHead);
-            var inventory = document.createElement('div');
-            inventory.className = 'enm-snapshot-inventory';
-            for (var i = 0; i < items.length; i += 1) {
-                var it = items[i];
-                var row = document.createElement('div');
-                row.className = 'enm-snapshot-inventory-row';
-                if (latest && it.name === latest.name) {
-                    row.classList.add('enm-snapshot-inventory-row-latest');
-                }
-                var time = document.createElement('span');
-                time.className = 'enm-snapshot-inventory-time';
-                time.textContent = new Date(it.takenAt).toLocaleString();
-                if (latest && it.name === latest.name) {
-                    var pill = document.createElement('span');
-                    pill.className = 'enm-snapshot-inventory-latest-pill';
-                    pill.textContent = t('settings.snapshot_latest_pill') || 'latest';
-                    time.appendChild(pill);
-                }
-                row.appendChild(time);
-                var sz = document.createElement('span');
-                sz.className = 'enm-snapshot-inventory-size';
-                sz.textContent = Math.round((it.sizeBytes || 0) / 1024) + ' KB';
-                row.appendChild(sz);
-                var btn = document.createElement('button');
-                btn.type = 'button';
-                btn.className = 'enm-btn enm-btn-danger enm-snapshot-inventory-restore';
-                btn.textContent = t('settings.snapshot_restore_short') || 'Restore';
-                btn.disabled = !enabled;
-                (function (snapshotName, button) {
-                    button.addEventListener('click', function () {
-                        self._handleSnapshotRestore(button, snapshotName);
-                    });
-                }(it.name, btn));
-                row.appendChild(btn);
-                inventory.appendChild(row);
-            }
-            host.appendChild(inventory);
-        }
-    };
-
-    /** @private — take-now action handler */
-    SettingsTab.prototype._handleSnapshotTake = function (btn) {
-        var self = this;
-        var t = root.enmTOrFallback;
-        if (!this.services || !this.services.api
-            || typeof this.services.api.post !== 'function'
-            || !this.services.notifications) {
-            return;
-        }
-        btn.disabled = true;
-        var prev = btn.textContent;
-        btn.textContent = t('settings.snapshot_taking');
-        this.services.api.post('/snapshots/mainchain', {})
-            .then(function (data) {
-                var r = (data && data.result) || data || {};
-                self.services.notifications.show({
-                    severity: 'info',
-                    title: t('settings.snapshot_take_done'),
-                    body: r.path ? r.path : '',
-                });
-                self._refreshSnapshotStatus();
-            })
-            .catch(function (err) {
-                var msg = (err && err.message) || String(err);
-                self.services.notifications.show({
-                    severity: 'warning',
-                    title: t('settings.snapshot_take_failed'),
-                    body: msg,
-                });
-            })
-            .then(function () {
-                btn.textContent = prev;
-                btn.disabled = false;
-            });
-    };
-
-    /** @private — restore-now action handler (double-confirm)
-     * @param {HTMLButtonElement} btn
-     * @param {string} [snapshotName] beta.3.76 — optional ISO name; when
-     *   omitted, restores the newest snapshot (pre-3.76 behaviour).
-     */
-    SettingsTab.prototype._handleSnapshotRestore = function (btn, snapshotName) {
-        var self = this;
-        var t = root.enmTOrFallback;
-        if (!this.services || !this.services.api
-            || typeof this.services.api.post !== 'function'
-            || !this.services.notifications) {
-            return;
-        }
-        // Browser-native confirm is fine here — the action is rare,
-        // destructive, and operator-initiated. No need for a custom
-        // modal yet. When restoring a specific snapshot, include its
-        // timestamp in the confirm prompt so the operator can verify
-        // they're about to roll the chain back to that point.
-        var confirmMsg = t('settings.snapshot_restore_confirm');
-        if (snapshotName) {
-            confirmMsg += '\n\n' + (t('settings.snapshot_restore_picked') || 'Will restore: ')
-                + snapshotName;
-        }
-        if (!root.confirm(confirmMsg)) { return; }
-        btn.disabled = true;
-        var prev = btn.textContent;
-        btn.textContent = t('settings.snapshot_restoring');
-        // Confirm query param matches the server-side gate in
-        // routes/snapshots.js (412 without it).
-        var url = snapshotName
-            ? ('/snapshots/mainchain/restore/' + encodeURIComponent(snapshotName)
-               + '?confirm=I-want-to-restore-state')
-            : '/snapshots/mainchain/restore?confirm=I-want-to-restore-state';
-        this.services.api.post(url, {})
-            .then(function (data) {
-                var r = (data && data.result) || data || {};
-                self.services.notifications.show({
-                    severity: 'info',
-                    title: t('settings.snapshot_restore_done'),
-                    body: r.outcome ? r.outcome : '',
-                });
-                self._refreshSnapshotStatus();
-            })
-            .catch(function (err) {
-                var msg = (err && err.message) || String(err);
-                self.services.notifications.show({
-                    severity: 'warning',
-                    title: t('settings.snapshot_restore_failed'),
-                    body: msg,
-                });
-            })
-            .then(function () {
-                btn.textContent = prev;
-                btn.disabled = false;
-            });
+    /* beta.3.78 — _refreshSnapshotStatus / _renderSnapshotStatus /
+     * _handleSnapshotTake / _handleSnapshotRestore methods removed
+     * along with the snapshot UI panel. The server-side EnmStateSnapshot
+     * service is gone; these handlers had nothing to call. F22 alerts
+     * surface manual recovery steps via the Activity tab instead. */
+    // (no-op placeholder kept so any external caller referencing the old
+    //  names by string lookup fails loudly rather than silently. None of
+    //  the in-tree code path should hit these — every call site is gone.)
+    SettingsTab.prototype._refreshSnapshotStatus = function () { /* removed */ };
+    SettingsTab.prototype._renderSnapshotStatus  = function () { /* removed */ };
+    SettingsTab.prototype._handleSnapshotTake    = function () { /* removed */ };
+    SettingsTab.prototype._handleSnapshotRestore = function () { /* removed */ };
+    // Marker placeholder so the long deletion below is greppable.
+    SettingsTab.prototype._snapshotMethodsRemovedInBeta378 = function () {
+        return; /* original body deleted — bypass to reach the next method */
     };
 
     /**
      * beta.3.21 — fetch GET /healing/rules and render the grouped
-     * rule list under the auto-execute toggle. Three groups by tier:
-     * AUTOMATED_SAFE (what auto-runs), OWNER_CONFIRMS (what asks
-     * first), CRITICAL_NOTIFY + NEVER_AUTOMATIC (alert-only). Each
-     * row shows the rule's title + description + a small tier badge.
+     * rule list under the auto-execute toggle.
      * @private
      */
     SettingsTab.prototype._refreshHealingRules = function () {
