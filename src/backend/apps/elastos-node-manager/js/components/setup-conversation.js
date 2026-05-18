@@ -2,36 +2,39 @@
  * Copyright (C) 2026-present Elacity
  * SPDX-License-Identifier: AGPL-3.0
  *
- * components/setup-conversation.js — Beta 3 setup wizard.
+ * components/setup-conversation.js — v0.4.7 setup wizard.
  *
- * Reshaped from the alpha.28 conversational 6-step wizard to match the
- * v2/phase-06-wizard-modals.html mock. The DOM contract is now:
+ * 7-card flow (replaces the alpha.28/beta.3 Card B/B2/B3/C/D/E/F
+ * pipeline per operator directive 2026-05-19 "the council setup is
+ * wrong and very dumb, too many steps, doesn't understand what it's
+ * doing"):
+ *
+ *   Card 1  — welcome / role chooser (Council vs BPoS)
+ *   Card 2  — system check (MANDATORY — OS/CPU/RAM/Disk thresholds)
+ *   Card 3  — master password (one generated 32-char password
+ *             covering every keystore on the node)
+ *   Card 4  — wallet address (one EVM input + last-4 anti-typo
+ *             gate; explainer mentions ESC/EID/PG mining rewards
+ *             AND Arbiter cross-chain signing)
+ *   Card 5  — confirm + install (preflight + snapshot toggle +
+ *             "Install everything")
+ *   Card 6  — install stepper (SSE + poll fallback; renders the
+ *             13-step PLAN for Council, a 3-step plan for BPoS)
+ *   Card 7  — done (celebrate + open dashboard)
+ *
+ * DOM contract unchanged:
  *
  *   .enm-wiz-shell
- *     .enm-wiz-body           ← swaps per-card (role grid, install
- *                                progress, bootstrap tiles, clock-skew,
- *                                password reveal, celebration)
- *     .enm-setup-actions      ← footer with Cancel (hidden when N/A) +
- *                                Continue / primary CTA
+ *     .enm-wiz-body           ← swaps per-card
+ *     .enm-setup-actions      ← stable footer (Cancel + Continue)
  *
- * Card A (role chooser) is the new welcome experience — there's no
- * separate welcome-screen step any more; welcome-screen.js is a thin
- * shim that just constructs this component. Card A renders the
- * BPoS / Council .enm-role-grid with `data-selected`/`data-disabled`
- * exactly like the mock. The operator picks BPoS (Council is "Coming
- * soon"), then clicks Continue to kick `_startAutoInstall`, which is
- * the SAME pipeline alpha.28's user-driven Card B/B2/B3/C/D walked
- * one step at a time — re-routed so the new mock's single-screen
- * entry path can drive it from end to end.
+ * Welcome-screen.js still wraps this component; Card 1's renderer
+ * is _renderCardA (kept under that name for compatibility with the
+ * existing welcome-screen shim).
  *
- * The five downstream cards (B, B2, B3, C, D) keep their existing
- * behaviours and lifecycle guards:
- *   - install (binary fetch + SSE/poll progress; cancel hits
- *     DELETE /setup/auto-install-ela)
- *   - bootstrap-vs-genesis (Card B2; snapshot download with cancel)
- *   - clock-skew preflight (Card B3; F13 NTP check)
- *   - keystore password reveal (Card C; ack-gated continue)
- *   - finalize + start chain (Card D; celebrates + onComplete)
+ * Council always installs ALL services (Mainchain + ESC + EID + PG
+ * + 3 oracles + Arbiter); the prior PG opt-in was removed by
+ * operator directive 2026-05-19 ("optional add-ons — don't do that").
  *
  * The alpha.28 invariants live on:
  *   - `_destroyed` flag flipped FIRST in destroy() so any in-flight
@@ -39,23 +42,13 @@
  *   - `_cardSeq` bumped on every body swap; `_stillRendering(seq)`
  *     gates every async .then so stale resolves can't mutate the
  *     new card's DOM
- *   - `_teardownInstallTracking` / bootstrap-teardown both run on
- *     destroy and on _goto out of Card B/B2 (prevents poll-after-
- *     navigate)
- *   - 401 on /setup/install-status polls is suppressed (catch swallows
- *     so the operator doesn't see a forbidden toast during the brief
- *     window between owner-pair and first authenticated request)
- *   - SSE `setup:install:mainchain` / `setup:bootstrap:mainchain`
- *     topic subscriptions with poll fallback
- *   - Clock-skew probe always renders a continue path (the wizard
- *     MUST NEVER deadlock on F13)
+ *   - `_teardownInstallTracking` runs on destroy and on _goto out
+ *     of Card 6 (prevents poll-after-navigate)
  *   - Cross-tab BC: setup-complete broadcast handled in app.js;
  *     _setupConv is stored on app so destroy() can fire on broadcast
  *
- * The 9-step alpha.1 wizard and its `_goal === 'help'` branch are
- * permanently retired — ENM is positioned for BPoS + Council operators
- * only. Existing installs whose backend state has enableArbiter=false
- * load as 'bpos' on resume.
+ * The 9-step alpha.1 wizard, its `_goal === 'help'` branch, and the
+ * old Cards B/B2/B3/C/D/D2/E/F renderers are permanently retired.
  */
 
 (function (root) {
@@ -84,13 +77,21 @@
         this.root.setAttribute('role', 'region');
         this.root.setAttribute('aria-label', 'Setup wizard');
 
-        this._goal = null;            // 'bpos' | 'council' (council is disabled today)
-        this._currentCard = 'a';      // which card is showing
+        this._goal = null;            // 'bpos' | 'council'
+        this._currentCard = '1';      // which card is showing (1..7)
         this._cardSeq = 0;            // bump on every render to ignore stale callbacks
         this._unsubscribeInstall = null;
-        this._unsubscribeBootstrap = null;
         this._installPollTimer = null;
-        this._bootstrapPollTimer = null;
+        // beta.0.4.7 — in-memory collection from Cards 2-4. The
+        // master password is generated server-side via /setup/keystore
+        // and surfaced once for the operator to save; sharedRewardAddress
+        // is collected on Card 4. Card 5 POSTs both to /setup/install-
+        // council (Council path) or relies on the mainchain-only path
+        // for BPoS. We avoid persisting these to localStorage — the
+        // password is sensitive and the operator is told it's shown
+        // ONCE; persisting would contradict that guarantee.
+        this._masterPassword = null;
+        this._sharedRewardAddress = null;
         // alpha.28.1 batch 83 — _destroyed flag so async resolves and
         // SSE callbacks can short-circuit if destroy() fires between
         // a poll dispatch and its .then. Symmetric with the original
@@ -100,31 +101,19 @@
     }
 
     /**
-     * Cancel any in-flight install poll + SSE subscription. Called from
-     * destroy() and from internal transitions that abandon Card B's
-     * progress UI. Without this the IIFE poll outlives navigation and
-     * applies status to a DOM the user has navigated away from.
+     * Cancel any in-flight install-council poll + SSE subscription.
+     * Called from destroy() and from internal transitions that abandon
+     * Card 6's progress UI. Without this the poll outlives navigation
+     * and applies status to a DOM the user has navigated away from.
      */
     SetupConversation.prototype._teardownInstallTracking = function () {
         if (this._installPollTimer) {
-            clearTimeout(this._installPollTimer);
+            clearInterval(this._installPollTimer);
             this._installPollTimer = null;
         }
         if (this._unsubscribeInstall) {
             try { this._unsubscribeInstall(); } catch (_) { /* ignore */ }
             this._unsubscribeInstall = null;
-        }
-    };
-
-    /** Symmetric helper for Card B2's bootstrap poll + SSE. */
-    SetupConversation.prototype._teardownBootstrapTracking = function () {
-        if (this._bootstrapPollTimer) {
-            clearInterval(this._bootstrapPollTimer);
-            this._bootstrapPollTimer = null;
-        }
-        if (this._unsubscribeBootstrap) {
-            try { this._unsubscribeBootstrap(); } catch (_) { /* ignore */ }
-            this._unsubscribeBootstrap = null;
         }
     };
 
@@ -150,7 +139,6 @@
         // callbacks can see it before they mutate detached DOM.
         this._destroyed = true;
         this._teardownInstallTracking();
-        this._teardownBootstrapTracking();
         if (this.root.parentNode) { this.root.parentNode.removeChild(this.root); }
     };
 
@@ -181,39 +169,63 @@
             return;
         }
 
+        // beta.0.4.7 — the redesigned 7-card flow always re-enters at
+        // Card 1 (role chooser). Card 2-5 are pre-install data
+        // collection that runs in-memory; Card 6 is the only card
+        // that maps to a backend step (install in progress). On a
+        // refresh during install we route to Card 6 so its
+        // /install-council/status auto-resume picks up the running
+        // job. Council and BPoS paths both pass through Cards 2-7;
+        // the difference is the payload sent to the install endpoints,
+        // not the UI itself.
         var step = (s && s.currentStep) || 'welcome';
-        if (step === 'install' || step === 'preflight' || step === 'welcome') {
-            // Fresh install: land on the role chooser.
-            this._goto('a');
-        } else if (step === 'bootstrap') {
-            // Binary in place, bootstrap-vs-genesis pending.
-            this._goal = 'bpos';
-            this._goto('b2');
-        } else if (step === 'keystore') {
-            this._goal = 'bpos';
-            this._goto('c');
+        var goal = this._resumeGoal();
+        if (step === 'install' || step === 'preflight'
+                || step === 'welcome' || step === 'bootstrap'
+                || step === 'keystore') {
+            // Pre-install or in-progress mainchain steps: re-enter
+            // at the role chooser. The new wizard re-validates the
+            // operator's choice (Council vs BPoS) on every visit
+            // rather than trusting a half-written setup-state.
+            this._goto('1');
         } else if (step === 'network' || step === 'confirm' || step === 'complete') {
-            this._goal = 'bpos';
-            this._goto('d');
+            // Mainchain configured + identity collected; resume on
+            // Card 6's stepper so the install-council job can take
+            // over (or the dashboard can open if it already finished).
+            this._goal = goal;
+            this._goto('6');
         } else {
             // Unknown step value (schema drift, garbage response) —
             // fail safe by starting from the top.
-            this._goto('a');
+            this._goto('1');
         }
+    };
+
+    /**
+     * Recover the operator's setup intent from localStorage. Set by
+     * Card 1's role-card click handler on every visit. Default is
+     * 'bpos' (the older / smaller workload) so an operator who
+     * cleared local storage and resumed mid-install doesn't get
+     * pushed into the heavier Council path by accident.
+     * @private
+     */
+    SetupConversation.prototype._resumeGoal = function () {
+        try {
+            var intent = window.localStorage.getItem('enm:setup-intent');
+            if (intent === 'council' || intent === 'bpos') { return intent; }
+        } catch (_) { /* private mode — fall through */ }
+        return 'bpos';
     };
 
     /** @private */
     SetupConversation.prototype._goto = function (card) {
-        // alpha.28.1 batch 70/83 — tear down any in-flight Card-B
-        // install tracking BEFORE swapping _currentCard. A tick already
-        // in flight could still resolve into a stale DOM reference if
-        // we relied on _currentCard alone, so we explicitly cancel the
-        // timer + SSE here.
-        if (this._currentCard === 'b' && card !== 'b') {
+        // beta.0.4.7 — Card 6 owns the install-job SSE + poll
+        // subscriptions. Tear them down on every navigation away
+        // (operator hit Back, refresh, role-card re-click) so a
+        // half-finished job's callbacks can't mutate a stale DOM
+        // when Card 6 re-mounts.
+        if (this._currentCard === '6' && card !== '6') {
             this._teardownInstallTracking();
-        }
-        if (this._currentCard === 'b2' && card !== 'b2') {
-            this._teardownBootstrapTracking();
         }
         this._currentCard = card;
         this._cardSeq += 1;
@@ -223,18 +235,13 @@
         // Cards opt in by mutating these refs.
         this._resetFooter();
 
-        if (card === 'a')       { this._renderCardA(seq); }
-        else if (card === 'b')  { this._renderCardB(seq); }
-        else if (card === 'b2') { this._renderCardB2(seq); }
-        else if (card === 'b3') { this._renderCardB3(seq); }
-        else if (card === 'c')  { this._renderCardC(seq); }
-        else if (card === 'd')  { this._renderCardD(seq); }
-        // beta.0.4.4 — Council expansion cards. Reachable only when
-        // self._goal === 'council' on Card D completion.
-        // beta.0.4.6 — d2 pre-flight check card inserted before e.
-        else if (card === 'd2') { this._renderCardD2(seq); }
-        else if (card === 'e')  { this._renderCardE(seq); }
-        else if (card === 'f')  { this._renderCardF(seq); }
+        if (card === '1' || card === 'a') { this._renderCardA(seq); }
+        else if (card === '2') { this._renderCard2(seq); }
+        else if (card === '3') { this._renderCard3(seq); }
+        else if (card === '4') { this._renderCard4(seq); }
+        else if (card === '5') { this._renderCard5(seq); }
+        else if (card === '6') { this._renderCard6(seq); }
+        else if (card === '7') { this._renderCard7(seq); }
 
         // a11y/focus: every card swap re-renders `_body.innerHTML`,
         // destroying the previously-focused control. Without an
@@ -393,1153 +400,422 @@
         var continueBtn = this._continueBtn;
         continueBtn.addEventListener('click', function () {
             if (self._destroyed || !self._stillRendering(seq)) { return; }
-            // beta.0.4.4 — Council picks now have a destination.
-            // Both roles install mainchain first (Cards B → B2 → B3 →
-            // C → D); the Council role continues to Cards E + F after
-            // mainchain completes. Card D's _renderCardD handler
-            // (line ~1245) branches on self._goal to decide between
-            // onComplete (BPoS) and self._goto('e') (Council).
+            // beta.0.4.7 — both BPoS and Council paths now flow through
+            // the same 7-card sequence (1 → 2 → 3 → 4 → 5 → 6 → 7).
+            // Card 2 reads self._goal to pick the per-path system-check
+            // thresholds; Card 5 reads it to pick the install payload
+            // (POST /install-council for Council, vanilla
+            // /install/mainchain + /complete for BPoS).
             if (!self._goal) { return; }
-            // alpha.28 enmRunOnce — disable + label-swap while the
-            // install request is in flight so double-clicks can't
-            // fire /setup/install/mainchain twice.
-            var runOnce = root.enmRunOnce;
-            if (typeof runOnce === 'function') {
-                runOnce(continueBtn, 'Setting up…', function () {
-                    return Promise.resolve().then(function () {
-                        if (self._destroyed) { return null; }
-                        self._goto('b');
-                    });
-                });
-            } else {
-                continueBtn.disabled = true;
-                continueBtn.textContent = 'Setting up…';
-                self._goto('b');
-            }
+            self._goto('2');
         });
     };
 
     // ====================================================================
-    // Card B — install binary (progress card)
+    // Card 2 — system check (MANDATORY)
     // ====================================================================
+    //
+    // Renders the EnmSystemCheck report (OS / CPU / RAM / Disk) as
+    // a list with per-row icons. Continue button is locked until
+    // `canProceed: true`. Operator can Re-run after fixing whatever
+    // failed. For BPoS-on-exactly-8GB hosts, the report surfaces an
+    // `add-swap` remediation handle — we render a "Add swap
+    // automatically" button that POSTs /setup/system/add-swap and
+    // then re-runs the check on success.
 
     /** @private */
-    SetupConversation.prototype._renderCardB = function (seq) {
+    SetupConversation.prototype._renderCard2 = function (seq) {
         var t = root.enmT;
-        var heading = t('friendly.setup.card_b.title_active');
-        var para    = t('friendly.setup.card_b.sub_active');
+        var pathName = (this._goal === 'council') ? 'council' : 'bpos';
+        var heading = t('friendly.setup.card_2.title');
+        var sub = t('friendly.setup.card_2.sub', { path: pathName });
         this.root.setAttribute('aria-label', heading);
-        this._body.innerHTML =
-            '<h2 class="enm-wiz-heading" id="enm-wiz-heading-b">' + escapeHtml(heading) + '</h2>'
-            + '<p class="enm-wiz-para" id="enm-wiz-b-para">' + escapeHtml(para) + '</p>'
-            + '<div class="enm-install-progress" id="enm-wiz-b-progress" role="status" aria-live="polite">'
-              + '<div class="enm-install-bar" aria-hidden="true">'
-                + '<div class="enm-install-bar-fill" id="enm-wiz-b-bar" style="width:0%"></div>'
-              + '</div>'
-              + '<div class="enm-install-bar-label" id="enm-wiz-b-pct">0%</div>'
-            + '</div>'
-            + '<div class="enm-install-detail" id="enm-wiz-b-detail" aria-live="polite"></div>';
+        this._body.innerHTML = ''
+            + '<h2 class="enm-wiz-heading" id="enm-wiz-heading-2">'
+            +   escapeHtml(heading) + '</h2>'
+            + '<p class="enm-wiz-para">' + escapeHtml(sub) + '</p>'
+            + '<ul class="enm-syscheck-list" role="status" aria-live="polite">'
+            +   '<li class="enm-syscheck-row" data-state="checking">'
+            +     '<span class="enm-syscheck-icon" aria-hidden="true">⟳</span>'
+            +     '<span class="enm-syscheck-text">'
+            +       escapeHtml(t('friendly.setup.card_2.running')) + '</span>'
+            +   '</li>'
+            + '</ul>'
+            + '<div class="enm-syscheck-remediation" hidden></div>'
+            + '<div class="enm-syscheck-actions">'
+            +   '<button type="button" class="enm-btn enm-btn-secondary" '
+            +     'data-action="rerun">'
+            +     escapeHtml(t('friendly.setup.card_2.rerun')) + '</button>'
+            + '</div>';
 
         var self = this;
-        var els = {
-            title:  this._body.querySelector('#enm-wiz-heading-b'),
-            sub:    this._body.querySelector('#enm-wiz-b-para'),
-            bar:    this._body.querySelector('#enm-wiz-b-bar'),
-            pct:    this._body.querySelector('#enm-wiz-b-pct'),
-            detail: this._body.querySelector('#enm-wiz-b-detail'),
-        };
+        var listEl = this._body.querySelector('.enm-syscheck-list');
+        var remEl  = this._body.querySelector('.enm-syscheck-remediation');
+        var rerun  = this._body.querySelector('[data-action="rerun"]');
 
-        // Footer: Cancel aborts the auto-install; Continue is hidden
-        // until the install reaches `done`. Cancel hits the same
-        // DELETE endpoint the alpha.27 flow used.
-        this._cancelBtn.hidden = false;
-        this._cancelBtn.textContent = t('friendly.setup.cancel');
-        this._continueBtn.disabled = true;
-        this._continueBtn.hidden = true;
-        this._continueBtn.textContent = t('friendly.setup.card_b.cta_continue');
-
-        this._cancelBtn.addEventListener('click', function () {
-            if (self._destroyed || !self._stillRendering(seq)) { return; }
-            self._cancelBtn.disabled = true;
-            self.api.del('/setup/auto-install-ela').catch(function () { /* ignore — fall through to Card A */ });
-            self._teardownInstallTracking();
-            self._goto('a');
-        });
-
-        // Recovery: if the binary is already on disk, advance immediately.
-        // Otherwise kick off the install. 401 on /setup/install-status is
-        // suppressed by the catch — during the brief window between
-        // first owner pairing and the first authenticated GET, a 401
-        // is expected and shouldn't surface as a toast.
-        this.api.get('/setup/install-status/mainchain', { skipCache: true }).then(function (s) {
-            if (self._destroyed || !self._stillRendering(seq)) { return; }
-            if (s && s.phase === 'done' && s.binaryPath) {
-                self._cardBOnDone(els, seq);
-            } else if (s && s.phase === 'downloading') {
-                self._beginInstall(els, seq, /* alreadyStarted */ true);
-            } else {
-                self._beginInstall(els, seq, /* alreadyStarted */ false);
-            }
-        }).catch(function () {
-            if (self._destroyed || !self._stillRendering(seq)) { return; }
-            // Any HTTP failure (incl. 401 during first-pair) → kick the
-            // install through the POST endpoint, which the backend
-            // handles idempotently.
-            self._beginInstall(els, seq, /* alreadyStarted */ false);
-        });
-    };
-
-    /** @private */
-    SetupConversation.prototype._beginInstall = function (els, seq, alreadyStarted) {
-        var t = root.enmT;
-        var self = this;
-        // alpha.28.1 bug fix — latch `installComplete` in a closure so
-        // applyStatus short-circuits after the first terminal phase
-        // observed. Without it, SSE + poll both delivering
-        // `phase === 'done'` ran _cardBOnDone twice — second call
-        // wrote into a DOM the first had already replaced.
-        var installComplete = false;
-
-        function applyStatus(s) {
-            if (!s || installComplete || self._destroyed) { return; }
-            if (!self._stillRendering(seq)) { return; }
-            var pct = (s.bytesTotal && s.bytesDownloaded)
-                ? Math.min(100, Math.floor((s.bytesDownloaded / s.bytesTotal) * 100))
-                : (s.phase === 'done' ? 100 : (s.phase === 'verifying' ? 95 : 5));
-            els.bar.style.width = pct + '%';
-            els.pct.textContent = pct + '%';
-            els.sub.textContent = phaseLabel(s);
-            if (s.phase === 'done') {
-                installComplete = true;
-                self._teardownInstallTracking();
-                self._cardBOnDone(els, seq);
-            }
-            if (s.phase === 'failed') {
-                installComplete = true;
-                self._teardownInstallTracking();
-                self._cardBOnFailed(els, seq, s);
-            }
-        }
-
-        // Subscribe to SSE for live updates.
-        if (this.sse && typeof this.sse.subscribe === 'function') {
-            if (this._unsubscribeInstall) { this._unsubscribeInstall(); }
-            this._unsubscribeInstall = this.sse.subscribe(
-                'setup:install:mainchain',
-                function (p) { applyStatus(p); }
-            );
-        }
-
-        var startReq = alreadyStarted
-            ? Promise.resolve(null)
-            : this.api.post('/setup/install/mainchain');
-
-        startReq.then(function (resp) {
-            if (self._destroyed) { return; }
-            applyStatus(resp && resp.status);
-            // Fallback poll bound to _currentCard === 'b' AND
-            // installComplete === false so navigation away and terminal
-            // phases both kill the loop. Timer handle is stored on
-            // `this` so destroy()/teardown can cancel a pending tick.
-            (function poll() {
-                if (installComplete || self._destroyed) { return; }
-                if (self._currentCard !== 'b') { return; }
-                if (!self.root.isConnected) { return; }
-                self.api.get('/setup/install-status/mainchain', { skipCache: true })
-                    .then(function (s) {
-                        if (self._destroyed) { return; }
-                        applyStatus(s);
-                        if (!installComplete && self._currentCard === 'b'
-                            && (!s || (s.phase !== 'done' && s.phase !== 'failed'))) {
-                            self._installPollTimer = setTimeout(poll, 2500);
-                        }
-                    })
-                    .catch(function () {
-                        // alpha.28.1 — 401 expected during first-pair;
-                        // retry on a longer cadence so we don't burn
-                        // request budget while owner-token settles.
-                        if (!installComplete && self._currentCard === 'b' && !self._destroyed) {
-                            self._installPollTimer = setTimeout(poll, 4000);
-                        }
-                    });
-            })();
-        }).catch(function (err) {
-            if (self._destroyed) { return; }
-            applyStatus({ phase: 'failed', error: err && err.message ? err.message : String(err) });
-        });
-    };
-
-    /** @private */
-    SetupConversation.prototype._cardBOnDone = function (els, seq) {
-        var t = root.enmT;
-        var self = this;
-        els.bar.style.width = '100%';
-        els.pct.textContent = '100%';
-        els.title.textContent = t('friendly.setup.card_b.title_done');
-        els.sub.textContent   = t('friendly.setup.card_b.sub_done');
-        els.detail.innerHTML  = '';
-        // Hide Cancel + reveal Continue. Continue moves to Card B2
-        // (bootstrap-vs-genesis).
-        this._cancelBtn.hidden = true;
-        this._continueBtn.hidden = false;
-        this._continueBtn.disabled = false;
-        this._continueBtn.textContent = t('friendly.setup.card_b.cta_continue');
-        this._continueBtn.addEventListener('click', function onClick() {
-            if (self._destroyed || !self._stillRendering(seq)) { return; }
-            self._continueBtn.removeEventListener('click', onClick);
-            self._goto('b2');
-        });
-    };
-
-    /** @private */
-    SetupConversation.prototype._cardBOnFailed = function (els, seq, s) {
-        var t = root.enmT;
-        var self = this;
-        els.title.textContent = t('friendly.setup.card_b.phase_failed');
-        els.sub.textContent   = t('friendly.setup.card_b.failed_help');
-        var errMsg = s && s.error ? String(s.error) : '';
-        if (errMsg) {
-            els.detail.innerHTML = '<p class="enm-install-detail-error">' + escapeHtml(errMsg) + '</p>';
-        }
-        // Swap Cancel→Back, Continue→Retry. Retry re-enters _beginInstall.
-        this._cancelBtn.hidden = false;
-        this._cancelBtn.textContent = t('friendly.setup.back');
-        this._cancelBtn.disabled = false;
-        this._continueBtn.hidden = false;
-        this._continueBtn.disabled = false;
-        this._continueBtn.textContent = t('friendly.setup.card_b.cta_retry');
-        this._continueBtn.addEventListener('click', function onRetry() {
-            if (self._destroyed || !self._stillRendering(seq)) { return; }
-            self._continueBtn.removeEventListener('click', onRetry);
-            self._renderCardB(self._cardSeq); // re-render to reset progress UI
-        });
-    };
-
-    // ====================================================================
-    // Card B2 — bootstrap vs genesis snapshot
-    // ====================================================================
-
-    /** @private */
-    SetupConversation.prototype._renderCardB2 = function (seq) {
-        var t = root.enmT;
-        var heading = t('friendly.setup.card_b2.title_idle');
-        this.root.setAttribute('aria-label', heading);
-        this._body.innerHTML =
-            '<h2 class="enm-wiz-heading" id="enm-wiz-heading-b2">' + escapeHtml(heading) + '</h2>'
-            + '<p class="enm-wiz-para" id="enm-wiz-b2-para">' + escapeHtml(t('friendly.setup.card_b2.sub_idle')) + '</p>'
-            + '<div class="enm-role-grid" id="enm-wiz-b2-tiles" role="radiogroup" aria-labelledby="enm-wiz-heading-b2">'
-              + '<button type="button" class="enm-role-card" data-choice="bootstrap" role="radio" aria-checked="false">'
-                + '<span class="enm-role-card-badge enm-role-card-badge-ok">' + escapeHtml(t('friendly.setup.card_b2.badge_recommended')) + '</span>'
-                + '<div class="enm-role-card-head">'
-                  + '<span class="enm-role-card-radio" aria-hidden="true"></span>'
-                  + '<span class="enm-role-card-title">' + escapeHtml(t('friendly.setup.card_b2.tile_bootstrap_title')) + '</span>'
-                + '</div>'
-                + '<p class="enm-role-card-help">' + escapeHtml(t('friendly.setup.card_b2.tile_bootstrap_sub')) + '</p>'
-                + '<div class="enm-role-card-meta"><span>' + escapeHtml(t('friendly.setup.card_b2.tile_bootstrap_meta')) + '</span></div>'
-              + '</button>'
-              + '<button type="button" class="enm-role-card" data-choice="genesis" role="radio" aria-checked="false">'
-                + '<div class="enm-role-card-head">'
-                  + '<span class="enm-role-card-radio" aria-hidden="true"></span>'
-                  + '<span class="enm-role-card-title">' + escapeHtml(t('friendly.setup.card_b2.tile_genesis_title')) + '</span>'
-                + '</div>'
-                + '<p class="enm-role-card-help">' + escapeHtml(t('friendly.setup.card_b2.tile_genesis_sub')) + '</p>'
-                + '<div class="enm-role-card-meta"><span>' + escapeHtml(t('friendly.setup.card_b2.tile_genesis_meta')) + '</span></div>'
-              + '</button>'
-            + '</div>'
-            + '<div class="enm-install-progress" id="enm-wiz-b2-progress" role="status" aria-live="polite" hidden>'
-              + '<div class="enm-install-bar" aria-hidden="true">'
-                + '<div class="enm-install-bar-fill" id="enm-wiz-b2-bar" style="width:0%"></div>'
-              + '</div>'
-              + '<div class="enm-install-bar-label" id="enm-wiz-b2-pct">0%</div>'
-            + '</div>'
-            + '<div class="enm-install-detail" id="enm-wiz-b2-detail"></div>';
-
-        var self = this;
-        var els = {
-            title:    this._body.querySelector('#enm-wiz-heading-b2'),
-            sub:      this._body.querySelector('#enm-wiz-b2-para'),
-            tiles:    this._body.querySelector('#enm-wiz-b2-tiles'),
-            progress: this._body.querySelector('#enm-wiz-b2-progress'),
-            bar:      this._body.querySelector('#enm-wiz-b2-bar'),
-            pct:      this._body.querySelector('#enm-wiz-b2-pct'),
-            detail:   this._body.querySelector('#enm-wiz-b2-detail'),
-        };
-
-        // Footer: Back to Card B, Continue disabled until a choice is made
-        // (or auto-fires when the bootstrap finishes).
+        // Cancel = Back to Card 1 (role chooser). Continue stays
+        // disabled until canProceed === true. NON-SKIPPABLE per
+        // operator directive 2026-05-19.
         this._cancelBtn.hidden = false;
         this._cancelBtn.textContent = t('friendly.setup.back');
         this._cancelBtn.addEventListener('click', function () {
             if (self._destroyed) { return; }
-            self._teardownBootstrapTracking();
-            self._goto('b');
+            self._goto('1');
         });
+        this._continueBtn.hidden = false;
         this._continueBtn.disabled = true;
-        this._continueBtn.textContent = t('friendly.setup.card_b2.cta_continue');
-
-        var pickedChoice = null;
-        els.tiles.querySelectorAll('.enm-role-card').forEach(function (card) {
-            card.addEventListener('click', function () {
-                if (self._destroyed || !self._stillRendering(seq)) { return; }
-                els.tiles.querySelectorAll('.enm-role-card').forEach(function (c) {
-                    c.removeAttribute('data-selected');
-                    c.setAttribute('aria-checked', 'false');
-                });
-                card.setAttribute('data-selected', 'true');
-                card.setAttribute('aria-checked', 'true');
-                pickedChoice = card.getAttribute('data-choice');
-                self._continueBtn.disabled = false;
-            });
-        });
-
+        this._continueBtn.textContent = t('friendly.setup.card_2.cta');
         this._continueBtn.addEventListener('click', function () {
             if (self._destroyed || !self._stillRendering(seq)) { return; }
-            if (!pickedChoice) { return; }
-            if (pickedChoice === 'genesis') {
-                self._b2ChooseGenesis(els, seq);
-            } else {
-                self._b2BeginBootstrap(els, seq, /* alreadyStarted */ false);
-            }
+            if (self._continueBtn.disabled) { return; }
+            self._goto('3');
         });
 
-        // Recovery: if a bootstrap is already running on the server,
-        // jump straight to the live-progress UI.
-        this.api.get('/chains/mainchain/bootstrap', { skipCache: true }).then(function (data) {
-            if (self._destroyed || !self._stillRendering(seq)) { return; }
-            var s = data && data.status;
-            if (!s) { return; }
-            if (s.phase === 'downloading' || s.phase === 'extracting'
-                || s.phase === 'applying'   || s.phase === 'verifying'
-                || s.phase === 'resolving') {
-                self._b2BeginBootstrap(els, seq, /* alreadyStarted */ true);
-            } else if (s.phase === 'done') {
-                self._b2OnBootstrapDone(els, seq);
-            }
-            // 'idle' / 'failed' both leave the tiles visible.
-        }).catch(function () { /* tiles already rendered */ });
-    };
-
-    /** @private */
-    SetupConversation.prototype._b2ChooseGenesis = function (els, seq) {
-        var t = root.enmT;
-        var self = this;
-        els.tiles.querySelectorAll('.enm-role-card').forEach(function (b) { b.disabled = true; });
-        els.sub.textContent = t('friendly.setup.card_b2.advancing');
-        this._continueBtn.disabled = true;
-        this.api.post('/setup/bootstrap', { choice: 'genesis' }).then(function () {
-            if (self._destroyed || !self._stillRendering(seq)) { return; }
-            if (self.notifications && typeof self.notifications.info === 'function') {
-                self.notifications.info(
-                    t('friendly.setup.card_b2.genesis_picked_title'),
-                    t('friendly.setup.card_b2.genesis_picked_sub')
-                );
-            }
-            self._goto('b3');
-        }).catch(function (err) {
-            if (self._destroyed || !self._stillRendering(seq)) { return; }
-            els.tiles.querySelectorAll('.enm-role-card').forEach(function (b) { b.disabled = false; });
-            els.sub.textContent = t('friendly.setup.card_b2.advance_failed',
-                { error: err && err.message ? err.message : String(err) });
-            self._continueBtn.disabled = false;
-        });
-    };
-
-    /** @private */
-    SetupConversation.prototype._b2BeginBootstrap = function (els, seq, alreadyStarted) {
-        var t = root.enmT;
-        var self = this;
-        els.tiles.hidden = true;
-        els.title.textContent = t('friendly.setup.card_b2.title_running');
-        els.sub.textContent   = t('friendly.setup.card_b2.sub_running');
-        els.progress.hidden   = false;
-        // Footer: keep Cancel (now aborts the download) — hide Continue
-        // until bootstrap completes.
-        this._continueBtn.hidden = true;
-        this._continueBtn.disabled = true;
-        // Replace the existing Cancel handler with a bootstrap-abort.
-        // beta.3.37 — explicitly reset `disabled` on the clone. cloneNode
-        // preserves attributes, so a prior cancellation that disabled the
-        // button (or a stale state on reload) would carry through and the
-        // operator couldn't click Cancel a second time.
-        var newCancel = this._cancelBtn.cloneNode(false);
-        newCancel.hidden = false;
-        newCancel.disabled = false;
-        newCancel.textContent = t('friendly.setup.card_b2.cancel');
-        this._cancelBtn.parentNode.replaceChild(newCancel, this._cancelBtn);
-        this._cancelBtn = newCancel;
-        this._cancelBtn.addEventListener('click', function () {
-            if (self._destroyed || !self._stillRendering(seq)) { return; }
-            self._cancelBtn.disabled = true;
-            self.api.del('/chains/mainchain/bootstrap').catch(function () { /* ignore */ });
-        });
-
-        this._teardownBootstrapTracking();
-        var done = false;
-
-        function applyStatus(s) {
-            if (!s || done || self._destroyed) { return; }
-            if (!self._stillRendering(seq)) { return; }
-            // beta.3.37 — SSE events publish { got, total } (see
-            // EnmBootstrapDownloader._emit), HTTP poll responses carry
-            // { bytesDownloaded, bytesTotal }. Pre-3.37 the wizard only
-            // looked at the HTTP shape, so every SSE chunk-progress
-            // event hit the fallback branch and re-snapped the bar
-            // back to 5%. Accept both shapes.
-            var got   = (typeof s.bytesDownloaded === 'number') ? s.bytesDownloaded
-                      : (typeof s.got === 'number') ? s.got : 0;
-            var total = (typeof s.bytesTotal === 'number') ? s.bytesTotal
-                      : (typeof s.total === 'number') ? s.total : 0;
-            var pct = (total && got)
-                ? Math.min(100, Math.floor((got / total) * 100))
-                : (s.phase === 'done' ? 100 : (s.phase === 'extracting' ? 95 : 5));
-            els.bar.style.width = pct + '%';
-            els.pct.textContent = pct + '%';
-            els.sub.textContent = bootstrapPhaseLabel(s);
-            // Hide cancel during apply/verify — can't safely abort.
-            if (self._cancelBtn && (s.phase === 'applying' || s.phase === 'verifying')) {
-                self._cancelBtn.hidden = true;
-            }
-            if (s.phase === 'done') {
-                done = true;
-                self._teardownBootstrapTracking();
-                self._b2OnBootstrapDone(els, seq);
-            }
-            if (s.phase === 'failed') {
-                done = true;
-                self._teardownBootstrapTracking();
-                self._b2OnBootstrapFailed(els, seq, s);
-            }
-        }
-
-        if (this.sse && typeof this.sse.subscribe === 'function') {
-            this._unsubscribeBootstrap = this.sse.subscribe(
-                'setup:bootstrap:mainchain',
-                function (payload) { applyStatus(payload); }
-            );
-        }
-        this._bootstrapPollTimer = setInterval(function () {
-            if (done || self._destroyed) { return; }
-            self.api.get('/chains/mainchain/bootstrap', { skipCache: true }).then(function (data) {
-                if (self._destroyed) { return; }
-                applyStatus(data && data.status);
-            }).catch(function () { /* tick again on next interval */ });
-        }, 2000);
-
-        var startPromise = alreadyStarted
-            ? this.api.get('/chains/mainchain/bootstrap', { skipCache: true })
-                .then(function (data) { return { status: data && data.status }; })
-            : this.api.post('/chains/mainchain/bootstrap');
-        startPromise.then(function (result) {
-            if (self._destroyed) { return; }
-            applyStatus(result && result.status);
-        }).catch(function (err) {
-            if (self._destroyed) { return; }
-            applyStatus({ phase: 'failed', error: err && err.message ? err.message : String(err) });
-        });
-    };
-
-    /** @private */
-    SetupConversation.prototype._b2OnBootstrapDone = function (els, seq) {
-        var t = root.enmT;
-        var self = this;
-        els.title.textContent = t('friendly.setup.card_b2.title_done');
-        els.sub.textContent   = t('friendly.setup.card_b2.sub_done');
-        els.bar.style.width   = '100%';
-        els.pct.textContent   = '100%';
-        // Restore Continue; reset cancel back to Back.
-        this._cancelBtn.hidden = false;
-        this._cancelBtn.textContent = t('friendly.setup.back');
-        this._continueBtn.hidden = false;
-        this._continueBtn.disabled = false;
-        this._continueBtn.textContent = t('friendly.setup.card_b2.cta_continue');
-        this._continueBtn.addEventListener('click', function onClick() {
-            if (self._destroyed || !self._stillRendering(seq)) { return; }
-            self._continueBtn.removeEventListener('click', onClick);
-            self.api.post('/setup/bootstrap', { choice: 'bootstrap' })
-                .then(function () { if (!self._destroyed) { self._goto('b3'); } })
-                .catch(function () {
-                    // Bootstrap is done on-disk even if step-advance fails;
-                    // the resume code is permissive about missing currentStep
-                    // so we still land on the right card.
-                    if (!self._destroyed) { self._goto('b3'); }
+        function runChecks() {
+            listEl.innerHTML = '<li class="enm-syscheck-row" data-state="checking">'
+                + '<span class="enm-syscheck-icon" aria-hidden="true">⟳</span>'
+                + '<span class="enm-syscheck-text">'
+                + escapeHtml(t('friendly.setup.card_2.running')) + '</span></li>';
+            remEl.hidden = true;
+            remEl.innerHTML = '';
+            self._continueBtn.disabled = true;
+            self.api.get('/setup/system-check?path=' + pathName, { skipCache: true })
+                .then(function (report) {
+                    if (self._destroyed || !self._stillRendering(seq)) { return; }
+                    self._renderCard2Report(listEl, remEl, report, runChecks);
+                })
+                .catch(function (err) {
+                    if (self._destroyed || !self._stillRendering(seq)) { return; }
+                    listEl.innerHTML = '<li class="enm-syscheck-row" data-state="error">'
+                        + '<span class="enm-syscheck-icon" aria-hidden="true">✗</span>'
+                        + '<span class="enm-syscheck-text">'
+                        +   escapeHtml(t('friendly.setup.card_2.err_prefix'))
+                        +   escapeHtml((err && err.message) || String(err))
+                        + '</span></li>';
                 });
-        });
-    };
-
-    /** @private */
-    SetupConversation.prototype._b2OnBootstrapFailed = function (els, seq, s) {
-        var t = root.enmT;
-        var self = this;
-        els.title.textContent = t('friendly.setup.card_b2.title_failed');
-        els.sub.textContent   = (s && s.error) || t('friendly.setup.card_b2.sub_failed');
-        // Cancel→Back, Continue→Retry.
-        // beta.3.37 — explicitly reset `disabled` and `hidden`. The
-        // failure path is reached after the cancel button was disabled
-        // by its own click handler; cloneNode preserved that, so the
-        // operator's "skip and sync from scratch" button rendered but
-        // wasn't clickable.
-        this._cancelBtn.hidden = false;
-        this._cancelBtn.textContent = t('friendly.setup.card_b2.cta_fallback_genesis');
-        var newCancel = this._cancelBtn.cloneNode(false);
-        newCancel.hidden = false;
-        newCancel.disabled = false;
-        newCancel.textContent = t('friendly.setup.card_b2.cta_fallback_genesis');
-        this._cancelBtn.parentNode.replaceChild(newCancel, this._cancelBtn);
-        this._cancelBtn = newCancel;
-        this._cancelBtn.addEventListener('click', function () {
-            if (self._destroyed || !self._stillRendering(seq)) { return; }
-            self._b2ChooseGenesis(els, seq);
-        });
-        this._continueBtn.hidden = false;
-        this._continueBtn.disabled = false;
-        this._continueBtn.textContent = t('friendly.setup.card_b2.cta_retry');
-        this._continueBtn.addEventListener('click', function onRetry() {
-            if (self._destroyed || !self._stillRendering(seq)) { return; }
-            self._continueBtn.removeEventListener('click', onRetry);
-            self._b2BeginBootstrap(els, seq, false);
-        });
-    };
-
-    // ====================================================================
-    // Card B3 — clock-skew preflight (F13)
-    // ====================================================================
-
-    /**
-     * ELA's Schnorr signatures get rejected silently when the host clock
-     * drifts >~4.2s from consensus partners. We surface the preflight
-     * result so the operator can fix NTP BEFORE registering. Three
-     * outcomes (skipped / out-of-sync / in-sync); the wizard MUST NEVER
-     * deadlock on this card, so even a probe failure renders the
-     * skipped (YELLOW) path with a Continue button.
-     */
-    SetupConversation.prototype._renderCardB3 = function (seq) {
-        var tt = root.enmTOrFallback;
-        var initialTitle = 'Checking host clock…';
-        this.root.setAttribute('aria-label', initialTitle);
-        this._body.innerHTML =
-            '<h2 class="enm-wiz-heading" id="enm-wiz-heading-b3">' + escapeHtml(initialTitle) + '</h2>'
-            + '<p class="enm-wiz-para" id="enm-wiz-b3-para">Comparing your server clock to internet time. DPoS signatures fail if the host drifts more than ~4 seconds.</p>'
-            + '<div id="enm-wiz-b3-detail" class="enm-install-detail enm-clock-detail" aria-live="polite"></div>';
-
-        var self = this;
-        var els = {
-            title:  this._body.querySelector('#enm-wiz-heading-b3'),
-            sub:    this._body.querySelector('#enm-wiz-b3-para'),
-            detail: this._body.querySelector('#enm-wiz-b3-detail'),
-        };
-
-        // Cancel = Back to B2; Continue is wired by the result handler.
-        this._cancelBtn.hidden = false;
-        this._cancelBtn.textContent = tt('friendly.setup.back');
-        this._cancelBtn.addEventListener('click', function () {
-            if (self._destroyed) { return; }
-            self._goto('b2');
-        });
-
-        this._runClockSkewProbe(els, seq);
-    };
-
-    /** @private */
-    SetupConversation.prototype._runClockSkewProbe = function (els, seq) {
-        var self = this;
-        els.detail.innerHTML = '';
-        els.title.textContent = 'Checking host clock…';
-        els.sub.textContent   = 'Comparing your server clock to internet time. DPoS signatures fail if the host drifts more than ~4 seconds.';
-        // Disable Continue while probe is in flight.
-        this._continueBtn.disabled = true;
-        this._continueBtn.hidden = false;
-        this._continueBtn.textContent = 'Checking…';
-
-        this.api.get('/setup/preflight', { skipCache: true }).then(function (resp) {
-            if (self._destroyed || !self._stillRendering(seq)) { return; }
-            var cs = resp && resp.clockSkew;
-            if (!cs) {
-                cs = { ok: true, skipped: true, reason: 'no clockSkew in preflight response' };
-            }
-            self._renderClockSkewResult(els, seq, cs);
-        }).catch(function (err) {
-            if (self._destroyed || !self._stillRendering(seq)) { return; }
-            // Even the probe call itself failed — render as a SKIP so
-            // the operator can always continue. The wizard NEVER gets
-            // stuck on this card.
-            self._renderClockSkewResult(els, seq, {
-                ok: true,
-                skipped: true,
-                reason: err && err.message ? err.message : String(err),
-            });
-        });
-    };
-
-    /** @private */
-    SetupConversation.prototype._renderClockSkewResult = function (els, seq, cs) {
-        var tt = root.enmTOrFallback;
-        var self = this;
-
-        if (cs.skipped) {
-            // YELLOW: probe didn't reach the internet. Warn but allow continue.
-            els.title.textContent = tt('clock_skew.skipped_title');
-            els.sub.textContent   = tt('clock_skew.skipped_sub');
-            els.detail.innerHTML =
-                '<div class="enm-clock-card enm-clock-card-warn">'
-                  + '<div class="enm-clock-card-icon" aria-hidden="true">!</div>'
-                  + '<div class="enm-clock-card-body">'
-                    + '<div class="enm-clock-card-title">' + escapeHtml(tt('clock_skew.skipped_card_title')) + '</div>'
-                    + '<div class="enm-clock-card-sub">'
-                      + tt('clock_skew.skipped_card_body', {
-                          reason: escapeHtml(cs.reason || 'network unreachable'),
-                      })
-                    + '</div>'
-                  + '</div>'
-                + '</div>';
-            this._continueBtn.disabled = false;
-            this._continueBtn.textContent = tt('clock_skew.skipped_cta_continue');
-            this._continueBtn.addEventListener('click', function onContinue() {
-                if (self._destroyed || !self._stillRendering(seq)) { return; }
-                self._continueBtn.removeEventListener('click', onContinue);
-                self._goto('c');
-            });
-            return;
         }
 
-        if (!cs.ok) {
-            // RED: skew exceeds the safe window. Operator MUST fix this.
-            var skewMs = Number.isFinite(cs.skewMs) ? cs.skewMs : 0;
-            var skewSeconds = (Math.abs(skewMs) / 1000).toFixed(1);
-            var direction = skewMs > 0
-                ? tt('clock_skew.direction_ahead')
-                : tt('clock_skew.direction_behind');
-            els.title.textContent = tt('clock_skew.out_of_sync_title');
-            els.sub.textContent   = tt('clock_skew.out_of_sync_sub', {
-                skewSeconds: skewSeconds,
-                direction:   direction,
-            });
-            els.detail.innerHTML =
-                '<div class="enm-clock-card enm-clock-card-error">'
-                  + '<div class="enm-clock-card-icon" aria-hidden="true">!</div>'
-                  + '<div class="enm-clock-card-body">'
-                    + '<div class="enm-clock-card-title">' + escapeHtml(tt('clock_skew.out_card_title')) + '</div>'
-                    + '<div class="enm-clock-card-sub">' + tt('clock_skew.out_card_body') + '</div>'
-                  + '</div>'
-                + '</div>';
-            // Continue → Retry. Cancel keeps "Back". A second option
-            // (Continue anyway) lives inline in the detail card as a
-            // text link for the air-gapped/test environment escape.
-            els.detail.innerHTML += '<p class="enm-clock-override-row">'
-                + '<button type="button" class="enm-conv-textlink enm-clock-override-btn">'
-                  + escapeHtml(tt('clock_skew.out_cta_override'))
-                + '</button>'
-                + '</p>';
-            els.detail.querySelector('.enm-clock-override-btn').addEventListener('click', function () {
-                if (self._destroyed || !self._stillRendering(seq)) { return; }
-                self._goto('c');
-            });
-            this._continueBtn.disabled = false;
-            this._continueBtn.textContent = tt('clock_skew.out_cta_retry');
-            this._continueBtn.addEventListener('click', function onRetry() {
-                if (self._destroyed || !self._stillRendering(seq)) { return; }
-                self._continueBtn.removeEventListener('click', onRetry);
-                self._runClockSkewProbe(els, seq);
-            });
-            return;
-        }
-
-        // GREEN: in sync. Show the absolute skew + continue.
-        var absMs = Number.isFinite(cs.absSkewMs)
-            ? cs.absSkewMs
-            : Math.abs(Number.isFinite(cs.skewMs) ? cs.skewMs : 0);
-        els.title.textContent = tt('clock_skew.ok_title');
-        els.sub.textContent   = tt('clock_skew.ok_sub');
-        els.detail.innerHTML =
-            '<div class="enm-clock-card enm-clock-card-ok">'
-              + '<div class="enm-clock-card-icon" aria-hidden="true">+</div>'
-              + '<div class="enm-clock-card-body">'
-                + '<div class="enm-clock-card-title">' + escapeHtml(tt('clock_skew.ok_card_title', { absMs: String(absMs) })) + '</div>'
-                + '<div class="enm-clock-card-sub">'
-                  + tt('clock_skew.ok_card_body', {
-                      source: escapeHtml(cs.source || tt('clock_skew.ok_default_source')),
-                  })
-                + '</div>'
-              + '</div>'
-            + '</div>';
-        this._continueBtn.disabled = false;
-        this._continueBtn.textContent = tt('clock_skew.ok_cta_continue');
-        this._continueBtn.addEventListener('click', function onContinue() {
-            if (self._destroyed || !self._stillRendering(seq)) { return; }
-            self._continueBtn.removeEventListener('click', onContinue);
-            self._goto('c');
-        });
+        rerun.addEventListener('click', runChecks);
+        runChecks();
     };
 
-    // ====================================================================
-    // Card C — keystore password reveal
-    // ====================================================================
-
     /** @private */
-    SetupConversation.prototype._renderCardC = function (seq) {
+    SetupConversation.prototype._renderCard2Report = function (listEl, remEl, report, rerun) {
         var t = root.enmT;
-        var heading = t('friendly.setup.card_c.title_initial');
-        this.root.setAttribute('aria-label', heading);
-        // beta.3.42 — auto-skip Card C when a keystore already exists.
-        // Operators reaching this card via Chain Resync or a restored
-        // install would otherwise see "Generate my password" again,
-        // clicking which would overwrite the existing keystore.dat
-        // (and erase the on-chain pubkey they registered with). We
-        // probe /setup/keystore/account first; on exists=true we
-        // _goto('d') immediately without rendering Card C's body.
         var self = this;
-        this.api.get('/setup/keystore/account', { skipCache: true }).then(function (resp) {
-            if (self._destroyed || !self._stillRendering(seq)) { return; }
-            var r = (resp && resp.result) || resp || {};
-            if (r.exists) {
-                // Keystore already on disk — mark setup_state and jump
-                // to Card D. We POST /setup/keystore with body unset so
-                // the route's beta.3.42 "reuse existing" branch fires,
-                // which upserts setup_state.keystore_imported=1 +
-                // current_step='network'.
-                self.api.post('/setup/keystore', { enableArbiter: true })
-                    .then(function () {
+        listEl.innerHTML = '';
+        var checks = (report && report.checks) || [];
+        checks.forEach(function (c) {
+            // ok=true → ✓ (green); required failure → ✗ (red);
+            // recommended failure → ⚠ (amber).
+            var stateAttr = c.ok ? 'ok'
+                          : (c.severity === 'required' ? 'error' : 'warn');
+            var icon = c.ok ? '✓'
+                     : (c.severity === 'required' ? '✗' : '⚠');
+            var row = document.createElement('li');
+            row.className = 'enm-syscheck-row';
+            row.setAttribute('data-state', stateAttr);
+            row.innerHTML = ''
+                + '<span class="enm-syscheck-icon" aria-hidden="true">' + icon + '</span>'
+                + '<div class="enm-syscheck-text">'
+                +   '<div class="enm-syscheck-label">' + escapeHtml(c.label || c.id) + '</div>'
+                +   '<div class="enm-syscheck-message">' + escapeHtml(c.message || '') + '</div>'
+                + '</div>';
+            listEl.appendChild(row);
+        });
+
+        // Render the add-swap remediation chip when offered. Only
+        // BPoS-on-exactly-8GB hosts get this; other paths leave the
+        // remEl hidden + empty.
+        var rem = report && report.remediation && report.remediation['add-swap'];
+        if (rem) {
+            remEl.hidden = false;
+            remEl.innerHTML = ''
+                + '<p class="enm-syscheck-rem-label">'
+                +   escapeHtml(t('friendly.setup.card_2.add_swap_label')) + '</p>'
+                + '<button type="button" class="enm-btn enm-btn-primary" '
+                +   'data-action="add-swap">'
+                +   escapeHtml(t('friendly.setup.card_2.add_swap_btn')) + '</button>'
+                + '<p class="enm-syscheck-rem-status" hidden></p>';
+            var swapBtn = remEl.querySelector('[data-action="add-swap"]');
+            var statusEl = remEl.querySelector('.enm-syscheck-rem-status');
+            swapBtn.addEventListener('click', function () {
+                if (self._destroyed) { return; }
+                swapBtn.disabled = true;
+                swapBtn.textContent = t('friendly.setup.card_2.add_swap_working');
+                self.api.post('/setup/system/add-swap', {})
+                    .then(function (resp) {
                         if (self._destroyed) { return; }
-                        self._goto('d');
+                        statusEl.hidden = false;
+                        statusEl.textContent = t('friendly.setup.card_2.add_swap_done',
+                            { freeGbAfter: String((resp && resp.freeGbAfter) || '?') });
+                        // Re-run checks — swap should flip RAM check to ok=true.
+                        rerun();
                     })
-                    .catch(function () {
-                        // If the reuse call fails, fall back to the
-                        // generate flow so the operator isn't stuck.
+                    .catch(function (err) {
                         if (self._destroyed) { return; }
-                        self._renderCardCGenerate(seq);
+                        swapBtn.disabled = false;
+                        swapBtn.textContent = t('friendly.setup.card_2.add_swap_btn');
+                        statusEl.hidden = false;
+                        statusEl.textContent = t('friendly.setup.card_2.add_swap_failed',
+                            { error: (err && err.message) || String(err) });
                     });
-                return;
-            }
-            self._renderCardCGenerate(seq);
-        }).catch(function () {
-            if (self._destroyed || !self._stillRendering(seq)) { return; }
-            self._renderCardCGenerate(seq);
-        });
+            });
+        } else {
+            remEl.hidden = true;
+            remEl.innerHTML = '';
+        }
+
+        this._continueBtn.disabled = !(report && report.canProceed);
+        if (!report || !report.canProceed) {
+            // Help line for the operator — clarifies why Continue is
+            // locked + how to recover.
+            var helpRow = document.createElement('li');
+            helpRow.className = 'enm-syscheck-row enm-syscheck-help';
+            helpRow.setAttribute('data-state', 'warn');
+            helpRow.innerHTML = '<span class="enm-syscheck-icon" aria-hidden="true">!</span>'
+                + '<div class="enm-syscheck-text">'
+                +   '<div class="enm-syscheck-message">'
+                +     escapeHtml(t('friendly.setup.card_2.blocked_help'))
+                +   '</div>'
+                + '</div>';
+            listEl.appendChild(helpRow);
+        }
     };
 
-    /**
-     * Render the "Generate my password" body of Card C. Split out from
-     * _renderCardC so the auto-skip path can short-circuit cleanly.
-     * @private
-     */
-    SetupConversation.prototype._renderCardCGenerate = function (seq) {
+    // ====================================================================
+    // Card 3 — master password (generate + acknowledge)
+    // ====================================================================
+    //
+    // Reuses POST /setup/keystore (the existing keystore-generation
+    // endpoint) — server returns a fresh 32-char password in
+    // `generatedPassword`. We stash it in self._masterPassword so
+    // Card 5's install-council payload can ship it as
+    // `masterPassword`. For the BPoS path, the keystore is what
+    // signs DPoS rounds; for Council, the same value re-encrypts
+    // every EVM keystore + Arbiter wallet (H23 invariant on the
+    // backend).
+
+    /** @private */
+    SetupConversation.prototype._renderCard3 = function (seq) {
         var t = root.enmT;
-        var heading = t('friendly.setup.card_c.title_initial');
-        this._body.innerHTML =
-            '<h2 class="enm-wiz-heading" id="enm-wiz-heading-c">' + escapeHtml(heading) + '</h2>'
-            + '<p class="enm-wiz-para" id="enm-wiz-c-para">' + escapeHtml(t('friendly.setup.card_c.sub_initial')) + '</p>'
-            + '<div id="enm-wiz-c-reveal"></div>';
-
+        var heading = t('friendly.setup.card_3.title');
+        var sub = (this._goal === 'council')
+            ? t('friendly.setup.card_3.sub_council')
+            : t('friendly.setup.card_3.sub_bpos');
+        this.root.setAttribute('aria-label', heading);
+        this._body.innerHTML = ''
+            + '<h2 class="enm-wiz-heading" id="enm-wiz-heading-3">' + escapeHtml(heading) + '</h2>'
+            + '<p class="enm-wiz-para">' + escapeHtml(sub) + '</p>'
+            + '<div class="enm-master-pw-body" id="enm-wiz-3-body"></div>';
         var self = this;
-        var els = {
-            title:   this._body.querySelector('#enm-wiz-heading-c'),
-            sub:     this._body.querySelector('#enm-wiz-c-para'),
-            reveal:  this._body.querySelector('#enm-wiz-c-reveal'),
-        };
+        var body = this._body.querySelector('#enm-wiz-3-body');
 
-        // Cancel = Back to B3. Continue starts as "Generate my password"
-        // and swaps to "Continue" once the reveal is acknowledged.
+        // Cancel wires the same on first visit + on Back-from-Card-4.
+        // Continue is bound after the cancel because _renderCard3Reveal
+        // clones it; cloning Cancel would lose this handler.
         this._cancelBtn.hidden = false;
         this._cancelBtn.textContent = t('friendly.setup.back');
         this._cancelBtn.addEventListener('click', function () {
             if (self._destroyed) { return; }
-            self._goto('b3');
+            self._goto('2');
         });
+
+        // If we already generated the password earlier (e.g. operator
+        // navigated forward to Card 4, then Back), re-render the reveal
+        // panel with the SAME password — don't ask the server again
+        // (the keystore is already on disk).
+        if (this._masterPassword) {
+            this._renderCard3Reveal(body, seq, this._masterPassword);
+            return;
+        }
+
+        this._continueBtn.hidden = false;
         this._continueBtn.disabled = false;
-        this._continueBtn.textContent = t('friendly.setup.card_c.cta_generate');
+        this._continueBtn.textContent = t('friendly.setup.card_3.cta_generate');
         this._continueBtn.addEventListener('click', function onGenerate() {
             if (self._destroyed || !self._stillRendering(seq)) { return; }
             self._continueBtn.removeEventListener('click', onGenerate);
             self._continueBtn.disabled = true;
             self._continueBtn.textContent = 'Generating…';
-            self._generateKeystore(els, seq);
+            // Council needs the keystore + arbiter wallet, so we pass
+            // enableArbiter:true. BPoS-only also runs with
+            // enableArbiter:true because the keystore.dat we generate
+            // here serves as the DPoS signing key for the producer; the
+            // existing backend semantics treat that flag as "BPoS"
+            // (the original alpha-era schema; council reuses the same
+            // pathway).
+            self.api.post('/setup/keystore', { enableArbiter: true })
+                .then(function (resp) {
+                    if (self._destroyed || !self._stillRendering(seq)) { return; }
+                    var pw = (resp && resp.generatedPassword) || '';
+                    if (!pw) {
+                        // The backend reused an existing keystore on
+                        // disk (alpha.3.42 branch) — we don't know the
+                        // password. Surface a clear error so the
+                        // operator can decide what to do.
+                        self._notify(t('friendly.error.generic'),
+                            'A keystore already exists on disk; the master '
+                            + 'password generated for it earlier is not '
+                            + 'recoverable. Wipe the keystore and retry, '
+                            + 'or restore from your password manager.',
+                            'warning');
+                        self._continueBtn.disabled = false;
+                        self._continueBtn.textContent = t('friendly.setup.card_3.cta_generate');
+                        return;
+                    }
+                    self._masterPassword = pw;
+                    self._renderCard3Reveal(body, seq, pw);
+                })
+                .catch(function (err) {
+                    if (self._destroyed || !self._stillRendering(seq)) { return; }
+                    self._notify(t('friendly.error.generic'),
+                        (err && err.message) || String(err), 'warning');
+                    self._continueBtn.disabled = false;
+                    self._continueBtn.textContent = t('friendly.setup.card_3.cta_generate');
+                });
         });
     };
 
     /** @private */
-    SetupConversation.prototype._generateKeystore = function (els, seq) {
+    SetupConversation.prototype._renderCard3Reveal = function (body, seq, password) {
         var t = root.enmT;
         var self = this;
-        // BPoS path → server generates a strong password.
-        this.api.post('/setup/keystore', { enableArbiter: true }).then(function (resp) {
-            if (self._destroyed || !self._stillRendering(seq)) { return; }
-            self._renderKeystoreReveal(els, seq, resp.generatedPassword || '');
-        }).catch(function (err) {
-            if (self._destroyed || !self._stillRendering(seq)) { return; }
-            self._notify(t('friendly.error.generic'),
-                err && err.message ? err.message : String(err), 'warning');
-            // Reset Continue back to generate.
-            self._continueBtn.disabled = false;
-            self._continueBtn.textContent = t('friendly.setup.card_c.cta_generate');
-            self._continueBtn.addEventListener('click', function onRetry() {
-                if (self._destroyed || !self._stillRendering(seq)) { return; }
-                self._continueBtn.removeEventListener('click', onRetry);
-                self._continueBtn.disabled = true;
-                self._continueBtn.textContent = 'Generating…';
-                self._generateKeystore(els, seq);
-            });
-        });
-    };
-
-    /** @private */
-    SetupConversation.prototype._renderKeystoreReveal = function (els, seq, password) {
-        var t = root.enmT;
-        var self = this;
-        els.title.textContent = t('friendly.setup.card_c.title_generated');
-        els.sub.textContent   = t('friendly.setup.card_c.sub_generated');
-        // beta.3.38 — added a structured layout: prominent warning callout
-        // above the password block so the operator can't miss the "won't
-        // be shown again" consequence, then a full-width monospace block
-        // for the password value with the copy button in its own row
-        // (was inline + truncated visually next to the value).
-        els.reveal.innerHTML =
-            '<div class="enm-password-warning" role="alert">'
-              + '<span class="enm-password-warning-icon" aria-hidden="true">⚠</span>'
-              + '<span class="enm-password-warning-body">'
-                + escapeHtml(t('friendly.setup.card_c.warning'))
-              + '</span>'
+        body.innerHTML = ''
+            + '<div class="enm-password-warning enm-master-pw-warning" role="alert">'
+            +   '<span class="enm-password-warning-icon" aria-hidden="true">⚠</span>'
+            +   '<span class="enm-password-warning-body">'
+            +     escapeHtml(t('friendly.setup.card_3.warning'))
+            +   '</span>'
             + '</div>'
-            + '<div class="enm-password-reveal">'
-              + '<div class="enm-password-label">'
-                + escapeHtml(t('friendly.setup.card_c.password_label'))
-              + '</div>'
-              + '<code class="enm-password-value">' + escapeHtml(password) + '</code>'
-              + '<div class="enm-password-actions">'
-                + '<span class="enm-password-copy-slot"></span>'
-              + '</div>'
+            + '<div class="enm-password-reveal enm-master-pw-reveal">'
+            +   '<div class="enm-password-label">'
+            +     escapeHtml(t('friendly.setup.card_3.password_label'))
+            +   '</div>'
+            +   '<code class="enm-password-value">' + escapeHtml(password) + '</code>'
+            +   '<div class="enm-password-actions">'
+            +     '<span class="enm-master-pw-copy-slot"></span>'
+            +   '</div>'
             + '</div>'
-            + '<label class="enm-conv-checkbox">'
-              + '<input type="checkbox" id="enm-wiz-c-ack"/>'
-              + '<span>' + escapeHtml(t('friendly.setup.card_c.ack')) + '</span>'
+            + '<label class="enm-conv-checkbox enm-master-pw-ack">'
+            +   '<input type="checkbox" id="enm-wiz-3-ack"/>'
+            +   '<span>' + escapeHtml(t('friendly.setup.card_3.ack')) + '</span>'
             + '</label>';
 
-        // alpha.29 batch 100 — keystore-password copy button via the
-        // root.enmCopyButton factory. Replaces 30+ lines of hand-wired
-        // onFallback + selectInto + warning-toast plumbing.
-        var pwEl = els.reveal.querySelector('.enm-password-value');
+        var pwEl = body.querySelector('.enm-password-value');
         if (typeof root.enmCopyButton === 'function') {
             var copyBtn = root.enmCopyButton({
                 value: password,
-                label: t('friendly.setup.card_c.cta_copy'),
-                copiedLabel: t('friendly.setup.card_c.cta_copied'),
-                ariaLabel: 'Copy keystore password',
+                label: t('friendly.setup.card_3.cta_copy'),
+                copiedLabel: t('friendly.setup.card_3.cta_copied'),
+                ariaLabel: 'Copy master password',
                 resetMs: 1500,
                 notifications: self.notifications,
-                failTitle: t('friendly.setup.card_c.copy_fail_title'),
-                failBody: t('friendly.setup.card_c.copy_fail_body'),
+                failTitle: t('friendly.setup.card_3.copy_fail_title'),
+                failBody: t('friendly.setup.card_3.copy_fail_body'),
                 getDisplayEl: function () { return pwEl; },
             });
             copyBtn.classList.add('enm-password-copy');
-            var slot = els.reveal.querySelector('.enm-password-copy-slot');
+            var slot = body.querySelector('.enm-master-pw-copy-slot');
             if (slot && slot.parentNode) {
                 slot.parentNode.replaceChild(copyBtn, slot);
             }
         }
 
-        // Continue gated on the ack checkbox.
-        this._continueBtn.disabled = true;
-        this._continueBtn.textContent = t('friendly.setup.card_c.cta_continue');
+        // Continue is locked until the ack checkbox is ticked. The
+        // existing footer button (still wired to onGenerate handler)
+        // needs to be replaced — easiest is to clone it so the old
+        // listener falls off.
+        var newContinue = this._continueBtn.cloneNode(false);
+        newContinue.hidden = false;
+        newContinue.disabled = true;
+        newContinue.textContent = t('friendly.setup.card_3.cta_continue');
+        this._continueBtn.parentNode.replaceChild(newContinue, this._continueBtn);
+        this._continueBtn = newContinue;
         this._continueBtn.addEventListener('click', function onContinue() {
             if (self._destroyed || !self._stillRendering(seq)) { return; }
             self._continueBtn.removeEventListener('click', onContinue);
-            self._goto('d');
+            self._goto('4');
         });
-        var ack = els.reveal.querySelector('#enm-wiz-c-ack');
+
+        var ack = body.querySelector('#enm-wiz-3-ack');
         ack.addEventListener('change', function () {
             self._continueBtn.disabled = !ack.checked;
         });
     };
 
     // ====================================================================
-    // Card D — finalize + start chain + celebrate
-    // ====================================================================
-
-    /** @private */
-    SetupConversation.prototype._renderCardD = function (seq) {
-        var t = root.enmT;
-        var heading = t('friendly.setup.card_d.title_starting');
-        this.root.setAttribute('aria-label', heading);
-        this._body.innerHTML =
-            '<h2 class="enm-wiz-heading" id="enm-wiz-heading-d">' + escapeHtml(heading) + '</h2>'
-            + '<p class="enm-wiz-para" id="enm-wiz-d-para">' + escapeHtml(t('friendly.setup.card_d.sub_starting')) + '</p>'
-            + '<div class="enm-install-progress" role="status" aria-live="polite">'
-              + '<div class="enm-install-bar" aria-hidden="true">'
-                + '<div class="enm-install-bar-fill" style="width:90%"></div>'
-              + '</div>'
-              + '<div class="enm-install-bar-label">Almost there…</div>'
-            + '</div>'
-            + '<div class="enm-install-detail" id="enm-wiz-d-detail"></div>';
-
-        var self = this;
-        var els = {
-            title:  this._body.querySelector('#enm-wiz-heading-d'),
-            sub:    this._body.querySelector('#enm-wiz-d-para'),
-            detail: this._body.querySelector('#enm-wiz-d-detail'),
-        };
-
-        // Hide cancel; Continue starts disabled until finalize completes.
-        this._cancelBtn.hidden = true;
-        this._continueBtn.hidden = false;
-        this._continueBtn.disabled = true;
-        this._continueBtn.textContent = 'Finishing up…';
-
-        // Finalize: set network to auto-detect, mark complete, then try
-        // to start the chain.
-        //   1. setup steps fail → show error + retry
-        //   2. setup OK, start OK → celebrate + open dashboard
-        //   3. setup OK, start FAILED → celebrate (config saved) BUT
-        //      surface the start error and let the operator move on.
-        //      Previously the start error was swallowed silently — the
-        //      operator saw "Done!" while ela was dead.
-        var startError = null;
-        this.api.post('/setup/network', { mode: 'auto' })
-            .then(function () {
-                if (self._destroyed) { return null; }
-                return self.api.post('/setup/complete', {});
-            })
-            .then(function () {
-                if (self._destroyed) { return null; }
-                return self.api.post('/chains/mainchain/start').catch(function (err) {
-                    startError = err;
-                });
-            })
-            .then(function () {
-                if (self._destroyed || !self._stillRendering(seq)) { return; }
-                els.title.textContent = t('friendly.setup.card_d.title_done');
-                if (startError) {
-                    var detail = startError && startError.message ? startError.message : String(startError);
-                    els.sub.innerHTML =
-                        escapeHtml(t('friendly.setup.card_d.sub_done')) +
-                        '<br><br><strong>Heads up:</strong> the chain didn\'t start ' +
-                        'on its own — <em>' + escapeHtml(detail) + '</em>. Open the ' +
-                        'dashboard and press <strong>Start</strong> on the Mainchain card.';
-                    if (self.notifications) {
-                        self.notifications.warning('Setup saved, chain not started', detail);
-                    }
-                } else {
-                    els.sub.textContent = t('friendly.setup.card_d.sub_done');
-                }
-                self._continueBtn.disabled = false;
-                self._continueBtn.textContent = t('friendly.setup.card_d.cta');
-                self._continueBtn.addEventListener('click', function onDone() {
-                    if (self._destroyed || !self._stillRendering(seq)) { return; }
-                    self._continueBtn.removeEventListener('click', onDone);
-                    // beta.0.4.4 — branch by setup intent. BPoS lands
-                    // on the dashboard now; Council continues into
-                    // the multi-chain expansion installer.
-                    // beta.0.4.6 — Council now lands on Card D2
-                    // (pre-flight checks) before Card E (inputs). The
-                    // pre-flight surfaces upstream URL reachability +
-                    // disk space + mainchain state so the operator
-                    // sees blockers BEFORE committing time to the
-                    // install. Card E → Card F unchanged.
-                    if (self._goal === 'council') {
-                        self._goto('d2');
-                    } else {
-                        self.onComplete();
-                    }
-                });
-            })
-            .catch(function (err) {
-                if (self._destroyed || !self._stillRendering(seq)) { return; }
-                els.title.textContent = t('friendly.error.generic');
-                els.sub.textContent   = err && err.message ? err.message : String(err);
-                self._continueBtn.disabled = false;
-                self._continueBtn.textContent = t('friendly.setup.card_b.cta_retry');
-                self._continueBtn.addEventListener('click', function onRetry() {
-                    if (self._destroyed || !self._stillRendering(seq)) { return; }
-                    self._continueBtn.removeEventListener('click', onRetry);
-                    self._renderCardD(self._cardSeq);
-                });
-            });
-    };
-
-    // ====================================================================
-    // beta.0.4.6 — Card D2: Council pre-flight checks
+    // Card 4 — wallet address (one input + last-4 anti-typo gate)
     // ====================================================================
     //
-    // Sits between Card D (mainchain ready) and Card E (operator
-    // inputs). Calls GET /setup/install-council/preflight and renders
-    // each check as a row. Continue button stays disabled until every
-    // 'required' check is green.
-    //
-    // Rationale (operator feedback 2026-05-18): the orchestrator used
-    // to plow straight into install and fail mid-way on bad upstream
-    // URLs or insufficient disk. Surfacing the blockers upfront —
-    // BEFORE the operator commits time to the install — is the
-    // single biggest UX win on this flow.
+    // Single Ethereum-style input. The explainer (operator directive
+    // 2026-05-19) calls out ESC/EID/PG MINING rewards + Arbiter
+    // cross-chain signing so the operator understands the address
+    // does double duty as reward destination AND Arbiter mining
+    // address. Anti-typo gate: confirm-last-4-chars input appears
+    // only after a syntactically valid address is in the main field.
 
     /** @private */
-    SetupConversation.prototype._renderCardD2 = function (seq) {
+    SetupConversation.prototype._renderCard4 = function (seq) {
         var t = root.enmT;
-        var heading = t('friendly.setup.card_d2.title') || 'Pre-flight checks';
-        var sub = t('friendly.setup.card_d2.sub')
-            || 'Quick check that everything Council install needs is ready before we start. '
-             + 'Re-run if something fails after fixing it (e.g. firewall, disk).';
+        var heading = t('friendly.setup.card_4.title');
+        // BPoS-only operators see a shorter sub-line (no Arbiter copy
+        // because there's no Arbiter on the BPoS path). The label
+        // wording is otherwise the same — one wallet input.
+        var sub = (this._goal === 'council')
+            ? t('friendly.setup.card_4.sub')
+            : t('friendly.setup.card_4.sub_bpos');
+        var rewardHint = (this._goal === 'council')
+            ? t('friendly.setup.card_4.reward_hint')
+            : t('friendly.setup.card_4.reward_hint_bpos');
         this.root.setAttribute('aria-label', heading);
         this._body.innerHTML = ''
-            + '<h2 class="enm-wiz-heading" id="enm-wiz-heading-d2">' + escapeHtml(heading) + '</h2>'
-            + '<p class="enm-wiz-para">' + escapeHtml(sub) + '</p>'
-            + '<ul class="enm-preflight-list" role="status" aria-live="polite">'
-            +   '<li class="enm-preflight-row" data-state="checking">'
-            +     '<span class="enm-preflight-icon">⟳</span>'
-            +     '<span class="enm-preflight-text">Running checks…</span>'
-            +   '</li>'
-            + '</ul>'
-            + '<div class="enm-preflight-actions">'
-            +   '<button type="button" class="enm-btn enm-btn-secondary" '
-            +     'data-action="rerun">Re-run checks</button>'
-            + '</div>';
-        var self = this;
-        var listEl = this._body.querySelector('.enm-preflight-list');
-        var rerunBtn = this._body.querySelector('[data-action="rerun"]');
-
-        this._cancelBtn.hidden = true;
-        this._continueBtn.hidden = false;
-        this._continueBtn.disabled = true;
-        this._continueBtn.textContent = t('friendly.setup.card_d2.cta') || 'Continue';
-
-        function runChecks() {
-            listEl.innerHTML = '<li class="enm-preflight-row" data-state="checking">'
-                + '<span class="enm-preflight-icon">⟳</span>'
-                + '<span class="enm-preflight-text">Running checks…</span></li>';
-            self._continueBtn.disabled = true;
-            self.api.get('/setup/install-council/preflight', { skipCache: true })
-                .then(function (data) {
-                    if (self._destroyed || !self._stillRendering(seq)) { return; }
-                    var result = (data && data.result) ? data.result : data;
-                    listEl.innerHTML = '';
-                    (result.checks || []).forEach(function (c) {
-                        var icon = c.ok ? '✓' : (c.severity === 'required' ? '✗' : '⚠');
-                        var stateAttr = c.ok ? 'ok'
-                                      : (c.severity === 'required' ? 'error' : 'warn');
-                        var row = document.createElement('li');
-                        row.className = 'enm-preflight-row';
-                        row.setAttribute('data-state', stateAttr);
-                        row.innerHTML = ''
-                            + '<span class="enm-preflight-icon">' + icon + '</span>'
-                            + '<div class="enm-preflight-text">'
-                            +   '<div class="enm-preflight-label">' + escapeHtml(c.label) + '</div>'
-                            +   '<div class="enm-preflight-message">' + escapeHtml(c.message) + '</div>'
-                            + '</div>';
-                        listEl.appendChild(row);
-                    });
-                    self._continueBtn.disabled = !result.allRequiredOk;
-                })
-                .catch(function (err) {
-                    if (self._destroyed || !self._stillRendering(seq)) { return; }
-                    listEl.innerHTML = '<li class="enm-preflight-row" data-state="error">'
-                        + '<span class="enm-preflight-icon">✗</span>'
-                        + '<span class="enm-preflight-text">Pre-flight call failed: '
-                        + escapeHtml((err && err.message) || String(err))
-                        + '</span></li>';
-                });
-        }
-
-        rerunBtn.addEventListener('click', runChecks);
-        this._continueBtn.addEventListener('click', function () {
-            if (self._destroyed || !self._stillRendering(seq)) { return; }
-            if (self._continueBtn.disabled) { return; }
-            self._goto('e');
-        });
-        runChecks();
-    };
-
-    // ====================================================================
-    // beta.0.4.4 — Card E: Council inputs (3 form fields)
-    // ====================================================================
-    //
-    // Card E is reachable only when goal === 'council' AND Card D has
-    // completed (mainchain is up). Collects 3 inputs upfront so the
-    // install-council orchestrator (Card F) can run unattended:
-    //
-    //   1. sharedPassword — encrypts the EVM keystores (ESC/EID/PG)
-    //      and is reused by Arbiter via the mainchain keystore. 16+
-    //      chars, all 4 complexity classes.
-    //   2. sharedRewardAddress — Ethereum address that receives EVM
-    //      block rewards (0x + 40 hex). Validated against EIP-55 on
-    //      the server side.
-    //   3. arbiterMiningAddress — ELA mainchain address that funds
-    //      the SideChainPow heartbeats (E... + 33 chars base58).
-    //
-    // All inputs are validated client-side before Continue. Backend
-    // re-validates in install-council and 400s on any miss.
-
-    /** @private */
-    SetupConversation.prototype._renderCardE = function (seq) {
-        var t = root.enmT;
-        var heading = t('friendly.setup.card_e.title') || 'Your wallet address';
-        var sub = t('friendly.setup.card_e.sub')
-            || 'ENM uses this for everything: ESC, EID, PG block rewards AND the '
-             + 'Arbiter\'s cross-chain signing. One address from your wallet — that\'s it.';
-        this.root.setAttribute('aria-label', heading);
-        // beta.0.4.6 — added (a) PG opt-in checkbox (default OFF: closed-
-        // source, can't auto-download script), (b) confirm-last-4 input
-        // that requires the operator to retype the last 4 chars of
-        // their address before Continue enables (anti-typo gate — a
-        // typo'd reward address means lost rewards forever).
-        this._body.innerHTML = ''
-            + '<h2 class="enm-wiz-heading" id="enm-wiz-heading-e">' + escapeHtml(heading) + '</h2>'
+            + '<h2 class="enm-wiz-heading" id="enm-wiz-heading-4">' + escapeHtml(heading) + '</h2>'
             + '<p class="enm-wiz-para">' + escapeHtml(sub) + '</p>'
             + '<form class="enm-council-form" novalidate>'
             +   '<label class="enm-council-form-row">'
-            +     '<span class="enm-council-form-label">' + escapeHtml(
-                    t('friendly.setup.card_e.reward_label') || 'Your wallet address') + '</span>'
-            +     '<input type="text" id="enm-council-reward" spellcheck="false" '
+            +     '<span class="enm-council-form-label">'
+            +       escapeHtml(t('friendly.setup.card_4.reward_label')) + '</span>'
+            +     '<input type="text" id="enm-wiz-4-reward" spellcheck="false" '
             +       'autocomplete="off" placeholder="0x…" required>'
-            +     '<span class="enm-council-form-hint">' + escapeHtml(
-                    t('friendly.setup.card_e.reward_hint')
-                    || 'Paste your Ethereum-style address from Essentials. '
-                     + 'Same address is used for ESC, EID, PG, and the Arbiter — '
-                     + 'one wallet, one input.') + '</span>'
+            +     '<span class="enm-council-form-hint">' + escapeHtml(rewardHint) + '</span>'
             +     '<span class="enm-council-form-error" data-for="reward" hidden></span>'
             +   '</label>'
-            +   '<label class="enm-council-form-row" id="enm-council-confirm-row" hidden>'
-            +     '<span class="enm-council-form-label">Confirm: retype the LAST 4 characters</span>'
-            +     '<input type="text" id="enm-council-last4" spellcheck="false" '
+            +   '<label class="enm-council-form-row" id="enm-wiz-4-confirm-row" hidden>'
+            +     '<span class="enm-council-form-label">'
+            +       escapeHtml(t('friendly.setup.card_4.confirm_label')) + '</span>'
+            +     '<input type="text" id="enm-wiz-4-last4" spellcheck="false" '
             +       'autocomplete="off" maxlength="4" '
             +       'placeholder="last 4 chars" style="text-transform:lowercase">'
-            +     '<span class="enm-council-form-hint">Anti-typo gate: a wrong reward address '
-            +       'means lost rewards forever. Retype the last 4 characters of the address '
-            +       'above to confirm.</span>'
+            +     '<span class="enm-council-form-hint">'
+            +       escapeHtml(t('friendly.setup.card_4.confirm_hint')) + '</span>'
             +     '<span class="enm-council-form-error" data-for="last4" hidden></span>'
             +   '</label>'
-            +   '<label class="enm-council-form-row enm-council-form-checkbox">'
-            +     '<input type="checkbox" id="enm-council-include-pg">'
-            +     '<span>'
-            +       '<span class="enm-council-form-label">Include PG chain?</span>'
-            +       '<span class="enm-council-form-hint">PG is closed-source; its oracle script '
-            +         'can\'t be auto-downloaded. Leave OFF unless you have the script ready '
-            +         'on disk. You can add PG later via Settings.</span>'
-            +     '</span>'
-            +   '</label>'
-            +   '<div class="enm-council-form-note">'
-            +     '<strong>Heads up:</strong> mining is OFF by default on the EVM '
-            +     'sidechains. Most Council rewards come from BPoS mainchain blocks '
-            +     'and Arbiter SideChainPow heartbeats. You can turn sidechain mining '
-            +     'on later via Settings → Mining &amp; Rewards if you want the extra '
-            +     '(small) rewards.'
-            +   '</div>'
             + '</form>';
+
         var self = this;
-        var rewardEl = this._body.querySelector('#enm-council-reward');
-        var last4Row = this._body.querySelector('#enm-council-confirm-row');
-        var last4El = this._body.querySelector('#enm-council-last4');
-        var pgEl = this._body.querySelector('#enm-council-include-pg');
+        var rewardEl = this._body.querySelector('#enm-wiz-4-reward');
+        var last4Row = this._body.querySelector('#enm-wiz-4-confirm-row');
+        var last4El  = this._body.querySelector('#enm-wiz-4-last4');
+
+        // Pre-fill if operator navigated back from a later card.
+        if (this._sharedRewardAddress) {
+            rewardEl.value = this._sharedRewardAddress;
+            last4Row.hidden = false;
+        }
 
         function showError(field, msg) {
-            var el = self._body.querySelector('.enm-council-form-error[data-for="' + field + '"]');
+            var el = self._body.querySelector(
+                '.enm-council-form-error[data-for="' + field + '"]');
             if (el) { el.textContent = msg; el.hidden = !msg; }
         }
         function validateEth(s) {
             if (typeof s !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(s)) {
-                return 'Must start with 0x followed by 40 hex characters.';
+                return t('friendly.setup.card_4.err_format');
             }
             return null;
         }
 
-        // beta.0.4.6 — reveal the confirm-last-4 input only when the
-        // reward field has a syntactically-valid address. Hides until
-        // the address is at least the right shape.
         rewardEl.addEventListener('input', function () {
             showError('reward', '');
             showError('last4', '');
@@ -1551,11 +827,15 @@
             }
         });
 
-        this._cancelBtn.hidden = true;
+        this._cancelBtn.hidden = false;
+        this._cancelBtn.textContent = t('friendly.setup.back');
+        this._cancelBtn.addEventListener('click', function () {
+            if (self._destroyed) { return; }
+            self._goto('3');
+        });
         this._continueBtn.hidden = false;
         this._continueBtn.disabled = false;
-        this._continueBtn.textContent = t('friendly.setup.card_e.cta') || 'Install Council stack';
-
+        this._continueBtn.textContent = t('friendly.setup.card_4.cta');
         this._continueBtn.addEventListener('click', function () {
             if (self._destroyed || !self._stillRendering(seq)) { return; }
             showError('reward', '');
@@ -1563,101 +843,291 @@
             var reward = rewardEl.value.trim();
             var err = validateEth(reward);
             if (err) { showError('reward', err); return; }
-            // beta.0.4.6 — anti-typo: retype the last 4 chars.
             var last4 = (last4El.value || '').trim().toLowerCase();
             var expected = reward.slice(-4).toLowerCase();
             if (last4.length === 0) {
-                showError('last4', 'Retype the last 4 characters of the address above.');
+                showError('last4', t('friendly.setup.card_4.err_last4_empty'));
                 return;
             }
             if (last4 !== expected) {
-                showError('last4', 'Mismatch — expected "' + expected + '".');
+                showError('last4',
+                    t('friendly.setup.card_4.err_last4_match', { expected: expected }));
                 return;
             }
-            self._councilInputs = {
-                rewardAddress: reward,
-                activeNet: 'mainnet',
-                includePg: !!(pgEl && pgEl.checked),
-            };
-            self._goto('f');
+            self._sharedRewardAddress = reward;
+            self._goto('5');
         });
     };
 
     // ====================================================================
-    // beta.0.4.4 — Card F: Council install progress (stepper)
+    // Card 5 — confirm + install (preflight + snapshot toggle + go)
     // ====================================================================
     //
-    // Card F is the operator-facing surface for the install-council
-    // orchestrator. POSTs the inputs from Card E to /setup/install-
-    // council, then subscribes to SSE topic `setup:council:install`
-    // and renders each step as a row in a stepper:
-    //
-    //   ◯ Council strategy (Layer 1)
-    //   ◯ Smart Chain (ESC) — cfg
-    //   ◯ Smart Chain (ESC) — binary
-    //   ...
-    //
-    // Each row's icon updates on SSE events: spinner during 'start',
-    // checkmark on 'done' or 'skip', red-X on 'error'. Continue button
-    // stays disabled until the orchestrator emits 'finalize done'.
-    //
-    // Honours the operator's feedback that destructive/long actions
-    // must show real progress, not spinners (saved as feedback memory
-    // 2026-05-18 — feedback_destructive_ui_needs_progress.md).
-
-    // beta.0.4.6 — step labels track the server-side PLAN exactly.
-    // PG opt-out shrinks the plan; the wizard renders only the active
-    // step rows. install-binaries-parallel covers ESC + EID (+ PG if
-    // included) + Arbiter all at once.
-    var COUNCIL_STEP_LABELS = {
-        'council-strategy':         'Council strategy (Layer 1)',
-        'install-esc-cfg':          'Smart Chain (ESC) — config',
-        'install-eid-cfg':          'Identity Chain (EID) — config',
-        'install-pg-cfg':           'PG Chain — config',
-        'install-binaries-parallel': 'Download binaries (in parallel)',
-        'install-node-runtime':     'Node.js runtime',
-        'download-oracle-scripts':  'Oracle scripts (crosschain_*.js)',
-        'install-esc-oracle':       'ESC Oracle',
-        'install-eid-oracle':       'EID Oracle',
-        'install-pg-oracle':        'PG Oracle',
-        'install-arbiter-cfg':      'Arbiter — config',
-        'start-chains':             'Start all chains',
-    };
-    // beta.0.4.6 — order matters for rendering; PG rows present only
-    // when includePg=true. Computed at render time in _renderCardF.
-    function councilStepOrder(includePg) {
-        var base = ['council-strategy', 'install-esc-cfg', 'install-eid-cfg'];
-        if (includePg) { base.push('install-pg-cfg'); }
-        base.push('install-binaries-parallel');
-        base.push('install-node-runtime');
-        base.push('download-oracle-scripts');
-        base.push('install-esc-oracle');
-        base.push('install-eid-oracle');
-        if (includePg) { base.push('install-pg-oracle'); }
-        base.push('install-arbiter-cfg');
-        base.push('start-chains');
-        return base;
-    }
+    // Auto-runs GET /setup/install-council/preflight on mount, renders
+    // each check as a row. Below the list: a "use official snapshots"
+    // checkbox (default ON; ~50 GB download, ~200 GB free needed).
+    // Below that: the big "Install everything" button which POSTs to
+    // /setup/install-council with { masterPassword, sharedRewardAddress,
+    // useSnapshots, activeNet }. BPoS path skips install-council
+    // entirely and goes directly to /setup/install/mainchain.
 
     /** @private */
-    SetupConversation.prototype._renderCardF = function (seq) {
+    SetupConversation.prototype._renderCard5 = function (seq) {
         var t = root.enmT;
-        var heading = t('friendly.setup.card_f.title') || 'Installing Council stack';
-        var sub = t('friendly.setup.card_f.sub')
-            || 'ENM is installing the remaining services. This usually takes 3–5 minutes '
-            + '(binaries download in parallel). Each step is real progress — not a spinner.';
+        var heading = t('friendly.setup.card_5.title');
+        var sub = (this._goal === 'council')
+            ? t('friendly.setup.card_5.sub')
+            : t('friendly.setup.card_5.sub_bpos');
         this.root.setAttribute('aria-label', heading);
-        var inputs = this._councilInputs || { includePg: false };
-        var stepOrder = councilStepOrder(!!inputs.includePg);
-        var stepsHtml = stepOrder.map(function (step) {
-            return '<li class="enm-council-step" data-step="' + escapeHtml(step) + '" data-status="pending">'
-                + '<span class="enm-council-step-icon" aria-hidden="true">◯</span>'
-                + '<span class="enm-council-step-label">' + escapeHtml(COUNCIL_STEP_LABELS[step]) + '</span>'
-                + '<span class="enm-council-step-message"></span>'
+        this._body.innerHTML = ''
+            + '<h2 class="enm-wiz-heading" id="enm-wiz-heading-5">' + escapeHtml(heading) + '</h2>'
+            + '<p class="enm-wiz-para">' + escapeHtml(sub) + '</p>'
+            + '<ul class="enm-preflight-list" role="status" aria-live="polite">'
+            +   '<li class="enm-preflight-row" data-state="checking">'
+            +     '<span class="enm-preflight-icon">⟳</span>'
+            +     '<span class="enm-preflight-text">'
+            +       escapeHtml(t('friendly.setup.card_5.running')) + '</span>'
+            +   '</li>'
+            + '</ul>'
+            + '<div class="enm-preflight-actions">'
+            +   '<button type="button" class="enm-btn enm-btn-secondary" '
+            +     'data-action="rerun">'
+            +     escapeHtml(t('friendly.setup.card_5.rerun')) + '</button>'
+            + '</div>'
+            + '<label class="enm-council-form-row enm-council-form-checkbox '
+            +   'enm-card5-snapshots">'
+            +   '<input type="checkbox" id="enm-wiz-5-snapshots" checked>'
+            +   '<span>'
+            +     '<span class="enm-council-form-label">'
+            +       escapeHtml(t('friendly.setup.card_5.snapshot_label')) + '</span>'
+            +     '<span class="enm-council-form-hint">'
+            +       escapeHtml(t('friendly.setup.card_5.snapshot_hint')) + '</span>'
+            +   '</span>'
+            + '</label>';
+
+        var self = this;
+        var listEl   = this._body.querySelector('.enm-preflight-list');
+        var rerunBtn = this._body.querySelector('[data-action="rerun"]');
+        var snapsEl  = this._body.querySelector('#enm-wiz-5-snapshots');
+
+        this._cancelBtn.hidden = false;
+        this._cancelBtn.textContent = t('friendly.setup.back');
+        this._cancelBtn.addEventListener('click', function () {
+            if (self._destroyed) { return; }
+            self._goto('4');
+        });
+        this._continueBtn.hidden = false;
+        this._continueBtn.disabled = true;
+        this._continueBtn.textContent = (self._goal === 'council')
+            ? t('friendly.setup.card_5.cta')
+            : t('friendly.setup.card_5.cta_bpos');
+
+        function runPreflight() {
+            listEl.innerHTML = '<li class="enm-preflight-row" data-state="checking">'
+                + '<span class="enm-preflight-icon">⟳</span>'
+                + '<span class="enm-preflight-text">'
+                + escapeHtml(t('friendly.setup.card_5.running')) + '</span></li>';
+            self._continueBtn.disabled = true;
+            // BPoS path uses the lighter mainchain preflight (no
+            // disk-250GB / upstream-arbiter checks); Council uses the
+            // full install-council preflight.
+            var endpoint = (self._goal === 'council')
+                ? '/setup/install-council/preflight'
+                : '/setup/preflight';
+            self.api.get(endpoint, { skipCache: true })
+                .then(function (result) {
+                    if (self._destroyed || !self._stillRendering(seq)) { return; }
+                    self._renderCard5Preflight(listEl, result);
+                })
+                .catch(function (err) {
+                    if (self._destroyed || !self._stillRendering(seq)) { return; }
+                    listEl.innerHTML = '<li class="enm-preflight-row" data-state="error">'
+                        + '<span class="enm-preflight-icon">✗</span>'
+                        + '<span class="enm-preflight-text">'
+                        + escapeHtml(t('friendly.setup.card_5.err_prefix'))
+                        + escapeHtml((err && err.message) || String(err))
+                        + '</span></li>';
+                });
+        }
+
+        rerunBtn.addEventListener('click', runPreflight);
+        this._continueBtn.addEventListener('click', function () {
+            if (self._destroyed || !self._stillRendering(seq)) { return; }
+            if (self._continueBtn.disabled) { return; }
+            self._continueBtn.disabled = true;
+            self._continueBtn.textContent = t('friendly.setup.card_5.cta_working');
+            self._beginInstall(seq, !!(snapsEl && snapsEl.checked));
+        });
+        runPreflight();
+    };
+
+    /** @private */
+    SetupConversation.prototype._renderCard5Preflight = function (listEl, result) {
+        var t = root.enmT;
+        listEl.innerHTML = '';
+        var checks = (result && result.checks) || [];
+        checks.forEach(function (c) {
+            var icon = c.ok ? '✓' : (c.severity === 'required' ? '✗' : '⚠');
+            var stateAttr = c.ok ? 'ok'
+                          : (c.severity === 'required' ? 'error' : 'warn');
+            var row = document.createElement('li');
+            row.className = 'enm-preflight-row';
+            row.setAttribute('data-state', stateAttr);
+            row.innerHTML = ''
+                + '<span class="enm-preflight-icon">' + icon + '</span>'
+                + '<div class="enm-preflight-text">'
+                +   '<div class="enm-preflight-label">' + escapeHtml(c.label || c.id || '') + '</div>'
+                +   '<div class="enm-preflight-message">' + escapeHtml(c.message || '') + '</div>'
+                + '</div>';
+            listEl.appendChild(row);
+        });
+        // For Council the preflight returns allRequiredOk; for the
+        // mainchain preflight (/setup/preflight) we treat any
+        // non-failing checks shape as ok. Default to true so the
+        // BPoS path proceeds.
+        var canProceed = (typeof result.allRequiredOk === 'boolean')
+            ? result.allRequiredOk
+            : true;
+        this._continueBtn.disabled = !canProceed;
+        if (!canProceed) {
+            var helpRow = document.createElement('li');
+            helpRow.className = 'enm-preflight-row';
+            helpRow.setAttribute('data-state', 'warn');
+            helpRow.innerHTML = '<span class="enm-preflight-icon">!</span>'
+                + '<div class="enm-preflight-text">'
+                +   '<div class="enm-preflight-message">'
+                +     escapeHtml(t('friendly.setup.card_5.blocked'))
+                +   '</div>'
+                + '</div>';
+            listEl.appendChild(helpRow);
+        }
+    };
+
+    /**
+     * Start the install + advance to Card 6 stepper. Council path
+     * POSTs /setup/install-council with the new v0.4.7 payload
+     * shape; BPoS path runs the simpler mainchain install + complete
+     * sequence and skips Card 6's stepper (handled inside Card 6).
+     * @private
+     */
+    SetupConversation.prototype._beginInstall = function (seq, useSnapshots) {
+        var t = root.enmT;
+        var self = this;
+        if (this._goal === 'council') {
+            // Stash inputs for the stepper to read on mount.
+            this._installInputs = {
+                masterPassword: this._masterPassword,
+                // Backend's install-council validator still keys off
+                // `rewardAddress`; we ALSO send `sharedRewardAddress`
+                // to match the v0.4.7 frontend contract documented in
+                // the prompt, so future backend schema changes don't
+                // need a coordinated wizard rev.
+                rewardAddress: this._sharedRewardAddress,
+                sharedRewardAddress: this._sharedRewardAddress,
+                useSnapshots: !!useSnapshots,
+                activeNet: 'mainnet',
+            };
+            this._goto('6');
+        } else {
+            // BPoS path: kick the mainchain installer directly, then
+            // Card 6 watches setup:install:mainchain SSE. Inputs
+            // stashed so Card 6 can re-trigger on retry.
+            this._installInputs = {
+                masterPassword: this._masterPassword,
+                rewardAddress: this._sharedRewardAddress,
+                useSnapshots: !!useSnapshots,
+            };
+            this._goto('6');
+        }
+    };
+
+    // ====================================================================
+    // Card 6 — install stepper (SSE + poll fallback + auto-resume)
+    // ====================================================================
+    //
+    // For Council: subscribes to `setup:council:install`, renders 13
+    // steps from the new orchestrator PLAN:
+    //   council-strategy → install-{esc,eid,pg}-cfg →
+    //   download-snapshots-parallel → install-binaries-parallel →
+    //   install-node-runtime → download-oracle-scripts →
+    //   install-{esc,eid,pg}-oracle → install-arbiter-cfg →
+    //   start-chains.
+    // Poll fallback (3s tick) if SSE silent for 30s. Auto-resume on
+    // refresh: GET /install-council/status to see if a job is running.
+    //
+    // For BPoS: subscribes to `setup:install:mainchain`, then on
+    // done runs /setup/network + /setup/complete + /chains/mainchain/
+    // start (same finalize as the old Card D). The stepper renders
+    // a 3-step plan: install-mainchain → finalize-setup → start-chain.
+
+    // Step labels track the server-side install-council PLAN exactly.
+    // Always covers all 4 chains (PG opt-out removed by operator
+    // directive 2026-05-19). install-binaries-parallel covers ESC +
+    // EID + PG + Arbiter binaries; download-snapshots-parallel covers
+    // all 4 snapshots if useSnapshots=true.
+    var COUNCIL_STEP_LABELS = {
+        'council-strategy':           'Council strategy (Layer 1)',
+        'install-esc-cfg':            'Smart Chain (ESC) — config',
+        'install-eid-cfg':            'Identity Chain (EID) — config',
+        'install-pg-cfg':             'PG Chain — config',
+        'download-snapshots-parallel':'Download snapshots (in parallel)',
+        'install-binaries-parallel':  'Download binaries (in parallel)',
+        'install-node-runtime':       'Node.js runtime',
+        'download-oracle-scripts':    'Oracle scripts (crosschain_*.js)',
+        'install-esc-oracle':         'ESC Oracle',
+        'install-eid-oracle':         'EID Oracle',
+        'install-pg-oracle':          'PG Oracle',
+        'install-arbiter-cfg':        'Arbiter — config',
+        'start-chains':               'Start all chains',
+    };
+    var COUNCIL_STEP_ORDER = [
+        'council-strategy',
+        'install-esc-cfg',
+        'install-eid-cfg',
+        'install-pg-cfg',
+        'download-snapshots-parallel',
+        'install-binaries-parallel',
+        'install-node-runtime',
+        'download-oracle-scripts',
+        'install-esc-oracle',
+        'install-eid-oracle',
+        'install-pg-oracle',
+        'install-arbiter-cfg',
+        'start-chains',
+    ];
+    var BPOS_STEP_LABELS = {
+        'install-mainchain': 'Install mainchain binary',
+        'finalize-setup':    'Finalize configuration',
+        'start-chain':       'Start the mainchain',
+    };
+    var BPOS_STEP_ORDER = ['install-mainchain', 'finalize-setup', 'start-chain'];
+
+    /** @private */
+    SetupConversation.prototype._renderCard6 = function (seq) {
+        if (this._goal === 'council') {
+            this._renderCard6Council(seq);
+        } else {
+            this._renderCard6Bpos(seq);
+        }
+    };
+
+    /** @private */
+    SetupConversation.prototype._renderCard6Council = function (seq) {
+        var t = root.enmT;
+        var heading = t('friendly.setup.card_6.title');
+        var sub = t('friendly.setup.card_6.sub');
+        this.root.setAttribute('aria-label', heading);
+        var stepsHtml = COUNCIL_STEP_ORDER.map(function (step) {
+            return '<li class="enm-council-step" data-step="' + escapeHtml(step) + '" '
+                +    'data-status="pending">'
+                +  '<span class="enm-council-step-icon" aria-hidden="true">◯</span>'
+                +  '<span class="enm-council-step-label">'
+                +    escapeHtml(COUNCIL_STEP_LABELS[step]) + '</span>'
+                +  '<span class="enm-council-step-message"></span>'
                 + '</li>';
         }).join('');
         this._body.innerHTML = ''
-            + '<h2 class="enm-wiz-heading" id="enm-wiz-heading-f">' + escapeHtml(heading) + '</h2>'
+            + '<h2 class="enm-wiz-heading" id="enm-wiz-heading-6">' + escapeHtml(heading) + '</h2>'
             + '<p class="enm-wiz-para">' + escapeHtml(sub) + '</p>'
             + '<ol class="enm-council-stepper" role="status" aria-live="polite">'
             +   stepsHtml
@@ -1668,19 +1138,20 @@
             +   '</div>'
             +   '<div class="enm-council-summary-text">Starting…</div>'
             + '</div>';
-        var self = this;
 
+        var self = this;
         this._cancelBtn.hidden = true;
         this._continueBtn.hidden = false;
         this._continueBtn.disabled = true;
-        this._continueBtn.textContent = 'Working…';
+        this._continueBtn.textContent = t('friendly.setup.card_6.cta_working');
 
         function setStep(step, status, message) {
-            var row = self._body.querySelector('.enm-council-step[data-step="' + step + '"]');
+            var row = self._body.querySelector(
+                '.enm-council-step[data-step="' + step + '"]');
             if (!row) { return; }
             row.setAttribute('data-status', status);
             var iconEl = row.querySelector('.enm-council-step-icon');
-            var msgEl = row.querySelector('.enm-council-step-message');
+            var msgEl  = row.querySelector('.enm-council-step-message');
             if (status === 'start')      { iconEl.textContent = '⏵'; }
             else if (status === 'done')  { iconEl.textContent = '✓'; }
             else if (status === 'skip')  { iconEl.textContent = '⊘'; }
@@ -1692,56 +1163,56 @@
             if (!box) { return; }
             box.setAttribute('data-state', state);
             var bar = box.querySelector('.enm-install-bar-fill');
-            if (bar && typeof percent === 'number') { bar.style.width = percent + '%'; }
-            var t = box.querySelector('.enm-council-summary-text');
-            if (t) { t.textContent = text || ''; }
+            if (bar && typeof percent === 'number') {
+                bar.style.width = percent + '%';
+            }
+            var tx = box.querySelector('.enm-council-summary-text');
+            if (tx) { tx.textContent = text || ''; }
         }
 
-        // beta.0.4.6 — poll fallback for when SSE drops mid-install.
-        // Card F restarts a poll cadence (every 3s) if 30s pass with
-        // no SSE event. Each poll fetches /install-council/status and
-        // applies its completedSteps array onto the stepper. Cancels
-        // when an SSE event lands OR the install finishes.
+        // Poll fallback (3s tick) — fires only when SSE has been
+        // silent for 30s. Snapshot lands in applyStatusSnapshot.
         var lastEventAt = Date.now();
         function applyStatusSnapshot(s) {
             if (!s || !Array.isArray(s.completedSteps)) { return; }
             s.completedSteps.forEach(function (step) { setStep(step, 'done'); });
-            if (s.currentStep && stepOrder.indexOf(s.currentStep) !== -1) {
+            if (s.currentStep
+                    && COUNCIL_STEP_ORDER.indexOf(s.currentStep) !== -1) {
                 setStep(s.currentStep, 'start');
             }
             var pct = s.totalSteps > 0
-                ? Math.round((s.completedSteps.length / s.totalSteps) * 100) : 0;
+                ? Math.round((s.completedSteps.length / s.totalSteps) * 100)
+                : 0;
             if (!s.running && s.success) {
-                setSummary('done', 'All chains installed. Click Continue to open the dashboard.', 100);
+                setSummary('done', t('friendly.setup.card_6.summary_done'), 100);
                 self._continueBtn.disabled = false;
-                self._continueBtn.textContent = 'Open dashboard';
+                self._continueBtn.textContent = t('friendly.setup.card_6.cta_done');
             } else if (!s.running && s.error) {
                 setSummary('error', s.error, pct);
                 self._continueBtn.disabled = false;
-                self._continueBtn.textContent = 'Retry';
+                self._continueBtn.textContent = t('friendly.setup.card_6.cta_retry');
             } else if (s.running) {
-                setSummary('running', s.currentStep
-                    ? (COUNCIL_STEP_LABELS[s.currentStep] || s.currentStep) + '…' : 'Running…', pct);
+                var label = s.currentStep
+                    ? (COUNCIL_STEP_LABELS[s.currentStep] || s.currentStep) + '…'
+                    : 'Running…';
+                setSummary('running', label, pct);
             }
         }
         function pollOnce() {
             if (self._destroyed || !self._stillRendering(seq)) { return; }
             self.api.get('/setup/install-council/status', { skipCache: true })
-                .then(function (data) {
+                .then(function (s) {
                     if (self._destroyed || !self._stillRendering(seq)) { return; }
-                    var s = (data && data.result) ? data.result : data;
                     applyStatusSnapshot(s);
                 })
-                .catch(function () { /* silently ignore — SSE may resume */ });
+                .catch(function () { /* SSE may resume */ });
         }
-        var pollTimer = setInterval(function () {
+        this._installPollTimer = setInterval(function () {
             if (Date.now() - lastEventAt > 30_000) { pollOnce(); }
         }, 3_000);
 
-        // SSE subscription.
-        this._teardownCouncilSse = null;
         if (this.sse && typeof this.sse.subscribe === 'function') {
-            this._teardownCouncilSse = this.sse.subscribe(
+            this._unsubscribeInstall = this.sse.subscribe(
                 'setup:council:install',
                 function (payload) {
                     if (self._destroyed || !self._stillRendering(seq)) { return; }
@@ -1749,43 +1220,46 @@
                     lastEventAt = Date.now();
                     if (payload.step === 'finalize') {
                         if (payload.status === 'done') {
-                            setSummary('done', 'All chains installed. Click Continue to open the dashboard.', 100);
+                            setSummary('done',
+                                t('friendly.setup.card_6.summary_done'), 100);
                             self._continueBtn.disabled = false;
-                            self._continueBtn.textContent = 'Open dashboard';
+                            self._continueBtn.textContent =
+                                t('friendly.setup.card_6.cta_done');
                         } else {
-                            setSummary('error', payload.message || 'Install failed', payload.percent || 0);
+                            setSummary('error',
+                                payload.message || t('friendly.setup.card_6.summary_error'),
+                                payload.percent || 0);
                             self._continueBtn.disabled = false;
-                            self._continueBtn.textContent = 'Retry';
+                            self._continueBtn.textContent =
+                                t('friendly.setup.card_6.cta_retry');
                         }
                         return;
                     }
                     setStep(payload.step, payload.status, payload.message);
-                    setSummary('running',
-                        payload.message
-                            ? (COUNCIL_STEP_LABELS[payload.step] + ' — ' + payload.message)
-                            : COUNCIL_STEP_LABELS[payload.step] || payload.step,
-                        payload.percent || 0);
+                    var label = payload.message
+                        ? (COUNCIL_STEP_LABELS[payload.step] + ' — ' + payload.message)
+                        : (COUNCIL_STEP_LABELS[payload.step] || payload.step);
+                    setSummary('running', label, payload.percent || 0);
                 },
             );
         }
 
-        // beta.0.4.6 — auto-resume on refresh. Before POSTing fresh,
-        // check whether a job is already running OR just-finished.
-        // If running → don't re-POST; apply the snapshot + let SSE
-        // take over. If finished + success<60s ago → onComplete.
-        // Otherwise → POST install-council with the inputs from Card E.
+        // Auto-resume on refresh. If a job is running, just apply the
+        // snapshot + let SSE take over. If it just finished
+        // successfully (<60s ago), go straight to Card 7. Otherwise
+        // POST install-council to kick a fresh job using the inputs
+        // collected on Card 5.
+        var inputs = this._installInputs || {};
         this.api.get('/setup/install-council/status', { skipCache: true })
-            .then(function (data) {
+            .then(function (s) {
                 if (self._destroyed) { return; }
-                var s = (data && data.result) ? data.result : data;
                 if (s && s.running) {
                     applyStatusSnapshot(s);
                     return null;
                 }
                 if (s && s.success && s.finishedAt
-                    && (Date.now() - s.finishedAt) < 60_000) {
-                    try { window.localStorage.removeItem('enm:setup-intent'); } catch (_) {}
-                    self.onComplete();
+                        && (Date.now() - s.finishedAt) < 60_000) {
+                    self._goto('7');
                     return null;
                 }
                 return self.api.post('/setup/install-council', inputs);
@@ -1793,33 +1267,253 @@
             .then(function (r) {
                 if (self._destroyed || !r) { return; }
                 if (r && r.success === false) {
-                    setSummary('error', r.error || 'Server rejected install', 0);
+                    setSummary('error',
+                        r.error || t('friendly.setup.card_6.summary_error'), 0);
                     self._continueBtn.disabled = false;
-                    self._continueBtn.textContent = 'Retry';
+                    self._continueBtn.textContent = t('friendly.setup.card_6.cta_retry');
                 }
             })
             .catch(function (err) {
                 if (self._destroyed) { return; }
-                setSummary('error', (err && err.message) || 'Network error', 0);
+                setSummary('error',
+                    (err && err.message) || 'Network error', 0);
                 self._continueBtn.disabled = false;
-                self._continueBtn.textContent = 'Retry';
+                self._continueBtn.textContent = t('friendly.setup.card_6.cta_retry');
             });
 
-        // Continue button — Open dashboard (success) or Retry (error).
         this._continueBtn.addEventListener('click', function () {
             if (self._destroyed || !self._stillRendering(seq)) { return; }
-            var state = self._body.querySelector('.enm-council-summary').getAttribute('data-state');
+            var state = self._body.querySelector('.enm-council-summary')
+                .getAttribute('data-state');
             if (state === 'done') {
-                clearInterval(pollTimer);
-                if (self._teardownCouncilSse) {
-                    try { self._teardownCouncilSse(); } catch (_) {}
-                }
+                self._teardownInstallTracking();
                 try { window.localStorage.removeItem('enm:setup-intent'); } catch (_) {}
-                self.onComplete();
+                self._goto('7');
             } else if (state === 'error') {
-                clearInterval(pollTimer);
-                self._renderCardF(self._cardSeq);
+                self._teardownInstallTracking();
+                self._renderCard6Council(self._cardSeq);
             }
+        });
+    };
+
+    /** @private */
+    SetupConversation.prototype._renderCard6Bpos = function (seq) {
+        var t = root.enmT;
+        var heading = t('friendly.setup.card_6.title');
+        var sub = t('friendly.setup.card_6.sub_bpos');
+        this.root.setAttribute('aria-label', heading);
+        var stepsHtml = BPOS_STEP_ORDER.map(function (step) {
+            return '<li class="enm-council-step" data-step="' + escapeHtml(step) + '" '
+                +    'data-status="pending">'
+                +  '<span class="enm-council-step-icon" aria-hidden="true">◯</span>'
+                +  '<span class="enm-council-step-label">'
+                +    escapeHtml(BPOS_STEP_LABELS[step]) + '</span>'
+                +  '<span class="enm-council-step-message"></span>'
+                + '</li>';
+        }).join('');
+        this._body.innerHTML = ''
+            + '<h2 class="enm-wiz-heading" id="enm-wiz-heading-6">' + escapeHtml(heading) + '</h2>'
+            + '<p class="enm-wiz-para">' + escapeHtml(sub) + '</p>'
+            + '<ol class="enm-council-stepper" role="status" aria-live="polite">'
+            +   stepsHtml
+            + '</ol>'
+            + '<div class="enm-council-summary" data-state="running">'
+            +   '<div class="enm-install-bar" aria-hidden="true">'
+            +     '<div class="enm-install-bar-fill" style="width:0%"></div>'
+            +   '</div>'
+            +   '<div class="enm-council-summary-text">Starting…</div>'
+            + '</div>';
+
+        var self = this;
+        this._cancelBtn.hidden = true;
+        this._continueBtn.hidden = false;
+        this._continueBtn.disabled = true;
+        this._continueBtn.textContent = t('friendly.setup.card_6.cta_working');
+
+        function setStep(step, status, message) {
+            var row = self._body.querySelector(
+                '.enm-council-step[data-step="' + step + '"]');
+            if (!row) { return; }
+            row.setAttribute('data-status', status);
+            var iconEl = row.querySelector('.enm-council-step-icon');
+            var msgEl  = row.querySelector('.enm-council-step-message');
+            if (status === 'start')      { iconEl.textContent = '⏵'; }
+            else if (status === 'done')  { iconEl.textContent = '✓'; }
+            else if (status === 'error') { iconEl.textContent = '✗'; }
+            if (msgEl) { msgEl.textContent = message || ''; }
+        }
+        function setSummary(state, text, percent) {
+            var box = self._body.querySelector('.enm-council-summary');
+            if (!box) { return; }
+            box.setAttribute('data-state', state);
+            var bar = box.querySelector('.enm-install-bar-fill');
+            if (bar && typeof percent === 'number') { bar.style.width = percent + '%'; }
+            var tx = box.querySelector('.enm-council-summary-text');
+            if (tx) { tx.textContent = text || ''; }
+        }
+        function fail(msg) {
+            setSummary('error', msg, 0);
+            self._continueBtn.disabled = false;
+            self._continueBtn.textContent = t('friendly.setup.card_6.cta_retry');
+        }
+
+        // Three-step BPoS install: install binary → finalize cfg →
+        // start chain. We subscribe to setup:install:mainchain for
+        // the binary phase, then drive the finalize/start sequence
+        // ourselves (no SSE for those — they're synchronous calls).
+        var installDone = false;
+        function applyBinaryStatus(s) {
+            if (!s || installDone || self._destroyed
+                    || !self._stillRendering(seq)) { return; }
+            var pct = (s.bytesTotal && s.bytesDownloaded)
+                ? Math.min(100, Math.floor((s.bytesDownloaded / s.bytesTotal) * 100))
+                : (s.phase === 'done' ? 100 : (s.phase === 'verifying' ? 95 : 5));
+            // Map binary install pct into the first step's row +
+            // overall progress bar (split into 3 equal thirds for
+            // BPoS: 0-33% binary, 33-66% finalize, 66-100% start).
+            setStep('install-mainchain', s.phase === 'done' ? 'done' : 'start',
+                s.phase + (s.bytesTotal ? ' — ' + pct + '%' : ''));
+            setSummary('running',
+                BPOS_STEP_LABELS['install-mainchain']
+                    + (s.bytesTotal ? ' — ' + pct + '%' : ''),
+                Math.round(pct / 3));
+            if (s.phase === 'failed') {
+                installDone = true;
+                setStep('install-mainchain', 'error', s.error || 'failed');
+                fail(s.error || 'install failed');
+            }
+            if (s.phase === 'done') {
+                installDone = true;
+                runFinalize();
+            }
+        }
+
+        function runFinalize() {
+            setStep('finalize-setup', 'start');
+            setSummary('running', BPOS_STEP_LABELS['finalize-setup'], 50);
+            self.api.post('/setup/network', { mode: 'auto' })
+                .then(function () {
+                    if (self._destroyed) { return null; }
+                    return self.api.post('/setup/complete', {});
+                })
+                .then(function () {
+                    if (self._destroyed) { return; }
+                    setStep('finalize-setup', 'done');
+                    runStart();
+                })
+                .catch(function (err) {
+                    if (self._destroyed) { return; }
+                    setStep('finalize-setup', 'error',
+                        (err && err.message) || String(err));
+                    fail((err && err.message) || String(err));
+                });
+        }
+
+        function runStart() {
+            setStep('start-chain', 'start');
+            setSummary('running', BPOS_STEP_LABELS['start-chain'], 80);
+            self.api.post('/chains/mainchain/start', {})
+                .then(function () {
+                    if (self._destroyed) { return; }
+                    setStep('start-chain', 'done');
+                    setSummary('done',
+                        t('friendly.setup.card_6.summary_done'), 100);
+                    self._continueBtn.disabled = false;
+                    self._continueBtn.textContent =
+                        t('friendly.setup.card_6.cta_done');
+                })
+                .catch(function (err) {
+                    if (self._destroyed) { return; }
+                    // Setup is OK even if start fails — surface as a
+                    // warning + let operator open the dashboard.
+                    setStep('start-chain', 'error',
+                        (err && err.message) || String(err));
+                    setSummary('done',
+                        t('friendly.setup.card_6.summary_done')
+                            + ' (chain didn\'t start; open the dashboard '
+                            + 'and press Start.)',
+                        100);
+                    self._continueBtn.disabled = false;
+                    self._continueBtn.textContent =
+                        t('friendly.setup.card_6.cta_done');
+                });
+        }
+
+        if (this.sse && typeof this.sse.subscribe === 'function') {
+            this._unsubscribeInstall = this.sse.subscribe(
+                'setup:install:mainchain', applyBinaryStatus);
+        }
+        // Poll fallback for the binary phase. Stops once
+        // installDone latches true (finalize/start run sync).
+        this._installPollTimer = setInterval(function () {
+            if (installDone || self._destroyed || !self._stillRendering(seq)) {
+                return;
+            }
+            self.api.get('/setup/install-status/mainchain', { skipCache: true })
+                .then(function (s) {
+                    if (self._destroyed) { return; }
+                    applyBinaryStatus(s);
+                })
+                .catch(function () { /* poll again */ });
+        }, 2500);
+
+        // Kick the install. Idempotent on the backend.
+        this.api.post('/setup/install/mainchain', {})
+            .then(function (resp) {
+                if (self._destroyed) { return; }
+                applyBinaryStatus(resp && resp.status);
+            })
+            .catch(function (err) {
+                if (self._destroyed) { return; }
+                applyBinaryStatus({
+                    phase: 'failed',
+                    error: (err && err.message) || String(err),
+                });
+            });
+
+        this._continueBtn.addEventListener('click', function () {
+            if (self._destroyed || !self._stillRendering(seq)) { return; }
+            var state = self._body.querySelector('.enm-council-summary')
+                .getAttribute('data-state');
+            if (state === 'done') {
+                self._teardownInstallTracking();
+                try { window.localStorage.removeItem('enm:setup-intent'); } catch (_) {}
+                self._goto('7');
+            } else if (state === 'error') {
+                self._teardownInstallTracking();
+                self._renderCard6Bpos(self._cardSeq);
+            }
+        });
+    };
+
+    // ====================================================================
+    // Card 7 — done (celebrate + open dashboard)
+    // ====================================================================
+
+    /** @private */
+    SetupConversation.prototype._renderCard7 = function (seq) {
+        var t = root.enmT;
+        var heading = (this._goal === 'council')
+            ? t('friendly.setup.card_7.title')
+            : t('friendly.setup.card_7.title_bpos');
+        var sub = (this._goal === 'council')
+            ? t('friendly.setup.card_7.sub')
+            : t('friendly.setup.card_7.sub_bpos');
+        this.root.setAttribute('aria-label', heading);
+        this._body.innerHTML = ''
+            + '<h2 class="enm-wiz-heading" id="enm-wiz-heading-7">' + escapeHtml(heading) + '</h2>'
+            + '<p class="enm-wiz-para">' + escapeHtml(sub) + '</p>';
+
+        var self = this;
+        this._cancelBtn.hidden = true;
+        this._continueBtn.hidden = false;
+        this._continueBtn.disabled = false;
+        this._continueBtn.textContent = t('friendly.setup.card_7.cta');
+        this._continueBtn.addEventListener('click', function onDone() {
+            if (self._destroyed || !self._stillRendering(seq)) { return; }
+            self._continueBtn.removeEventListener('click', onDone);
+            try { window.localStorage.removeItem('enm:setup-intent'); } catch (_) {}
+            self.onComplete();
         });
     };
 
@@ -1840,47 +1534,6 @@
             this.notifications[fn](title, body);
         }
     };
-
-    function phaseLabel(s) {
-        var t = root.enmT;
-        if (!s) { return t('friendly.setup.card_b.phase_preparing'); }
-        var key = 'friendly.setup.card_b.phase_' + s.phase;
-        var label = t(key);
-        if (label.indexOf('[') === 0) {
-            return s.phase || t('friendly.setup.card_b.phase_preparing');
-        }
-        return label;
-    }
-
-    function bootstrapPhaseLabel(s) {
-        var t = root.enmT;
-        if (!s) { return t('friendly.setup.card_b2.phase_preparing'); }
-        var key = 'friendly.setup.card_b2.phase_' + s.phase;
-        var label = t(key);
-        if (label.indexOf('[') === 0) {
-            label = s.phase || t('friendly.setup.card_b2.phase_preparing');
-        }
-        if (s.phase === 'downloading') {
-            // beta.3.41 — accept both the HTTP-poll shape
-            // ({bytesDownloaded, bytesTotal}) AND the SSE-emit shape
-            // ({got, total}). Pre-3.41 we only checked bytesTotal, so
-            // every SSE chunk-progress event re-rendered the label
-            // without the "X / Y GB" suffix — operator saw the GB
-            // counter flash for one HTTP-poll tick then vanish on
-            // the next SSE event. Mirror the applyStatus accept-both
-            // pattern from beta.3.37.
-            var got   = (typeof s.bytesDownloaded === 'number') ? s.bytesDownloaded
-                      : (typeof s.got === 'number') ? s.got : 0;
-            var total = (typeof s.bytesTotal === 'number') ? s.bytesTotal
-                      : (typeof s.total === 'number') ? s.total : 0;
-            if (total > 0) {
-                var gotGb = (got / (1024 ** 3)).toFixed(2);
-                var totGb = (total / (1024 ** 3)).toFixed(2);
-                label += ' — ' + gotGb + ' / ' + totGb + ' GB';
-            }
-        }
-        return label;
-    }
 
     function escapeHtml(s) {
         return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {

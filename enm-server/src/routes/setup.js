@@ -163,6 +163,74 @@ function build(extensionHandle) {
         }
     });
 
+    // beta.0.4.7 — GET /setup/system-check
+    //
+    // Mandatory pre-install hardware gate for the redesigned Card 0
+    // wizard step. Returns the structured EnmSystemCheck report
+    // (`{ ts, path, checks, canProceed, remediation? }`) so the UI
+    // can render per-check rows + the "Add 4 GB swap" remediation
+    // chip when applicable.
+    //
+    // No auth — Card 0 fires this BEFORE the operator has done
+    // anything that requires identity. The data we expose is host
+    // hardware shape (cores/RAM/disk/storage type/OS); nothing
+    // sensitive.
+    //
+    // Query param `path` selects the threshold table:
+    //   ?path=council  → Council operator (default if omitted? see below)
+    //   ?path=bpos     → BPoS producer only
+    // Default is 'bpos' (Card 0 starts with the BPoS path because
+    // mainchain setup lands first; the Council expansion is a
+    // follow-up wizard).
+    router.get('/system-check', limit('read'), async (req, res) => {
+        try {
+            const EnmSystemCheck = require('../services/EnmSystemCheck');
+            const requested = String((req.query && req.query.path) || 'bpos');
+            const pathName = (requested === 'council' || requested === 'bpos')
+                ? requested : 'bpos';
+            const report = await EnmSystemCheck.runSystemCheck({ path: pathName });
+            return res.json(successBody(report));
+        } catch (err) {
+            extensionHandle.log.error(
+                `${ENM_LOG_PREFIX} /setup/system-check: ${err.message}`,
+            );
+            return res.status(500).json(errorBody(err.message));
+        }
+    });
+
+    // beta.0.4.7 — POST /setup/system/add-swap
+    //
+    // Remediation for exactly-8-GB BPoS hosts. EnmSystemCheck flags
+    // these via `remediation['add-swap']` on the system-check report;
+    // the wizard renders a "Create 4 GB swapfile" button that POSTs
+    // here. Owner-only — the action is host-mutating (writes
+    // /swapfile + /etc/fstab) and requires root privileges, which
+    // PC2 inherits but we still gate on operator identity.
+    //
+    // Returns the service's structured result verbatim:
+    //   - { ok: true, freeGbAfter }   → swap is active + persisted
+    //   - { ok: false, error }        → service surfaced the failing step
+    //
+    // 400 on ok:false so the wizard can render the error without
+    // having to parse a separate envelope.
+    router.post('/system/add-swap', limit('admin'), requireOwner, async (req, res) => {
+        try {
+            const EnmSystemCheck = require('../services/EnmSystemCheck');
+            const result = await EnmSystemCheck.addSwap();
+            if (result && result.ok) {
+                return res.json(successBody(result));
+            }
+            return res.status(400).json(errorBody(
+                (result && result.error) || 'add-swap failed (no detail)',
+            ));
+        } catch (err) {
+            extensionHandle.log.error(
+                `${ENM_LOG_PREFIX} /setup/system/add-swap: ${err.message}`,
+            );
+            return res.status(500).json(errorBody(err.message));
+        }
+    });
+
     /**
      * GET /setup/install-status/:chainId
      *
@@ -1442,26 +1510,33 @@ function build(extensionHandle) {
             sseHub = ChainRegistry.getSseHub();
         } catch (_) { /* SSE optional */ }
 
-        // beta.0.4.6 — PG opt-in. PG oracle script is closed-source +
-        // can't be auto-downloaded. Default to OFF; operator opts in
-        // via the Card E checkbox (which posts includePg=true). Skipping
-        // PG removes 4 steps from the 15-step plan.
-        const includePg = body.includePg === true;
+        // beta.0.4.7 — Council install always covers all 4 chains +
+        // all 3 oracles (operator directive 2026-05-19); the prior
+        // PG opt-in is gone. Operator can choose to skip snapshot
+        // downloads via useSnapshots=false (default: true).
+        const useSnapshots = body.useSnapshots !== false;
+        // Accept either `masterPassword` (v0.4.7 wording) or
+        // `sharedPassword` (pre-0.4.7) in the body, with the existing
+        // mainchain-derived password as the final fallback. The
+        // orchestrator's council-strategy step prefers masterPassword
+        // and falls back to sharedPassword on the inputs object.
+        const masterPassword = (typeof body.masterPassword === 'string' && body.masterPassword)
+            || (typeof body.sharedPassword === 'string' && body.sharedPassword)
+            || sharedPassword;
 
         runCouncilInstall({
             extensionHandle,
             cfg,
             inputs: {
-                // beta.0.4.5 — internal inputs derived from a single
-                // operator-supplied address + the existing mainchain
-                // password. The orchestrator's downstream code keeps
-                // the existing variable names so the 15-step pipeline
-                // stays unchanged.
-                sharedPassword:       sharedPassword,
+                // beta.0.4.7 — masterPassword is the new authoritative
+                // field. sharedPassword remains for downstream code
+                // that hasn't been migrated yet.
+                masterPassword,
+                sharedPassword,
                 sharedRewardAddress:  rewardCheck.normalized || body.rewardAddress,
                 arbiterMiningAddress: rewardCheck.normalized || body.rewardAddress,
                 activeNet,
-                includePg,
+                useSnapshots,
             },
             sseHub,
         }).catch((err) => {
@@ -1691,30 +1766,37 @@ async function runCouncilInstall(args) {
         throw new Error('install-council: another job is already running');
     }
 
-    // beta.0.4.6 — plan is now operator-shaped. PG opt-in adds 3 steps
-    // (cfg, binary, oracle). PG binary failure no longer breaks the
-    // whole install; orchestrator stops at the PG step + reports it
-    // (operator can retry without PG).
+    // beta.0.4.7 — Council ALWAYS installs all 4 chains + 3 oracles.
+    // Operator directive 2026-05-19: "Optional add-ons dont do that,
+    // council needs to run it all." PG oracle is now auto-downloadable
+    // from download.elastos.io (same posture as ESC/EID), so the prior
+    // PG opt-in escape hatch is gone.
     //
-    // beta.0.4.6 — also: ESC/EID/PG/Arbiter binaries download IN
-    // PARALLEL via `install-binaries-parallel` (one step covering all
-    // 4). Cuts wall time from ~4 min serial to ~1 min. Per-binary
-    // progress is multiplexed into the same step message.
-    const includePg = !!inputs.includePg;
+    // NEW STEP `download-snapshots-parallel` runs BEFORE binary
+    // download. Snapshots are ~50 GB compressed across 4 chains, so
+    // we stream them while the operator is still on the wizard's
+    // Card D, before any chain process starts. EnmSnapshotDownloader
+    // is idempotent — already-populated data dirs are left alone.
+    //
+    // beta.0.4.6 — ESC/EID/PG/Arbiter binaries download IN PARALLEL
+    // via `install-binaries-parallel` (one step covering all 4). Cuts
+    // wall time from ~4 min serial to ~1 min. Per-binary progress is
+    // multiplexed into the same step message.
     const PLAN = [
         'council-strategy',
         'install-esc-cfg',
         'install-eid-cfg',
-    ].concat(includePg ? ['install-pg-cfg'] : []).concat([
+        'install-pg-cfg',
+        'download-snapshots-parallel',
         'install-binaries-parallel',
         'install-node-runtime',
         'download-oracle-scripts',
         'install-esc-oracle',
         'install-eid-oracle',
-    ]).concat(includePg ? ['install-pg-oracle'] : []).concat([
+        'install-pg-oracle',
         'install-arbiter-cfg',
         'start-chains',
-    ]);
+    ];
 
     _councilInstallState = {
         running: true,
@@ -1771,11 +1853,22 @@ async function runCouncilInstall(args) {
             const c = cfg2.global.council = cfg2.global.council || {};
             if (c.passwordStrategy === 'shared'
                 && c.minerAddressStrategy === 'shared'
-                && c.sharedPasswordEncrypted && c.sharedMinerAddress) {
+                && (c.masterPasswordEncrypted || c.sharedPasswordEncrypted)
+                && c.sharedMinerAddress) {
                 return { skipped: true, message: 'already set' };
             }
             c.passwordStrategy = 'shared';
-            c.sharedPasswordEncrypted = EnmCrypto.encrypt(inputs.sharedPassword);
+            // beta.0.4.7 — master password covers ALL chain keystores
+            // (mainchain DPoS signer + ESC/EID/PG EVM keystores +
+            // Arbiter wallet). `sharedPasswordEncrypted` is kept for
+            // backward-compat with v0.4.6 configs; both envelopes are
+            // populated to the SAME ciphertext for now. A future
+            // cleanup release can drop `sharedPasswordEncrypted` once
+            // every downstream reader has migrated.
+            const masterPlain = inputs.masterPassword || inputs.sharedPassword;
+            const masterEnvelope = EnmCrypto.encrypt(masterPlain);
+            c.masterPasswordEncrypted = masterEnvelope;
+            c.sharedPasswordEncrypted = masterEnvelope; // back-compat
             c.minerAddressStrategy = 'shared';
             c.sharedMinerAddress = inputs.sharedRewardAddress;
             c.setupCompletedAt = Date.now();
@@ -1783,8 +1876,10 @@ async function runCouncilInstall(args) {
             return { message: 'shared strategy saved' };
         });
 
-        // ---- STEPS 2-N — ESC + EID + (PG?) cfg writes (cheap, sequential) ----
-        const classBChains = includePg ? ['esc', 'eid', 'pg'] : ['esc', 'eid'];
+        // ---- STEPS 2-4 — ESC + EID + PG cfg writes (cheap, sequential) ----
+        // beta.0.4.7 — PG is always installed; no opt-out (operator
+        // directive 2026-05-19).
+        const classBChains = ['esc', 'eid', 'pg'];
         for (const chainId of classBChains) {
             await runStep(`install-${chainId}-cfg`, async () => {
                 const cfg2 = await ConfigStore.load();
@@ -1823,8 +1918,66 @@ async function runCouncilInstall(args) {
             });
         }
 
+        // ---- NEW STEP — parallel snapshot downloads ----
+        // beta.0.4.7 — fetch the latest chain-data snapshots from
+        // node-data.elastos.io BEFORE the binaries land, so a freshly
+        // installed Council can come online inside an hour instead of
+        // replaying days of blocks from genesis. EnmSnapshotDownloader
+        // is idempotent: any data dir that already has content is left
+        // alone, so re-running the orchestrator is safe. When the
+        // operator picked "sync from scratch" we skip the step entirely.
+        await runStep('download-snapshots-parallel', async () => {
+            const SnapshotDownloader = require('../services/EnmSnapshotDownloader');
+            if (inputs.useSnapshots === false) {
+                return { skipped: true, message: 'operator chose to sync from scratch' };
+            }
+            const cfg2 = await ConfigStore.load();
+            const { chainDir } = require('../services/DataDir');
+            const targetDirsByChain = {};
+            for (const cid of ['mainchain', 'esc', 'eid', 'pg']) {
+                if (cfg2.chains && cfg2.chains[cid]) {
+                    // Each chain adapter writes its on-disk state under
+                    // chainDir(cid)/data — match that exact path so the
+                    // tarball extraction lands where the binary will
+                    // later look for it.
+                    targetDirsByChain[cid] = path.join(chainDir(cid), 'data');
+                }
+            }
+            const result = await SnapshotDownloader.downloadAll(targetDirsByChain, {
+                chainIds: Object.keys(targetDirsByChain),
+                onProgress: (p) => {
+                    if (sseHub && p && p.percent !== undefined) {
+                        try {
+                            sseHub.publish('setup:council:install', {
+                                step: 'download-snapshots-parallel',
+                                status: 'start',
+                                message: `${p.chainId}: ${p.phase} ${p.percent}%`,
+                                total: PLAN.length,
+                                completed: _councilInstallState.completedSteps.length,
+                                percent: Math.round(
+                                    (_councilInstallState.completedSteps.length / PLAN.length) * 100,
+                                ),
+                                ts: Date.now(),
+                            });
+                        } catch (_) { /* SSE best-effort */ }
+                    }
+                },
+            });
+            // result.results: { chainId → fulfilled-value | { error } }
+            const failures = Object.entries(result.results || {})
+                .filter(([, r]) => r && typeof r === 'object' && typeof r.error === 'string');
+            if (failures.length > 0) {
+                throw new Error(
+                    `snapshot failed for: ${failures.map(([cid, r]) => `${cid} (${r.error})`).join(', ')}`,
+                );
+            }
+            const applied = Object.keys(result.results || {});
+            const secs = Math.round((result.durationMs || 0) / 1000);
+            return { message: `snapshots applied for ${applied.join(', ')} in ${secs}s` };
+        });
+
         // ---- STEP N+1 — parallel binary downloads ----
-        // beta.0.4.6 — download ESC + EID + (PG?) + Arbiter binaries
+        // beta.0.4.6 — download ESC + EID + PG + Arbiter binaries
         // CONCURRENTLY. Pre-0.4.6 this was 4 serial steps (~4 min on
         // a typical Hostinger VPS); parallel runs in ~1 min wall time
         // since the downloads are network-bound not CPU-bound.
@@ -1916,10 +2069,11 @@ async function runCouncilInstall(args) {
             return { message: `downloaded ${Object.keys(paths).length} script(s)` };
         });
 
-        // ---- Class C oracles (skip PG oracle when opted-out) ----
-        const oracleIds = includePg
-            ? ['esc-oracle', 'eid-oracle', 'pg-oracle']
-            : ['esc-oracle', 'eid-oracle'];
+        // ---- Class C oracles ----
+        // beta.0.4.7 — PG oracle is now auto-downloadable from
+        // download.elastos.io. No more "closed-source" graceful skip;
+        // the Council always installs all three oracles.
+        const oracleIds = ['esc-oracle', 'eid-oracle', 'pg-oracle'];
         for (const oracleId of oracleIds) {
             await runStep(`install-${oracleId}`, async () => {
                 const cfg2 = await ConfigStore.load();
@@ -1942,7 +2096,13 @@ async function runCouncilInstall(args) {
                     binaryVersion: runtime.version.raw,
                     activeNet: inputs.activeNet,
                     parentChainId: parent,
-                    scriptPath: OracleScriptDownloader.scriptsDir(),
+                    // beta.0.4.7 — per-oracle subdir layout. Pre-0.4.7
+                    // OracleScriptDownloader stored every script in one
+                    // flat dir; the rewrite gives each oracle its own
+                    // dir so node_modules don't collide. OracleAdapter
+                    // joins this with scriptFilename, so this MUST be
+                    // the per-oracle dir, not the parent.
+                    scriptPath: OracleScriptDownloader.scriptDirFor(oracleId),
                     nodejsVersion: NodeJsRuntime.PINNED_VERSION,
                     ports: { httpRpc: port },
                     parent: { chainRpcUrl: '', mainchainRpcUrl: '' },
@@ -1993,9 +2153,8 @@ async function runCouncilInstall(args) {
         // ---- Start all chains (DAG order: B → C → D) ----
         await runStep('start-chains', async () => {
             const cfg2 = await ConfigStore.load();
-            const startOrder = includePg
-                ? ['esc', 'eid', 'pg', 'esc-oracle', 'eid-oracle', 'pg-oracle', 'arbiter']
-                : ['esc', 'eid', 'esc-oracle', 'eid-oracle', 'arbiter'];
+            // beta.0.4.7 — PG is always part of the start order.
+            const startOrder = ['esc', 'eid', 'pg', 'esc-oracle', 'eid-oracle', 'pg-oracle', 'arbiter'];
             // Flip enabled=true so AUTOSTART/restart logic respects it.
             for (const cid of startOrder) {
                 if (cfg2.chains[cid]) { cfg2.chains[cid].enabled = true; }
@@ -2097,7 +2256,12 @@ async function runCouncilPreflight(args) {
         severity: 'required',
     });
 
-    // 3. Disk space ≥ 20 GB in enmDataDir.
+    // 3. Disk space ≥ 250 GB in enmDataDir.
+    // beta.0.4.7 — bumped from 20 GB. Council snapshots are ~50 GB
+    // compressed plus ~200 GB extracted across mainchain + ESC + EID
+    // + PG; 20 GB was a hold-over from the mainchain-only era and
+    // would let an under-provisioned host start the install and then
+    // ENOSPC mid-extraction.
     let diskOk = false;
     let diskMsg = 'unknown';
     try {
@@ -2107,7 +2271,7 @@ async function runCouncilPreflight(args) {
         if (typeof fsp.statfs === 'function') {
             const sf = await fsp.statfs(dir);
             const freeGb = Math.floor((sf.bavail * sf.bsize) / (1024 * 1024 * 1024));
-            diskOk = freeGb >= 20;
+            diskOk = freeGb >= 250;
             diskMsg = `${freeGb} GB free`;
         } else {
             diskOk = true;
@@ -2118,7 +2282,7 @@ async function runCouncilPreflight(args) {
     }
     checks.push({
         id: 'disk-space',
-        label: 'Disk space ≥ 20 GB free',
+        label: 'Disk space ≥ 250 GB free',
         ok: diskOk,
         message: diskMsg,
         severity: 'required',
@@ -2150,6 +2314,19 @@ async function runCouncilPreflight(args) {
         label: 'download.elastos.io reachable (for binaries)',
         ok: elastosProbe.ok,
         message: elastosProbe.ok ? 'HEAD 200' : ('failed: ' + (elastosProbe.error || ('HTTP ' + elastosProbe.code))),
+        severity: 'required',
+    });
+
+    // beta.0.4.7 — snapshot host probe. Council install streams ~50 GB
+    // of compressed chain data from node-data.elastos.io before the
+    // binaries even start; if the host is unreachable we want the
+    // operator to know on Card D.5 rather than blow up mid-step.
+    const nodeDataProbe = await headProbe('https://node-data.elastos.io/ela/');
+    checks.push({
+        id: 'node-data-reachable',
+        label: 'node-data.elastos.io reachable (for snapshots)',
+        ok: nodeDataProbe.ok,
+        message: nodeDataProbe.ok ? 'HEAD 200' : ('failed: ' + (nodeDataProbe.error || ('HTTP ' + nodeDataProbe.code))),
         severity: 'required',
     });
 

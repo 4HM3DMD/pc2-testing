@@ -6548,70 +6548,6 @@ body[data-enm-overview="1"] .enm-app .enm-tabs {
     display: none;
 }
 
-/* ============================================================
-   beta.0.4.3 — Council continuation banner
-   ============================================================
-
-   Shown on the dashboard after mainchain setup completes IF the
-   operator picked "Council node" on the welcome card AND any of the
-   remaining Council services (ESC/EID/PG/Oracles/Arbiter) are still
-   missing from cfg.chains. Bridges the gap between mainchain-done
-   and full-Council-running. v0.4.4 ships the actual sequential
-   installer wizard. */
-.enm-app .enm-council-banner {
-    margin: var(--sp-3, 12px);
-    padding: var(--sp-4, 16px);
-    background: linear-gradient(
-        135deg,
-        rgba(80, 160, 240, 0.12),
-        rgba(80, 160, 240, 0.04)
-    );
-    border: 1px solid rgba(80, 160, 240, 0.35);
-    border-radius: 12px;
-    color: var(--text-primary);
-}
-.enm-app .enm-council-banner-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: var(--sp-2, 8px);
-}
-.enm-app .enm-council-banner-head h3 {
-    margin: 0;
-    font-size: 16px;
-    font-weight: 600;
-}
-.enm-app .enm-council-banner-dismiss {
-    background: transparent;
-    border: none;
-    color: var(--text-muted, var(--text-primary));
-    font-size: 20px;
-    line-height: 1;
-    cursor: pointer;
-    padding: 4px 8px;
-}
-.enm-app .enm-council-banner p {
-    margin: 0 0 var(--sp-2, 8px) 0;
-    font-size: 14px;
-    line-height: 1.5;
-}
-.enm-app .enm-council-banner code {
-    padding: 1px 5px;
-    background: rgba(255, 255, 255, 0.08);
-    border-radius: 4px;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 12px;
-}
-.enm-app .enm-council-banner-actions {
-    display: flex;
-    gap: var(--sp-2, 8px);
-    margin-top: var(--sp-3, 12px);
-}
-
-/* beta.0.4.3 — Council role card is no longer disabled. The "Coming
-   soon" badge text was swapped to "Multi-chain" in strings.js; the
-   badge styling should NOT use the same muted color as a disabled
-   chip. Override the disabled-badge appearance for the council card. */
 .enm-app .enm-role-card[data-goal="council"]:not([data-disabled="true"]) .enm-role-card-badge {
     background: rgba(80, 160, 240, 0.20);
     color: var(--text-primary);
@@ -7087,4 +7023,139 @@ body[data-app-size="compact"] .enm-app .enm-overview-row .enm-overview-spark {
     border-radius: 4px;
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 12px;
+}
+
+/* ============================================================
+   beta.0.4.7 — Card 2 system check (.enm-syscheck-*)
+   ============================================================
+   Mirrors .enm-preflight-list visually (same dark card surface,
+   icon-+-text rows, per-state coloring). Stays distinct so the
+   two cards can evolve independently — Card 2 reports hardware
+   shape; Card 5's preflight reports network/disk readiness for
+   the install itself.
+
+   Per-row icon legend:
+     checking → ⟳ (text-muted, pulse)
+     ok       → ✓ (state-healthy / green)
+     warn     → ⚠ (state-syncing / amber — recommended failure)
+     error    → ✗ (state-error / red  — required failure, blocks Continue) */
+.enm-app .enm-syscheck-list {
+    list-style: none;
+    padding: 0;
+    margin: 0 auto var(--sp-4, 16px) auto;
+    max-width: 640px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color, var(--border-subtle));
+    border-radius: 10px;
+    overflow: hidden;
+}
+.enm-app .enm-syscheck-row {
+    display: grid;
+    grid-template-columns: 24px 1fr;
+    gap: var(--sp-3, 12px);
+    align-items: flex-start;
+    padding: var(--sp-3, 12px) var(--sp-4, 16px);
+    border-bottom: 1px solid var(--border-color, var(--border-subtle));
+    font-size: 13px;
+    color: var(--text-primary);
+}
+.enm-app .enm-syscheck-row:last-child { border-bottom: none; }
+.enm-app .enm-syscheck-icon {
+    font-size: 16px;
+    text-align: center;
+    line-height: 1.4;
+    color: var(--text-muted, var(--text-primary));
+}
+.enm-app .enm-syscheck-row[data-state="checking"] .enm-syscheck-icon {
+    color: var(--state-syncing, #ffb74d);
+    animation: enm-overview-pulse 1.4s ease-in-out infinite;
+}
+.enm-app .enm-syscheck-row[data-state="ok"] .enm-syscheck-icon {
+    color: var(--state-healthy, #4caf50);
+}
+.enm-app .enm-syscheck-row[data-state="warn"] .enm-syscheck-icon {
+    color: var(--state-syncing, #ffb74d);
+}
+.enm-app .enm-syscheck-row[data-state="error"] .enm-syscheck-icon {
+    color: var(--state-error, #ef5350);
+}
+.enm-app .enm-syscheck-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+.enm-app .enm-syscheck-label {
+    font-weight: 600;
+}
+.enm-app .enm-syscheck-message {
+    font-size: 12px;
+    color: var(--text-muted, var(--text-primary));
+    line-height: 1.4;
+}
+.enm-app .enm-syscheck-help[data-state="warn"] {
+    background: rgba(255, 183, 77, 0.06);
+}
+.enm-app .enm-syscheck-actions {
+    display: flex;
+    justify-content: center;
+    margin-bottom: var(--sp-3, 12px);
+}
+
+/* Card 2 remediation block — only the exactly-8GB-RAM BPoS path
+   triggers this. Sits below the checks list. */
+.enm-app .enm-syscheck-remediation {
+    max-width: 640px;
+    margin: 0 auto var(--sp-3, 12px) auto;
+    padding: var(--sp-3, 12px) var(--sp-4, 16px);
+    background: rgba(80, 160, 240, 0.08);
+    border: 1px solid rgba(80, 160, 240, 0.30);
+    border-radius: 10px;
+    color: var(--text-primary);
+}
+.enm-app .enm-syscheck-rem-label {
+    margin: 0 0 var(--sp-2, 8px) 0;
+    font-size: 13px;
+    line-height: 1.5;
+}
+.enm-app .enm-syscheck-rem-status {
+    margin: var(--sp-2, 8px) 0 0 0;
+    font-size: 12px;
+    color: var(--text-muted, var(--text-primary));
+}
+
+/* ============================================================
+   beta.0.4.7 — Card 3 master password (.enm-master-pw-*)
+   ============================================================
+   Reuses the existing .enm-password-warning / .enm-password-reveal
+   primitives (dark card, monospace value, copy button slot) and
+   adds Card-3-specific spacing + the ack-checkbox layout. */
+.enm-app .enm-master-pw-body {
+    max-width: 640px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-3, 12px);
+}
+.enm-app .enm-master-pw-warning {
+    margin-bottom: 0;
+}
+.enm-app .enm-master-pw-reveal {
+    /* Inherits .enm-password-reveal — keep the override surface
+       open for future master-password-specific tweaks (e.g. show
+       a "save to file" button later). */
+}
+.enm-app .enm-master-pw-ack {
+    padding-top: var(--sp-2, 8px);
+}
+
+/* ============================================================
+   beta.0.4.7 — Card 5 snapshot toggle
+   ============================================================
+   Inherits .enm-council-form-checkbox; this rule only adds the
+   spacing that pulls the toggle away from the preflight list
+   above it. */
+.enm-app .enm-card5-snapshots {
+    max-width: 640px;
+    margin: var(--sp-3, 12px) auto var(--sp-4, 16px) auto;
 }

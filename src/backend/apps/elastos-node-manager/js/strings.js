@@ -245,6 +245,128 @@
                                    + 'Click Retry to resume from where it stopped — '
                                    + 'completed steps are skipped on retry.',
                 },
+
+                // beta.0.4.7 — Card 2..7 keys for the redesigned 7-card
+                // flow. Card A (welcome / role chooser) is reused as
+                // Card 1 — its strings stay under `card_a.*` above.
+                // The new flow collapses Card B / B2 / B3 / C / D / E /
+                // F into a leaner sequence that's identical in shape
+                // for Council and BPoS-only paths (the difference is
+                // the per-card backend payload, not the UI). Mainchain
+                // keystore password lives inside Card 3's master
+                // password (BPoS path covers only mainchain; Council
+                // path covers mainchain + ESC + EID + PG EVM keystores
+                // + Arbiter wallet).
+                card_2: {
+                    title:           'System check',
+                    sub:             'ENM verifies your hardware can actually run this workload before '
+                                   + 'we touch anything. CPU cores, RAM, disk space and the OS get '
+                                   + 'checked against the {path} thresholds. This step cannot be skipped.',
+                    rerun:           'Re-run checks',
+                    cta:             'Continue',
+                    running:         'Running system checks…',
+                    blocked_help:    'Fix the blocker, then press Re-run checks. Your host needs to meet '
+                                   + 'the required thresholds before setup can proceed.',
+                    add_swap_label:  'Your server has exactly 8 GB RAM. ENM can create a 4 GB swapfile '
+                                   + 'so mainchain doesn\'t OOM during initial sync.',
+                    add_swap_btn:    'Add swap automatically',
+                    add_swap_working:'Creating swapfile…',
+                    add_swap_done:   'Swap is active ({freeGbAfter} GB free including swap). Re-running checks…',
+                    add_swap_failed: 'Could not add swap: {error}',
+                    err_prefix:      'System check call failed: ',
+                },
+                card_3: {
+                    title:           '🔑 Master password',
+                    sub:             'This password unlocks every keystore on your node — save it ONCE.',
+                    sub_council:     'One password protects every keystore on your node: mainchain '
+                                   + 'producer key, ESC + EID + PG EVM keystores, and the Arbiter '
+                                   + 'wallet. Save it once and you\'re done.',
+                    sub_bpos:        'One password protects your mainchain producer keystore. Save it '
+                                   + 'once — there\'s no recovery if it\'s lost.',
+                    warning:         'This password is shown ONCE. If you lose it, you can\'t recover '
+                                   + 'the keystore(s) — you\'d have to re-register from scratch. A '
+                                   + 'password manager is the safest place.',
+                    password_label:  'Master password',
+                    cta_generate:    'Generate my master password',
+                    cta_continue:    'Continue',
+                    cta_copy:        'Copy',
+                    cta_copied:      'Copied!',
+                    ack:             'I\'ve saved it somewhere safe',
+                    copy_fail_title: 'Copy unavailable',
+                    copy_fail_body:  'Browser blocked clipboard access. The password is selected — '
+                                   + 'press Ctrl-C (or ⌘-C on Mac) to copy.',
+                },
+                card_4: {
+                    title:           'Your wallet address',
+                    // Heads up: operator directive 2026-05-19 — explainer
+                    // MUST mention ESC, EID, PG mining rewards AND the
+                    // Arbiter's cross-chain signing role. One wallet for
+                    // everything; no separate inputs.
+                    sub:             'ENM uses this one address for everything: block-mining rewards '
+                                   + 'on ESC (Smart Chain), EID (Identity Chain), PG (private chain) '
+                                   + 'AND the Arbiter\'s cross-chain signing on the mainchain. One '
+                                   + 'wallet from Essentials — one input.',
+                    sub_bpos:        'ENM uses this address as your producer\'s reward destination '
+                                   + 'on the mainchain. Paste the same Essentials owner-address you '
+                                   + 'will register with later.',
+                    reward_label:    'Wallet address (Ethereum-style, from Essentials)',
+                    reward_hint:     'Paste your Ethereum-style address from Essentials. '
+                                   + 'Same address is used for ESC, EID, PG mining and the Arbiter — '
+                                   + 'one wallet, one input.',
+                    reward_hint_bpos:'Paste your Essentials owner-address. This is the address that '
+                                   + 'will eventually appear on your producer registration.',
+                    confirm_label:   'Confirm: retype the LAST 4 characters',
+                    confirm_hint:    'Anti-typo gate: a wrong reward address means lost rewards '
+                                   + 'forever. Retype the last 4 characters of the address above to '
+                                   + 'confirm.',
+                    err_format:      'Must start with 0x followed by 40 hex characters.',
+                    err_last4_empty: 'Retype the last 4 characters of the address above.',
+                    err_last4_match: 'Mismatch — expected "{expected}".',
+                    cta:             'Continue',
+                },
+                card_5: {
+                    title:           'Confirm and install',
+                    sub:             'A quick pre-flight then we kick everything off. Council always '
+                                   + 'installs Mainchain + ESC + EID + PG + 3 oracles + Arbiter — no '
+                                   + 'optional add-ons. Use the snapshot option to skip 1–3 days of '
+                                   + 'block-by-block sync.',
+                    sub_bpos:        'A quick pre-flight then we kick the mainchain install off.',
+                    rerun:           'Re-run pre-flight',
+                    snapshot_label:  'Use official snapshots for all 4 chains',
+                    snapshot_hint:   'Default ON. Downloads ~50 GB of verified snapshots so the chains '
+                                   + 'are ready in minutes instead of days. Needs ~200 GB free disk.',
+                    cta:             'Install everything',
+                    cta_bpos:        'Install mainchain',
+                    cta_working:     'Starting install…',
+                    running:         'Running pre-flight…',
+                    blocked:         'Fix the blocking check above, then press Re-run pre-flight.',
+                    err_prefix:      'Pre-flight call failed: ',
+                    err_install:     'Could not start install: {error}',
+                },
+                card_6: {
+                    title:           'Installing your node',
+                    sub:             'ENM is installing all 4 chains, 3 oracles and the Arbiter. '
+                                   + 'Real progress below — not a spinner. Usually 5–10 minutes if '
+                                   + 'snapshots are on, 1–3 days if not.',
+                    sub_bpos:        'ENM is installing the mainchain binary and configuration. '
+                                   + 'Usually 2–5 minutes.',
+                    cta_done:        'Open dashboard',
+                    cta_retry:       'Retry from failed step',
+                    cta_working:     'Working…',
+                    summary_done:    'Everything is installed. Click Continue to open the dashboard.',
+                    summary_error:   'Install failed at one of the steps above. Click Retry to resume '
+                                   + 'from where it stopped — completed steps are skipped on retry.',
+                },
+                card_7: {
+                    title:           '🎉 Your Council node is live',
+                    title_bpos:      '🎉 Your BPoS supernode is ready',
+                    sub:             'All chains are installed and the services are starting up. Head '
+                                   + 'to the dashboard to watch the chains come online and register '
+                                   + 'your wallet when you\'re ready.',
+                    sub_bpos:        'Mainchain is installed and starting up. Head to the dashboard '
+                                   + 'to watch it sync and register your wallet when you\'re ready.',
+                    cta:             'Open dashboard',
+                },
             },
 
             // v0.5 reset notes:

@@ -205,6 +205,20 @@ const globalSchema = Joi.object({
         // PasswordEncrypted for backward-compat with the per-chain
         // unlock path in EvmSidechainAdapter (M3.1).
         sharedPasswordEncrypted: Joi.string().allow('').default(''),
+        // beta.0.4.7 — single master password covering ALL Council
+        // keystores: mainchain keystore.dat (DPoS signer) + ESC/EID/PG
+        // EVM keystores + Arbiter wallet. Generated once on Card 3
+        // of the redesigned wizard; chain-level `keystorePasswordEncrypted`
+        // and `evmKeystorePasswordEncrypted` fields MAY be empty when
+        // this is set, in which case they derive from this. Pre-0.4.7
+        // installs without this field still validate; their per-chain
+        // envelopes remain authoritative.
+        //
+        // Joi.string().allow('') — no regex. EnmEncryption.encrypt()
+        // returns a JSON envelope (JSON.stringify({v,iv,tag,ct}) with
+        // base64 fields, see EnmEncryption.js:104-109); all sibling
+        // *Encrypted fields use the same permissive shape.
+        masterPasswordEncrypted: Joi.string().allow('').default(''),
         minerAddressStrategy: Joi.string().valid('shared', 'per-chain').optional(),
         sharedMinerAddress: Joi.string().regex(/^0x[0-9a-fA-F]{40}$/).allow('').default(''),
         setupCompletedAt: Joi.number().integer().allow(null).default(null),

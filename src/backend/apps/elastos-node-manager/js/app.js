@@ -921,14 +921,12 @@
         // wizard for the dashboard. Pairs with _showSetupWizard's hide.
         var selectorEl = document.getElementById('enm-chain-selector');
         if (selectorEl) { selectorEl.hidden = false; }
-        // beta.0.4.3 — check setup intent. If operator picked Council
-        // node on the welcome card, mainchain setup just completed
-        // (we're here in _showDashboard) but the rest of the Council
-        // expansion (ESC/EID/PG + Oracles + Arbiter) isn't installed
-        // yet. Surface a prominent banner that opens the Council
-        // expansion installer. Cleared after the wizard finishes OR
-        // when operator dismisses (one-shot per setup).
-        this._showCouncilContinuationBannerIfNeeded();
+        // beta.0.4.7 — the Council continuation banner has been deleted.
+        // The redesigned 7-card wizard (setup-conversation.js) installs
+        // everything (mainchain + ESC + EID + PG + 3 oracles + Arbiter)
+        // in one continuous flow, so there's no longer any "operator
+        // landed on dashboard with Council services missing" state. The
+        // dashboard is reached only after Card 7's "Open dashboard" CTA.
         // 0.2.0-alpha.1 — Apple Hero phase 2: paint the page wash before
         // the technical view mounts. The gradient controller corrects
         // to the truthful bucket on the first 'enm:chain-state' event
@@ -1480,154 +1478,6 @@
         // shell.
         if (!this.els.tabs) { return; }
         this.els.tabs.hidden = false;
-    };
-
-    /**
-     * beta.0.4.3 (Wave M6.2 wizard surface) — Council continuation
-     * banner.
-     *
-     * The welcome card's "Council node" option sets
-     * localStorage('enm:setup-intent') = 'council' when the operator
-     * picks it. After mainchain setup completes (we're here in
-     * _showDashboard), the remaining Council services (ESC + EID +
-     * PG + Node.js runtime + 3 Oracles + Arbiter) still need to be
-     * installed. This banner is the operator's bridge into that
-     * sequential install.
-     *
-     * Idempotent: only renders if the intent flag is present + the
-     * banner isn't already mounted + at least one Council-required
-     * chain is missing from cfg.chains.
-     *
-     * @private
-     */
-    ENMApp.prototype._showCouncilContinuationBannerIfNeeded = function () {
-        var intent = null;
-        try { intent = window.localStorage.getItem('enm:setup-intent'); }
-        catch (_) { intent = null; }
-        if (intent !== 'council') { return; }
-        if (this._councilBanner) { return; }
-        var self = this;
-        // Check cfg.chains to see what's still missing.
-        this.services.api.get('/config', { skipCache: true }).then(function (data) {
-            if (self._destroyed) { return; }
-            var cfg = (data && data.config) || {};
-            var chains = cfg.chains || {};
-            var required = ['esc', 'eid', 'pg', 'esc-oracle', 'eid-oracle', 'pg-oracle', 'arbiter'];
-            var missing = required.filter(function (id) { return !chains[id]; });
-            if (missing.length === 0) {
-                // All Council services are configured — clear intent.
-                try { window.localStorage.removeItem('enm:setup-intent'); } catch (_) {}
-                return;
-            }
-            self._mountCouncilContinuationBanner(missing);
-        }).catch(function () { /* swallow — banner is best-effort */ });
-    };
-
-    /** @private */
-    ENMApp.prototype._mountCouncilContinuationBanner = function (missing) {
-        if (!this.els.paneDashboard) { return; }
-        var self = this;
-        var banner = document.createElement('div');
-        banner.className = 'enm-council-banner';
-        banner.setAttribute('role', 'region');
-        banner.setAttribute('aria-label', 'Council node setup continuation');
-        banner.innerHTML = ''
-            + '<div class="enm-council-banner-head">'
-            +   '<h3>Continue Council node setup</h3>'
-            +   '<button type="button" class="enm-council-banner-dismiss" '
-            +     'aria-label="Dismiss banner">×</button>'
-            + '</div>'
-            + '<p>Mainchain is up. ENM still needs to install: '
-            +   '<strong>' + missing.length + ' more services</strong> ('
-            +   missing.map(function (id) {
-                  return '<code>' + id + '</code>';
-                }).join(', ')
-            +   ').</p>'
-            + '<p>You\'ll provide 3 inputs (shared EVM keystore password, '
-            +   'shared reward address, ELA mining address for the Arbiter); '
-            +   'ENM installs everything in sequence.</p>'
-            + '<div class="enm-council-banner-actions">'
-            +   '<button type="button" class="enm-btn enm-btn-primary" '
-            +     'data-action="start-council-install">Start Council install</button>'
-            +   '<button type="button" class="enm-btn" '
-            +     'data-action="defer">I\'ll do it later</button>'
-            + '</div>';
-        // Insert at the top of paneDashboard.
-        this.els.paneDashboard.insertBefore(banner, this.els.paneDashboard.firstChild);
-        this._councilBanner = banner;
-        // Wire actions.
-        banner.querySelector('[data-action="start-council-install"]').addEventListener('click', function () {
-            self._openCouncilInstallWizard(missing);
-        });
-        banner.querySelector('[data-action="defer"]').addEventListener('click', function () {
-            self._dismissCouncilBanner();
-        });
-        banner.querySelector('.enm-council-banner-dismiss').addEventListener('click', function () {
-            self._dismissCouncilBanner();
-        });
-    };
-
-    /** @private */
-    ENMApp.prototype._dismissCouncilBanner = function () {
-        if (this._councilBanner && this._councilBanner.parentNode) {
-            this._councilBanner.parentNode.removeChild(this._councilBanner);
-        }
-        this._councilBanner = null;
-        // Don't clear intent — operator may want to come back.
-        // Add a Settings → "Continue Council setup" entry in a later
-        // release for re-entry. For now, refreshing the page after
-        // dismissing brings the banner back.
-    };
-
-    /** @private */
-    ENMApp.prototype._openCouncilInstallWizard = function (missing) {
-        // beta.0.4.3 — stub. The full CouncilSetupWizard component
-        // lands in v0.4.4 (this commit gets the welcome-card + banner
-        // UX right; the wizard's sequential-install plumbing is a
-        // separate ~400 LOC component).
-        //
-        // For v0.4.3 the operator can manually call the install
-        // endpoints in sequence:
-        //   1. POST /api/enm/setup/council-strategy
-        //        { passwordStrategy:'shared', sharedPassword:'<X>',
-        //          minerAddressStrategy:'shared', sharedMinerAddress:'<0x..>' }
-        //   2. POST /api/enm/setup/install-class-b { chainId:'esc' }
-        //   3. POST /api/enm/setup/install-class-b { chainId:'eid' }
-        //   4. POST /api/enm/setup/install-class-b { chainId:'pg' }
-        //   5. POST /api/enm/setup/install-node-runtime  (only if no host Node 18+)
-        //   6. POST /api/enm/setup/install-class-c { chainId:'esc-oracle', scriptPath:'...' }
-        //   7. POST /api/enm/setup/install-class-c { chainId:'eid-oracle', scriptPath:'...' }
-        //   8. POST /api/enm/setup/install-class-c { chainId:'pg-oracle',  scriptPath:'...' }
-        //   9. POST /api/enm/setup/install-class-d { miningAddress:'<E...>' }
-        //   10. POST /api/enm/chains/<id>/start for each
-        if (root.EnmCouncilSetupWizard) {
-            this._councilWizard = new root.EnmCouncilSetupWizard({
-                api: this.services.api,
-                sse: this.services.sse,
-                notifications: this.services.notifications,
-                missing: missing,
-                onComplete: function () {
-                    try { window.localStorage.removeItem('enm:setup-intent'); } catch (_) {}
-                    if (this._councilBanner) { this._dismissCouncilBanner(); }
-                    location.reload();
-                }.bind(this),
-            });
-            this._councilWizard.mount(document.body);
-            return;
-        }
-        // Stub fallback — explain what the wizard will do in v0.4.4.
-        if (this.services.notifications) {
-            this.services.notifications.show({
-                id: 'council-wizard-stub',
-                severity: 'info',
-                title: 'Council install wizard lands in v0.4.4',
-                body: 'For now, the operator can call the install endpoints '
-                    + 'in sequence: council-strategy → install-class-b (esc/'
-                    + 'eid/pg) → install-node-runtime → install-class-c '
-                    + '(3 oracles) → install-class-d (arbiter). See app.js '
-                    + '_openCouncilInstallWizard for the exact payloads.',
-            });
-        }
     };
 
     ENMApp.prototype._loadPendingProposals = function () {
