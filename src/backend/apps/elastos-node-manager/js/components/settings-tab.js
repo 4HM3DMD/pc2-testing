@@ -363,22 +363,86 @@
      * @param {string} chainId — esc-oracle | eid-oracle | pg-oracle
      */
     SettingsTab.prototype._mountOracleSettings = function (chainId) {
+        // beta.0.3.2 (Wave M4.2) — real Class C settings layout.
+        // Replaces the M2.5 stub. Read-only display of the oracle's
+        // wire (parent chain, script path, node version, port) plus
+        // a Restart button (the only writable interaction since
+        // oracles have no rewards/keystore/peers to tune).
         var fallbackChainNames = {
             'esc-oracle': 'ESC Oracle',
             'eid-oracle': 'EID Oracle',
             'pg-oracle':  'PG Oracle',
         };
         var name = _tFb('chain_name.' + chainId, fallbackChainNames[chainId] || chainId);
-        var title = _tFb('settings_class_stub.oracle_title', '{chainName} settings', { chainName: name });
-        var body  = _tFb(
-            'settings_class_stub.oracle_body',
-            'Class C (Oracle) settings land in M4.2. Oracles are normally surfaced inside their parent chain’s pane as a sub-status panel rather than a top-level row (plan §3). The Class C layout will include the Node.js runtime version pin, oracle script path, and per-oracle restart controls.',
-        );
+        var self = this;
         this.root.innerHTML = ''
-            + '<div class="enm-settings-class-stub" role="status" aria-live="polite">'
-            + '<h2>' + escapeHtml(title) + '</h2>'
-            + '<p>' + escapeHtml(body) + '</p>'
+            + '<header class="enm-settings-class-head">'
+            + '<h2>' + escapeHtml(name) + ' settings</h2>'
+            + '<p class="enm-settings-class-sub">Class C (Oracle) — '
+            + 'stateless Node.js relayer. No keystore, no rewards, '
+            + 'no peers. Relays cross-chain transactions from its '
+            + 'parent EVM sidechain to mainchain.</p>'
+            + '</header>'
+            + '<div class="enm-settings-class-body" data-state="loading">'
+            + '<p class="enm-stub">Loading current configuration…</p>'
             + '</div>';
+        var body = this.root.querySelector('.enm-settings-class-body');
+        this.api.get('/config', { skipCache: true }).then(function (data) {
+            if (self._destroyed) { return; }
+            var cfg = (data && data.config) || {};
+            var oracleCfg = (cfg.chains && cfg.chains[chainId]) || null;
+            if (!oracleCfg) {
+                body.dataset.state = 'unconfigured';
+                body.innerHTML = ''
+                    + '<div class="enm-settings-class-stub">'
+                    + '<p><strong>' + escapeHtml(name) + ' is not yet installed.</strong></p>'
+                    + '<p>Oracles are auto-suggested once their parent EVM '
+                    + 'sidechain is running (lands in <code>M4.4</code>). '
+                    + 'For now use the parent chain pane to monitor + install.</p>'
+                    + '</div>';
+                return;
+            }
+            self._renderClassCInfo(body, chainId, oracleCfg);
+        }).catch(function (err) {
+            if (self._destroyed) { return; }
+            body.dataset.state = 'error';
+            body.innerHTML = '<p class="enm-stub">Failed to load config: '
+                + escapeHtml((err && err.message) || String(err)) + '</p>';
+        });
+    };
+
+    /**
+     * @private — paint Class C (oracle) info pane. Read-only display
+     * of the oracle's wire shape; M4.4 adds the parent-restart hook
+     * that drives the operator action surface here.
+     */
+    SettingsTab.prototype._renderClassCInfo = function (parent, chainId, oracleCfg) {
+        parent.dataset.state = 'ready';
+        var fields = [
+            { label: 'Parent chain',     value: oracleCfg.parentChainId || '—' },
+            { label: 'HTTP port',        value: (oracleCfg.ports && oracleCfg.ports.httpRpc) || '—' },
+            { label: 'Script path',      value: oracleCfg.scriptPath || '—' },
+            { label: 'Node.js version',  value: oracleCfg.nodejsVersion || '—' },
+            { label: 'Active net',       value: oracleCfg.activeNet || 'mainnet' },
+            { label: 'Process enabled',  value: oracleCfg.enabled ? 'on' : 'off' },
+        ];
+        var html = '<section class="enm-section enm-section-classc">'
+            + '<h3>Oracle wiring</h3>'
+            + '<dl class="enm-info-dl">';
+        fields.forEach(function (f) {
+            html += '<dt>' + escapeHtml(f.label) + '</dt>'
+                  + '<dd>' + escapeHtml(String(f.value)) + '</dd>';
+        });
+        html += '</dl></section>';
+        html += '<section class="enm-section enm-section-classc">'
+              + '<h3>Why no editable fields?</h3>'
+              + '<p>Oracles have no keystore, no mining rewards, and no peer '
+              + 'tuning. Restart is driven from the parent chain pane '
+              + '(<code>M4.4</code> wires the auto-restart-on-parent-restart '
+              + 'hook). For port or script-path changes, edit '
+              + '<code>cfg.chains.' + escapeHtml(chainId) + '</code> directly '
+              + 'and restart.</p></section>';
+        parent.innerHTML = html;
     };
 
     /**

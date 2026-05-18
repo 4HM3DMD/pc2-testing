@@ -299,7 +299,40 @@ const classBSchema = Joi.object({
     healing: perChainHealingSchema,
 });
 
-const classCPlaceholderSchema = Joi.object().unknown(true);  // Oracles (M4, M5)
+// beta.0.3.2 (Wave M4.2) — Class C (Sidekick Oracle) schema. Replaces
+// the M1.2 placeholder for esc-oracle / eid-oracle (PG-oracle reuses
+// the same shape; lands in M5.4).
+//
+// Oracles are stateless Node.js HTTP relayers (plan §2). The cfg block
+// declares:
+//   - parentChainId    — which EVM sidechain feeds this oracle
+//   - scriptPath       — directory holding crosschain_<X>.js
+//   - nodejsVersion    — pinned to v23.10.0 per upstream (M4.3 ships)
+//   - ports.httpRpc    — the oracle's status endpoint port
+//   - parent.{chainRpcUrl, mainchainRpcUrl} — optional overrides; the
+//     adapter falls through to per-chain RPC URLs derived from cfg
+//     when these are empty (the common case — operator never sets them)
+//   - binaryPath / binaryVersion — the node interpreter (M4.3 sets)
+//   - healing — per-chain rule overrides (M1.3 schema reuse)
+const classCParentSchema = Joi.object({
+    chainRpcUrl: Joi.string().uri().allow('').default(''),
+    mainchainRpcUrl: Joi.string().uri().allow('').default(''),
+}).default();
+const classCPortsSchema = Joi.object({
+    httpRpc: PORT_RANGE.required(),
+});
+const classCSchema = Joi.object({
+    enabled: Joi.boolean().default(false),
+    binaryPath: Joi.string().allow('').default(''),
+    binaryVersion: Joi.string().allow('').default(''),
+    activeNet: Joi.string().valid('mainnet', 'testnet').default('mainnet'),
+    parentChainId: Joi.string().valid('esc', 'eid', 'pg').required(),
+    scriptPath: Joi.string().allow('').default(''),
+    nodejsVersion: Joi.string().allow('').default('v23.10.0'),
+    ports: classCPortsSchema.required(),
+    parent: classCParentSchema,
+    healing: perChainHealingSchema,
+});
 const classDPlaceholderSchema = Joi.object().unknown(true);  // Arbiter (M6)
 const classEPlaceholderSchema = Joi.object().unknown(true);  // SPV (M6-opt)
 
@@ -316,9 +349,9 @@ const enmConfigSchema = Joi.object({
         // (closed-source SHA256 manifest) layer on in M5.1 but the
         // current shape covers all three.
         .pattern(/^(esc|eid|pg)$/, classBSchema)
-        // Class C chainIds — oracles. Real schema in M4 (ESC, EID Oracle)
-        // and M5 (PG Oracle).
-        .pattern(/^(esc-oracle|eid-oracle|pg-oracle)$/, classCPlaceholderSchema)
+        // Class C chainIds — oracles. M4.2 real schema; PG oracle uses
+        // the same shape (M5.4 will just register the adapter).
+        .pattern(/^(esc-oracle|eid-oracle|pg-oracle)$/, classCSchema)
         // Class D — arbiter (singleton). Real schema in M6.
         .pattern(/^arbiter$/, classDPlaceholderSchema)
         // Class E — spv (singleton, optional). Real schema in M6-opt.
