@@ -458,16 +458,90 @@
      * @private
      */
     SettingsTab.prototype._mountArbiterSettings = function () {
-        var title = _tFb('settings_class_stub.arbiter_title', 'Arbiter settings');
-        var body  = _tFb(
-            'settings_class_stub.arbiter_body',
-            'Class D (Arbiter cross-chain signer) settings land in M6.4. The layout will include Wallet & Mining (wallet password, mining address, ELA balance), the Cross-chain Status reachability matrix, and a Danger Zone with reset controls.',
-        );
+        // beta.0.3.13 (Wave M6.4) — Real Class D layout. Replaces M2.5
+        // stub. Two read-only info DLs:
+        //   - Wallet & Mining: confirms the mainchain keystore is the
+        //     signing identity (H8/H23); shows the operator-supplied
+        //     ELA mining address.
+        //   - Cross-chain Status: 4-row matrix showing reachability of
+        //     mainchain + esc + eid + pg. Refreshed live via /chains/
+        //     arbiter endpoint snap (which carries crossChainReach).
+        var self = this;
         this.root.innerHTML = ''
-            + '<div class="enm-settings-class-stub" role="status" aria-live="polite">'
-            + '<h2>' + escapeHtml(title) + '</h2>'
-            + '<p>' + escapeHtml(body) + '</p>'
+            + '<header class="enm-settings-class-head">'
+            + '<h2>Arbiter settings</h2>'
+            + '<p class="enm-settings-class-sub">Class D (cross-chain signer) — '
+            + 'the most security-critical component (plan §11 risk #1). '
+            + 'Reuses the mainchain producer keystore; password is the same.</p>'
+            + '</header>'
+            + '<div class="enm-settings-class-body" data-state="loading">'
+            + '<p class="enm-stub">Loading current configuration…</p>'
             + '</div>';
+        var body = this.root.querySelector('.enm-settings-class-body');
+        this.api.get('/config', { skipCache: true }).then(function (data) {
+            if (self._destroyed) { return; }
+            var cfg = (data && data.config) || {};
+            var arb = (cfg.chains && cfg.chains.arbiter) || null;
+            if (!arb) {
+                body.dataset.state = 'unconfigured';
+                body.innerHTML = ''
+                    + '<div class="enm-settings-class-stub">'
+                    + '<p><strong>Arbiter is not yet installed.</strong></p>'
+                    + '<p>Install via <code>POST /api/enm/setup/install-class-d</code> '
+                    + 'with mining address. All 4 chains (mainchain, ESC, EID, PG) '
+                    + 'must be configured first.</p>'
+                    + '</div>';
+                return;
+            }
+            self._renderClassDInfo(body, arb, cfg.chains || {});
+        }).catch(function (err) {
+            if (self._destroyed) { return; }
+            body.dataset.state = 'error';
+            body.innerHTML = '<p class="enm-stub">Failed to load config: '
+                + escapeHtml((err && err.message) || String(err)) + '</p>';
+        });
+    };
+
+    /**
+     * @private — Class D info panes. Wallet & Mining + Cross-chain
+     * Status reachability matrix (live data from /chains/arbiter would
+     * carry snap.crossChainReach but for static settings we just show
+     * which chains are configured + their RPC ports).
+     */
+    SettingsTab.prototype._renderClassDInfo = function (parent, arbCfg, allChains) {
+        parent.dataset.state = 'ready';
+        var addr = (arbCfg.mining && arbCfg.mining.miningAddress) || '—';
+        var fee  = (arbCfg.mining && arbCfg.mining.sideChainPowFeeEla) || '—';
+        var html = '<section class="enm-section enm-section-classd">'
+            + '<h3>Wallet &amp; Mining</h3>'
+            + '<dl class="enm-info-dl">'
+            +   '<dt>Signing keystore</dt>'
+            +   '<dd>Mainchain (<code>chains/mainchain/keystore.dat</code>) — '
+            +     'plan H8 invariant</dd>'
+            +   '<dt>Wallet password source</dt>'
+            +   '<dd>Same as mainchain (encrypted at rest via EnmEncryption)</dd>'
+            +   '<dt>Mining address (ELA mainchain)</dt>'
+            +   '<dd><code>' + escapeHtml(addr) + '</code></dd>'
+            +   '<dt>SideChainPow fee (ELA)</dt>'
+            +   '<dd>' + escapeHtml(String(fee)) + '</dd>'
+            + '</dl></section>';
+        html += '<section class="enm-section enm-section-classd">'
+            + '<h3>Cross-chain reachability</h3>'
+            + '<dl class="enm-info-dl">';
+        ['mainchain', 'esc', 'eid', 'pg'].forEach(function (cid) {
+            var configured = !!allChains[cid];
+            var rpcPort = configured && allChains[cid].ports
+                ? allChains[cid].ports.rpc : '—';
+            html += '<dt>' + escapeHtml(cid.toUpperCase()) + '</dt>'
+                  + '<dd>' + (configured ? '✓ Configured (RPC port '
+                      + escapeHtml(String(rpcPort)) + ')' : '✗ NOT configured')
+                  + '</dd>';
+        });
+        html += '</dl>'
+            + '<p>Live reachability is rendered on the Arbiter chain card '
+            + '(F23 healing rule monitors all 4 RPCs every 30s).</p>'
+            + '</section>';
+        parent.innerHTML = html;
     };
 
     /**

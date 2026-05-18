@@ -1201,6 +1201,110 @@ function build(extensionHandle) {
         }
     });
 
+    // beta.0.3.11 (Wave M6.2+M6.3) — Class D (Arbiter) install endpoint.
+    //
+    // PRE-REQUISITES (returns 412 on any miss):
+    //   - All 4 chains (mainchain + esc + eid + pg) must be configured.
+    //   - mainchain.dpos.keystorePasswordEncrypted must be set (the
+    //     Arbiter reuses it for its wallet — H8/H23 invariant).
+    //
+    // BODY:
+    //   { miningAddress: string, sideChainPowFeeEla?: number,
+    //     activeNet?: 'mainnet'|'testnet' }
+    //
+    // M6.3 NOTE: "Wallet create OR import" from plan §5 has only one
+    // path in the M6 design — there's no separate Arbiter wallet to
+    // create. The Arbiter signs WITH the mainchain producer keystore.
+    // So this endpoint omits create/import — operator already created
+    // the wallet during mainchain setup. The wizard's "wallet" card
+    // in plan §5 reduces to "confirm mainchain wallet is the signer".
+    router.post('/install-class-d', limit('admin'), requireOwner, async (req, res) => {
+        try {
+            const body = req.body || {};
+            const EnmCrypto = require('../services/EnmCrypto');
+            const ArbiterAdapter = require('../services/ArbiterAdapter');
+
+            const activeNet = body.activeNet === 'testnet' ? 'testnet' : 'mainnet';
+            const cfg = await ConfigStore.load();
+            // Pre-req: all 4 chains configured (M6.1 helper).
+            try {
+                ArbiterAdapter.preflightAllChainsConfigured(cfg.chains || {});
+            } catch (e) {
+                return res.status(412).json(errorBody(e.message));
+            }
+            // Idempotency.
+            if (cfg.chains && cfg.chains.arbiter) {
+                return res.status(409).json(errorBody(
+                    'install-class-d: arbiter already configured.',
+                ));
+            }
+            // Mining address (ELA mainchain).
+            const miningAddress = String(body.miningAddress || '').trim();
+            if (!miningAddress) {
+                return res.status(400).json(errorBody(
+                    'install-class-d: miningAddress is required (ELA mainchain address).',
+                ));
+            }
+            const v = EnmCrypto.validateElaAddress(miningAddress);
+            if (!v.valid) {
+                return res.status(400).json(errorBody(`miningAddress: ${v.warning}`));
+            }
+            const sideChainPowFeeEla = (typeof body.sideChainPowFeeEla === 'number'
+                && body.sideChainPowFeeEla >= 0 && body.sideChainPowFeeEla <= 100)
+                ? body.sideChainPowFeeEla : 0.1;
+
+            // Canonical Arbiter ports per plan §14 (mainnet 20536/20538;
+            // testnet 21536/21538 per H19 21xxx range).
+            const ports = activeNet === 'testnet'
+                ? { rpc: 21536, p2p: 21538 }
+                : { rpc: 20536, p2p: 20538 };
+
+            cfg.chains.arbiter = {
+                enabled: false,           // operator flips after install
+                binaryPath: '',           // M3.8-style download path; M6.7 lands binary
+                binaryVersion: '',
+                activeNet,
+                ports,
+                wallet: {
+                    usesMainchainKeystore: true,           // H23 invariant
+                    passwordSource: 'mainchain-ela-txt',
+                },
+                mining: {
+                    miningAddress,
+                    sideChainPowFeeEla,
+                },
+                crossChain: {
+                    sideNodeList: [],                       // auto-populated at start
+                    syncIntervalMs: 1000,                   // plan §14
+                },
+                healing: { enabledRules: {} },
+            };
+            await ConfigStore.save(cfg);
+            try {
+                const ChainRegistry = require('../services/ChainRegistry');
+                ChainRegistry.registerConfiguredAdapters({ cfg });
+            } catch (err) {
+                extensionHandle.log.warn(
+                    `${ENM_LOG_PREFIX} install-class-d: registerConfiguredAdapters failed: ${err.message}`,
+                );
+            }
+            extensionHandle.log.info(
+                `${ENM_LOG_PREFIX} install-class-d arbiter installed `
+                + `(net=${activeNet}, mining=${miningAddress.slice(0, 10)}...)`,
+            );
+            return res.json(successBody({
+                chainId: 'arbiter',
+                chainCfg: cfg.chains.arbiter,
+                next: 'POST /api/enm/setup/install/arbiter to download the binary',
+            }));
+        } catch (err) {
+            extensionHandle.log.error(
+                `${ENM_LOG_PREFIX} POST /setup/install-class-d: ${err.message}`,
+            );
+            return res.status(500).json(errorBody(err.message));
+        }
+    });
+
     router.post('/install-node-runtime', limit('admin'), requireOwner, async (req, res) => {
         try {
             const NodeJsRuntime = require('../services/NodeJsRuntime');

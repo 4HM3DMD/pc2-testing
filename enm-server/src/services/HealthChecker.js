@@ -268,6 +268,7 @@ class HealthChecker {
                 ruleState: s,
             };
             this._enrichOracleSnap(snap, chainCfg);
+            this._enrichArbiterSnap(snap);
 
             // F1 + F2 fire here.
             const dets = HealthRules.runAll(snap)
@@ -450,11 +451,12 @@ class HealthChecker {
                 dposDesyncDetected,
             };
             this._enrichOracleSnap(snap, chainCfg);
+            this._enrichArbiterSnap(snap);
 
             const dets = HealthRules.runAll(snap).filter((d) =>
                 d.ruleId === 'F3' || d.ruleId === 'F4' || d.ruleId === 'F9'
                 || d.ruleId === 'F10' || d.ruleId === 'F16' || d.ruleId === 'F18'
-                || d.ruleId === 'F22' || d.ruleId === 'F24');
+                || d.ruleId === 'F22' || d.ruleId === 'F24' || d.ruleId === 'F23');
             if (dets.length > 0) {
                 await this.engine.apply(chainId, dets, chainCfg);
             }
@@ -504,6 +506,7 @@ class HealthChecker {
                 hostConflicts,
             };
             this._enrichOracleSnap(snap, chainCfg);
+            this._enrichArbiterSnap(snap);
 
             const dets = HealthRules.runAll(snap).filter((d) =>
                 d.ruleId === 'F5'  || d.ruleId === 'F6'  || d.ruleId === 'F8'
@@ -784,6 +787,34 @@ class HealthChecker {
                 );
             }
         }
+    }
+
+    /**
+     * beta.0.3.14 (Wave M6.5) — enrich an arbiter snapshot with
+     * crossChainReach map. F23 reads snap.crossChainReach[<chainId>]
+     * for each of the 4 cross-chain dependencies (mainchain/esc/eid/
+     * pg). For non-arbiter chains this is a no-op.
+     *
+     * Uses processService.statusSync(parent) for each dependency —
+     * cheap (no RPC). Treats process-alive as "RPC reachable" by
+     * proxy; F2 fires the more precise "RPC alive but unreachable"
+     * detection on each chain individually.
+     *
+     * @private
+     */
+    _enrichArbiterSnap(snap) {
+        if (!snap || snap.chainId !== 'arbiter') { return; }
+        const required = ['mainchain', 'esc', 'eid', 'pg'];
+        const reach = {};
+        for (const cid of required) {
+            try {
+                const st = this.processService.statusSync(cid);
+                reach[cid] = !!(st && st.alive);
+            } catch (_) {
+                reach[cid] = false;
+            }
+        }
+        snap.crossChainReach = reach;
     }
 
     /**

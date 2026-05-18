@@ -660,6 +660,45 @@ function detectF22(snap) {
 }
 
 /**
+ * F23 — Class D (Arbiter) cross-chain RPC unreachable.
+ *
+ * Fires when:
+ *   - chain is Class D (arbiter)
+ *   - arbiter process is alive
+ *   - any of the 4 cross-chain RPC reachability checks fails
+ *     (snap.crossChainReach.{mainchain,esc,eid,pg} === false)
+ *
+ * The Arbiter relays multisig signatures across all 4 chains; if any
+ * is unreachable, signatures it produces can't be validated AND it
+ * may sign for state that's diverged from the unreachable chain.
+ * Tier CRITICAL_NOTIFY: operator must investigate which chain is
+ * down (the F-rules on the affected chain will also be firing). The
+ * arbiter itself stays running so the OTHER chains continue.
+ */
+function detectF23(snap) {
+    if (!snap || !snap.processStatus || !snap.processStatus.alive) return null;
+    if (!snap.crossChainReach || typeof snap.crossChainReach !== 'object') return null;
+    const unreachable = Object.keys(snap.crossChainReach)
+        .filter((id) => snap.crossChainReach[id] === false);
+    if (unreachable.length === 0) return null;
+    return {
+        ruleId: 'F23',
+        tier: HEALING_TIERS.CRITICAL_NOTIFY,
+        summaryAction: `arbiter: cross-chain RPC unreachable [${unreachable.join(', ')}]`,
+        summaryReason:
+            'The Arbiter relays multisig signatures across all 4 chains. '
+            + `One or more cross-chain RPCs are unreachable: ${unreachable.join(', ')}. `
+            + 'Bring the affected chain(s) back online (their per-chain pane '
+            + 'will show the specific failure). The Arbiter will resume cross-'
+            + 'chain operations automatically once all 4 are reachable.',
+        payload: {
+            chainId: 'arbiter',
+            unreachable,
+        },
+    };
+}
+
+/**
  * F24 — Class C (Oracle) parent-chain offline.
  *
  * Fires when:
@@ -820,6 +859,10 @@ const RULE_METADATA = Object.freeze({
     // restarts (ChainRegistry exit-hook handles the restart side).
     F24: { tier: 'CRITICAL_NOTIFY', title: 'Oracle parent chain offline',
            description: 'An Oracle (ESC/EID/PG) relays from its parent EVM sidechain to mainchain. If the parent is stopped while the oracle is running, surface a critical alert so the operator can bring the parent back online (or stop the orphaned oracle intentionally).' },
+    // beta.0.3.14 (Wave M6.5) — Class D-only. Arbiter cross-chain
+    // RPC unreachable (any of mainchain/esc/eid/pg).
+    F23: { tier: 'CRITICAL_NOTIFY', title: 'Arbiter cross-chain unreachable',
+           description: 'The Arbiter signs multisig payloads across all 4 chains. If any cross-chain RPC becomes unreachable, the Arbiter cannot validate or produce cross-chain signatures for that chain. Operator must investigate the affected chain; alert auto-clears when all 4 RPCs respond.' },
 });
 
 // beta.3.22 — every rule is enabled by default. The operator-facing
@@ -853,6 +896,7 @@ const DEFAULT_ENABLED = Object.freeze({
     F22: true,  // DPoS state desync (Phase 7) — auto-heal via snapshot restore
     F25: true,  // beta.4.00 — Class B miner address unset (alert-only)
     F24: true,  // beta.0.3.5 — Class C oracle parent offline (alert-only)
+    F23: true,  // beta.0.3.14 — Class D arbiter cross-chain unreachable
 });
 
 // Global rule overrides (apply to all chains). Pre-3.87 this was the only
@@ -976,6 +1020,8 @@ function runAll(snap) {
         ['F25', detectF25],
         // beta.0.3.5 (Wave M4.5) — Class C oracle parent offline.
         ['F24', detectF24],
+        // beta.0.3.14 (Wave M6.5) — Class D arbiter cross-chain.
+        ['F23', detectF23],
     ];
 
     // beta.3.87 — Wave M1.3 — DPoS-only rules. F11 (rotation stuck),
@@ -1007,6 +1053,10 @@ function runAll(snap) {
     // oracles (esc-oracle/eid-oracle/pg-oracle) where the parent-
     // chain abstraction exists.
     const CLASS_C_ONLY_RULES = new Set(['F24']);
+    // beta.0.3.14 (Wave M6.5) — Class D-only rules. F23 fires only
+    // for the arbiter; the cross-chain reachability abstraction
+    // doesn't apply to single-chain components.
+    const CLASS_D_ONLY_RULES = new Set(['F23']);
     const chainId = snap && snap.chainId;
     const chainClass = chainId ? ChainAdapter.classOf(chainId) : null;
 
@@ -1034,6 +1084,11 @@ function runAll(snap) {
             && chainClass !== 'C') {
             continue;
         }
+        if (CLASS_D_ONLY_RULES.has(ruleId)
+            && chainClass !== null
+            && chainClass !== 'D') {
+            continue;
+        }
         const d = fn(snap);
         if (d) out.push(d);
     }
@@ -1058,6 +1113,7 @@ module.exports = {
     detectF19,
     detectF25,  // beta.4.00 (Wave M3.6)
     detectF24,  // beta.0.3.5 (Wave M4.5)
+    detectF23,  // beta.0.3.14 (Wave M6.5)
     PEER_ZERO_GRACE_MS,
     RPC_UNREACHABLE_GRACE_MS,
     HEIGHT_STALL_GRACE_MS,
