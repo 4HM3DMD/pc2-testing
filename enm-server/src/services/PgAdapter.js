@@ -97,27 +97,31 @@ class PgAdapter extends EvmSidechainAdapter {
     }
 
     /**
-     * Override start to run the SHA256 pre-flight before delegating
-     * to the EvmSidechainAdapter base.start().
+     * Override start. SHA256 verification is OPTIONAL (beta.0.4.1 —
+     * operator directive). If cfg.binarySha256Expected is set, ENM
+     * verifies before spawning; if empty, ENM trusts TLS + the smoke
+     * test (same posture as ESC/EID). The static verifyBinarySha256
+     * helper stays exported for any future tooling that wants to
+     * verify manually.
+     *
+     * Original M5.1 design hard-failed without an operator-supplied
+     * manifest. Reverted post-loop because (a) ESC/EID don't require
+     * manifests either, (b) operators rarely have a trusted source
+     * for the hash anyway, and (c) the TLS-only posture is already
+     * the default for every other binary we download.
      *
      * @param {object} cfg
      * @returns {Promise<{ pid: number, startedAt: number }>}
      */
     async start(cfg) {
         const expected = cfg && cfg.binarySha256Expected;
-        if (!expected) {
-            throw new Error(
-                'pg: cfg.binarySha256Expected is required for closed-source PG. '
-                + 'Set it in cfg.chains.pg or via Settings → PG → SHA256 Manifest. '
-                + 'Without operator-supplied verification, ENM refuses to start PG '
-                + '(plan §11 risk #2 — supply chain).',
-            );
-        }
-        await PgAdapter.verifyBinarySha256(cfg.binaryPath, expected);
-        if (this.extensionHandle && this.extensionHandle.log) {
-            this.extensionHandle.log.info(
-                `[ENM] pg: SHA256 ${expected.toLowerCase()} verified — proceeding to spawn`,
-            );
+        if (expected) {
+            await PgAdapter.verifyBinarySha256(cfg.binaryPath, expected);
+            if (this.extensionHandle && this.extensionHandle.log) {
+                this.extensionHandle.log.info(
+                    `[ENM] pg: SHA256 ${expected.toLowerCase()} verified — proceeding to spawn`,
+                );
+            }
         }
         return super.start(cfg);
     }

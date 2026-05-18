@@ -43,14 +43,23 @@ const { execFile } = require('node:child_process');
 
 const { enmDataDir } = require('./DataDir');
 
-// Pinned per plan §17 + node.sh:520. M4.3 ships this exact version;
-// future bumps land in their own milestones so the operator sees
-// "oracle wants Node v24.x, you have v23.10.0" as a clear signal.
+// PINNED_VERSION is what installLocal() downloads as a LAST RESORT
+// when the host doesn't have any usable Node.js. Matches node.sh:520
+// for parity but is no longer the floor: any v18+ runtime works.
 const PINNED_VERSION = 'v23.10.0';
 
-// Minimum acceptable major version (some operators have v24/v25 on
-// their host; we accept >= the pinned major).
-const MIN_MAJOR = 23;
+// beta.0.4.1 (operator directive) — lowered MIN_MAJOR from 23 → 18.
+// The oracle scripts use web3 + express + standard fs/net APIs that
+// have wide Node.js compatibility. v18 is the same floor PC2 itself
+// requires (enm-server/package.json engines: ">=20.18.0"), so any
+// host running ENM already has a usable Node.js — no separate
+// download needed in 99% of cases.
+//
+// resolveAny() now prefers HOST detection over LOCAL install so we
+// reuse whatever Node.js PC2 brought to the host. installLocal stays
+// as the last-resort fallback for stripped-down containers that
+// somehow lack any usable Node.js.
+const MIN_MAJOR = 18;
 
 // Standard search paths for detectOnHost. PATH is searched first via
 // `which node` (cheaper + canonical); these fall-back paths cover the
@@ -189,18 +198,29 @@ async function detectLocal(version) {
 }
 
 /**
- * Combined resolver: prefer local install (deterministic, matches
- * what M4.3 ships) over host (operator-managed; could change). Returns
- * the first usable runtime. Use this in OracleAdapter.start to find
- * the interpreter.
+ * Combined resolver. beta.0.4.1 (operator directive) — flipped to
+ * prefer HOST detection over LOCAL install. Rationale: PC2 itself
+ * requires Node v20+ (enm-server/package.json engines), so the host
+ * is guaranteed to have a usable runtime in normal deployments. No
+ * point downloading our own +50MB tarball when there's already a
+ * perfectly good interpreter on PATH.
+ *
+ * Order of preference:
+ *   1. detectOnHost — whatever PC2 already uses (zero extra disk)
+ *   2. detectLocal  — a previous installLocal call's result
+ *   3. null         — caller (OracleAdapter.start) refuses to spawn
+ *
+ * The installLocal endpoint is still useful for stripped-down
+ * containers that lack Node.js entirely, but the common case never
+ * needs it.
  *
  * @returns {Promise<{ path: string, version: object, source: 'local'|'host' } | null>}
  */
 async function resolveAny() {
-    const local = await detectLocal(PINNED_VERSION);
-    if (local) { return { ...local, source: 'local' }; }
     const host = await detectOnHost();
     if (host) { return { ...host, source: 'host' }; }
+    const local = await detectLocal(PINNED_VERSION);
+    if (local) { return { ...local, source: 'local' }; }
     return null;
 }
 

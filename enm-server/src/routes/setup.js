@@ -989,10 +989,14 @@ function build(extensionHandle) {
                 syncMode = body.sync.mode;
             }
             const minerEnabled = body.miner && body.miner.enabled === true;
-            // beta.0.3.6 (Wave M5.1) — closed-source PG requires an
-            // operator-supplied SHA256 manifest at install time. ESC +
-            // EID don't require it (build reproducibly from public
-            // source). Validated as 64-char hex.
+            // beta.0.4.1 (operator directive) — SHA256 manifest is
+            // OPTIONAL for all Class B chains including PG. Original
+            // M5.1 design made it required for PG; reverted because
+            // (a) ESC/EID don't require it either, (b) operators
+            // rarely have a trusted source for the hash, and (c) the
+            // TLS-only posture is the default for every other binary.
+            // If the operator passes binarySha256Expected, ENM still
+            // honours it (PgAdapter.start verifies before spawn).
             let binarySha256Expected = '';
             if (typeof body.binarySha256Expected === 'string'
                 && body.binarySha256Expected.length > 0) {
@@ -1002,13 +1006,6 @@ function build(extensionHandle) {
                     ));
                 }
                 binarySha256Expected = body.binarySha256Expected.toLowerCase();
-            }
-            if (chainId === 'pg' && !binarySha256Expected) {
-                return res.status(412).json(errorBody(
-                    'install-class-b pg: binarySha256Expected is required for closed-source PG. '
-                    + 'Obtain the SHA256 from a trusted Elastos foundation channel + pass in body. '
-                    + '(Plan §11 risk #2 — supply chain mitigation.)',
-                ));
             }
             // Assemble the chain cfg block.
             const ports = ClassBPorts.portsFor(chainId, activeNet);
