@@ -321,7 +321,28 @@ class NativeProcessService extends EventEmitter {
         // unref() so PC2 doesn't wait for the child on its own shutdown.
         // env filtered: forward only PATH/HOME/locale (Phase 2 audit, agent 2 —
         // raw process.env could leak PC2 secrets to ela).
-        const child = spawn(binaryPath, [], {
+        //
+        // beta.3.95 (Wave M3.1) — chainConfig.spawnArgs support. ela
+        // mainchain takes no args (configures via config.json) so the
+        // pre-3.95 hardcoded `[]` was correct. EVM sidechains (geth-
+        // derived: ESC/EID/PG) need CLI flags like --datadir, --rpcport,
+        // --miner.etherbase, --pbft.keystore. Adapters compute the array
+        // in their start() override + pass it through chainConfig.
+        // Validate to keep this primitive boring: array of strings only.
+        var spawnArgs = [];
+        if (Array.isArray(chainConfig.spawnArgs)) {
+            for (var i = 0; i < chainConfig.spawnArgs.length; i += 1) {
+                var arg = chainConfig.spawnArgs[i];
+                if (typeof arg !== 'string') {
+                    throw new TypeError(
+                        'NativeProcessService.start: spawnArgs['
+                        + i + '] must be string, got ' + typeof arg,
+                    );
+                }
+                spawnArgs.push(arg);
+            }
+        }
+        const child = spawn(binaryPath, spawnArgs, {
             cwd,
             env: buildSafeChildEnv(),
             stdio: ['pipe', 'pipe', 'pipe'],
