@@ -1355,6 +1355,124 @@ function build(extensionHandle) {
         }
     });
 
+    // beta.3.97 (Wave M3.3) — PUT /chains/<id>/class-b-config — update
+    // an installed Class B chain's miner + sync + bootnodes settings.
+    // Other fields (ports, pbft.*, binary, activeNet) are install-time
+    // immutables and ONLY mutable via the M3.5 setup wizard. The
+    // settings UI calls this on Save in Class B Settings → Mining &
+    // Rewards.
+    //
+    // Body shape (all fields optional; only present fields are merged):
+    //   {
+    //     miner: { enabled?, rewardAddress?, threads?, evmKeystoreAddr? },
+    //     sync:  { mode? },
+    //     bootnodes: string[]?
+    //   }
+    //
+    // Returns 501 on non-B chains, 404 on unknown chain, 400 on
+    // miner-address shape failure (with the address-validation warning
+    // text from EnmCrypto so the UI can surface "EIP-55 mismatch" etc.).
+    router.put('/:chainId/class-b-config', limit('admin'), requireOwner, async (req, res) => {
+        try {
+            const adapter = adapterOr404(req, res, extensionHandle);
+            if (!adapter) return undefined;
+            const chainId = adapter.chainId;
+            if (adapter.chainClass !== 'B') {
+                return res.status(501).json(errorBody(
+                    `class-b-config is defined only for Class B (EVM sidechain) chains. `
+                    + `'${chainId}' is class ${adapter.chainClass || 'unknown'}.`,
+                ));
+            }
+            const body = req.body || {};
+            const cfg = await ConfigStore.load();
+            const chainCfg = cfg.chains && cfg.chains[chainId];
+            if (!chainCfg) {
+                return res.status(404).json(errorBody(`Chain '${chainId}' not configured.`));
+            }
+            // Optional miner subdoc merge.
+            if (body.miner && typeof body.miner === 'object') {
+                if (typeof body.miner.enabled === 'boolean') {
+                    chainCfg.miner.enabled = body.miner.enabled;
+                }
+                if (body.miner.rewardAddress !== undefined) {
+                    const addr = String(body.miner.rewardAddress || '');
+                    if (addr.length > 0) {
+                        const v = require('../services/EnmCrypto').validateEthAddress(addr);
+                        if (!v.valid) {
+                            return res.status(400).json(errorBody(
+                                `miner.rewardAddress: ${v.warning}`,
+                            ));
+                        }
+                        chainCfg.miner.rewardAddress = v.normalized || addr;
+                        if (v.warning) {
+                            // Soft warning (e.g. EIP-55 checksum mismatch).
+                            extensionHandle.log.info(
+                                `${ENM_LOG_PREFIX} ${chainId} miner.rewardAddress accepted with warning: ${v.warning}`,
+                            );
+                        }
+                    } else {
+                        chainCfg.miner.rewardAddress = '';
+                    }
+                }
+                if (body.miner.evmKeystoreAddr !== undefined) {
+                    const addr = String(body.miner.evmKeystoreAddr || '');
+                    if (addr.length > 0) {
+                        const v = require('../services/EnmCrypto').validateEthAddress(addr);
+                        if (!v.valid) {
+                            return res.status(400).json(errorBody(
+                                `miner.evmKeystoreAddr: ${v.warning}`,
+                            ));
+                        }
+                        chainCfg.miner.evmKeystoreAddr = v.normalized || addr;
+                    } else {
+                        chainCfg.miner.evmKeystoreAddr = '';
+                    }
+                }
+                if (Number.isInteger(body.miner.threads)) {
+                    if (body.miner.threads < 1 || body.miner.threads > 16) {
+                        return res.status(400).json(errorBody(
+                            'miner.threads: must be integer in [1, 16]',
+                        ));
+                    }
+                    chainCfg.miner.threads = body.miner.threads;
+                }
+            }
+            // Optional sync subdoc merge.
+            if (body.sync && typeof body.sync === 'object') {
+                if (body.sync.mode !== undefined) {
+                    const m = String(body.sync.mode);
+                    if (!['fast', 'full', 'archive'].includes(m)) {
+                        return res.status(400).json(errorBody(
+                            'sync.mode: must be one of fast | full | archive',
+                        ));
+                    }
+                    chainCfg.sync.mode = m;
+                }
+            }
+            // Optional bootnodes array replace.
+            if (Array.isArray(body.bootnodes)) {
+                for (const b of body.bootnodes) {
+                    if (typeof b !== 'string' || b.length > 512) {
+                        return res.status(400).json(errorBody(
+                            'bootnodes: must be array of strings (each <= 512 chars)',
+                        ));
+                    }
+                }
+                chainCfg.bootnodes = body.bootnodes.slice();
+            }
+            await ConfigStore.save(cfg);
+            extensionHandle.log.info(
+                `${ENM_LOG_PREFIX} PUT /chains/${chainId}/class-b-config saved`,
+            );
+            return res.json(successBody({ chainId, chain: chainCfg }));
+        } catch (err) {
+            extensionHandle.log.error(
+                `${ENM_LOG_PREFIX} PUT /chains/${req.params.chainId}/class-b-config: ${err.message}`,
+            );
+            return res.status(500).json(errorBody(err.message));
+        }
+    });
+
     return router;
 }
 

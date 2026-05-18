@@ -214,27 +214,139 @@
      * @param {string} chainId — esc | eid | pg
      */
     SettingsTab.prototype._mountEvmSidechainSettings = function (chainId) {
-        // beta.3.94 (M2.6) — labels + body source from strings.js
-        // (chain_name.* + settings_class_stub.evm_*) with English
-        // fallbacks if the key is missing. Same enmT-with-fallback
-        // pattern used by multi-chain-overview.js.
+        // beta.3.97 (Wave M3.3) — Real Class B settings layout (Mining &
+        // Rewards · PBFT keystore reference · Sync mode). Replaces the
+        // M2.5 stub. Reads cfg.chains[chainId] via GET /config, posts
+        // changes via PUT /chains/<id>/class-b-config (M3.3 route).
         var fallbackChainNames = { esc: 'Smart Chain (ESC)', eid: 'Identity Chain (EID)', pg: 'PG Chain' };
         var name = _tFb('chain_name.' + chainId, fallbackChainNames[chainId] || chainId);
-        var title = _tFb('settings_class_stub.evm_title', '{chainName} settings', { chainName: name });
-        var body  = _tFb(
-            'settings_class_stub.evm_body',
-            'Class B (EVM sidechain) settings land in M3.3 (beta.3.97). The layout will include Mining & Rewards (miner address, sync mode), the PBFT keystore reference (read-only — points at the mainchain keystore), and per-chain Danger Zone actions.',
-        );
-        var fallback = _tFb(
-            'settings_class_stub.evm_fallback',
-            'For now use the chain selector above to return to Main chain.',
-        );
+        var self = this;
         this.root.innerHTML = ''
-            + '<div class="enm-settings-class-stub" role="status" aria-live="polite">'
-            + '<h2>' + escapeHtml(title) + '</h2>'
-            + '<p>' + escapeHtml(body) + '</p>'
-            + '<p>' + escapeHtml(fallback) + '</p>'
+            + '<header class="enm-settings-class-head">'
+            + '<h2>' + escapeHtml(name) + ' settings</h2>'
+            + '<p class="enm-settings-class-sub">Class B (EVM sidechain) — mining + sync controls. '
+            + 'The PBFT signing keystore is shared with mainchain (node.sh:2144). '
+            + 'Operator-supplied miner address; ENM never holds the private key.</p>'
+            + '</header>'
+            + '<div class="enm-settings-class-body" data-state="loading">'
+            + '<p class="enm-stub">Loading current configuration…</p>'
             + '</div>';
+        var body = this.root.querySelector('.enm-settings-class-body');
+        this.api.get('/config', { skipCache: true }).then(function (data) {
+            if (self._destroyed) { return; }
+            var cfg = (data && data.config) || {};
+            var chainCfg = (cfg.chains && cfg.chains[chainId]) || null;
+            if (!chainCfg) {
+                body.dataset.state = 'unconfigured';
+                body.innerHTML = ''
+                    + '<div class="enm-settings-class-stub">'
+                    + '<p><strong>' + escapeHtml(name) + ' is not yet installed.</strong></p>'
+                    + '<p>Use the setup wizard (lands in <code>M3.5</code>) to install this chain '
+                    + 'before configuring its mining + sync options.</p>'
+                    + '</div>';
+                return;
+            }
+            self._renderClassBForm(body, chainId, chainCfg);
+        }).catch(function (err) {
+            if (self._destroyed) { return; }
+            body.dataset.state = 'error';
+            body.innerHTML = '<p class="enm-stub">Failed to load config: '
+                + escapeHtml((err && err.message) || String(err)) + '</p>';
+        });
+    };
+
+    /**
+     * @private — paint the Class B editor form. Three subsections:
+     *   - Mining & Rewards: enabled toggle, rewardAddress, evmKeystoreAddr,
+     *     threads. evmKeystorePassword change is M3.5 wizard scope.
+     *   - PBFT keystore: read-only reference to mainchain keystore.dat.
+     *   - Sync mode: fast | full | archive.
+     * @param {HTMLElement} parent
+     * @param {string} chainId
+     * @param {object} chainCfg
+     */
+    SettingsTab.prototype._renderClassBForm = function (parent, chainId, chainCfg) {
+        var self = this;
+        var miner = chainCfg.miner || {};
+        var sync = chainCfg.sync || {};
+        parent.dataset.state = 'ready';
+        parent.innerHTML = ''
+            + '<section class="enm-section enm-section-classb">'
+            + '<h3>Mining &amp; Rewards</h3>'
+            + '<label class="enm-field">'
+            + '<input type="checkbox" data-key="miner.enabled"' + (miner.enabled ? ' checked' : '') + '> '
+            + 'Enable mining (produce blocks for rewards)'
+            + '</label>'
+            + '<label class="enm-field">Reward address (where mining rewards go):'
+            + '<input type="text" data-key="miner.rewardAddress" '
+            + 'placeholder="0x…40 hex chars" value="' + escapeHtml(miner.rewardAddress || '') + '" '
+            + 'spellcheck="false" autocomplete="off">'
+            + '</label>'
+            + '<label class="enm-field">EVM keystore address (which account to unlock for signing):'
+            + '<input type="text" data-key="miner.evmKeystoreAddr" '
+            + 'placeholder="0x…40 hex chars (often same as reward address)" '
+            + 'value="' + escapeHtml(miner.evmKeystoreAddr || '') + '" '
+            + 'spellcheck="false" autocomplete="off">'
+            + '</label>'
+            + '<label class="enm-field">Mining threads:'
+            + '<input type="number" data-key="miner.threads" min="1" max="16" '
+            + 'value="' + (Number.isInteger(miner.threads) ? miner.threads : 1) + '">'
+            + '</label>'
+            + '</section>'
+            + '<section class="enm-section enm-section-classb">'
+            + '<h3>PBFT signing keystore</h3>'
+            + '<p>This chain signs PBFT blocks with the <strong>mainchain</strong> '
+            + 'keystore (node.sh convention since v0.1). Manage password + import via '
+            + 'Settings → Identity on the Main chain pane.</p>'
+            + '<p><code>chains/mainchain/keystore.dat</code></p>'
+            + '</section>'
+            + '<section class="enm-section enm-section-classb">'
+            + '<h3>Sync mode</h3>'
+            + '<label class="enm-field">'
+            + '<select data-key="sync.mode">'
+            +   '<option value="fast"' + (sync.mode === 'fast' ? ' selected' : '') + '>fast — recommended (recent state only)</option>'
+            +   '<option value="full"' + (sync.mode === 'full' ? ' selected' : '') + '>full — keep all blocks</option>'
+            +   '<option value="archive"' + (sync.mode === 'archive' ? ' selected' : '') + '>archive — full + all historical state</option>'
+            + '</select>'
+            + '</label>'
+            + '</section>'
+            + '<div class="enm-section-actions">'
+            + '<button type="button" class="enm-btn enm-btn-primary" data-action="save-class-b">Save changes</button>'
+            + '<span class="enm-foot-status" role="status" aria-live="polite"></span>'
+            + '</div>';
+        var btn = parent.querySelector('[data-action="save-class-b"]');
+        var status = parent.querySelector('.enm-foot-status');
+        btn.addEventListener('click', function () {
+            self._saveClassB(parent, chainId, btn, status);
+        });
+    };
+
+    /** @private */
+    SettingsTab.prototype._saveClassB = function (parent, chainId, btn, status) {
+        var self = this;
+        var get = function (sel) { return parent.querySelector('[data-key="' + sel + '"]'); };
+        var body = {
+            miner: {
+                enabled: get('miner.enabled').checked,
+                rewardAddress: get('miner.rewardAddress').value.trim(),
+                evmKeystoreAddr: get('miner.evmKeystoreAddr').value.trim(),
+                threads: parseInt(get('miner.threads').value, 10) || 1,
+            },
+            sync: {
+                mode: get('sync.mode').value,
+            },
+        };
+        btn.disabled = true;
+        status.textContent = 'Saving…';
+        this.api.put('/chains/' + chainId + '/class-b-config', body).then(function () {
+            if (self._destroyed) { return; }
+            status.textContent = 'Saved. Restart the chain to apply.';
+        }).catch(function (err) {
+            if (self._destroyed) { return; }
+            status.textContent = 'Save failed: ' + ((err && err.message) || String(err));
+        }).finally(function () {
+            btn.disabled = false;
+        });
     };
 
     /**

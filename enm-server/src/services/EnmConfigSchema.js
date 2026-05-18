@@ -222,7 +222,61 @@ const setupSchema = Joi.object({
 // ECO is intentionally absent from the regex (H3 — operator-instructed
 // 2026-05-18); attempting to add `chains.eco: {...}` is REJECTED.
 
-const classBPlaceholderSchema = Joi.object().unknown(true);  // ESC / EID / PG (M3, M5)
+// beta.3.97 (Wave M3.3) — Class B (EVM PBFT sidechain) schema. Real
+// shape; the M1.2 `Joi.object().unknown(true)` placeholder is replaced
+// here for ESC + EID + PG (PG fills in the remaining PG-specific
+// quirks in M5.1; this shape works for PG today, just without the
+// closed-source binary SHA256 manifest).
+//
+// node.sh parity:
+//   - pbft.usesMainchainKeystore is schema-locked to true (H23 — the
+//     EVM sidechain's PBFT keystore is ALWAYS the mainchain
+//     keystore.dat per node.sh:2144). Surfacing it in the schema lets
+//     operators reading the cfg file see the invariant.
+//   - miner.rewardAddress is operator-supplied (NOT derived from the
+//     EVM keystore — H22). Format regex here is the shape gate; full
+//     EIP-55 + checksum validation happens at the route layer via
+//     EnmCrypto.validateEthAddress.
+//   - miner.evmKeystorePasswordEncrypted is the AES-GCM envelope
+//     produced by EnmEncryption (H24 — no plaintext on disk).
+//   - sync.mode mirrors geth's --syncmode {fast,full,archive}; node.sh
+//     defaults to 'fast'.
+const classBPortsSchema = Joi.object({
+    rpc:       PORT_RANGE.required(),
+    p2p:       PORT_RANGE.required(),
+    dpos:      PORT_RANGE.required(),
+    discovery: PORT_RANGE.required(),
+    httpInfo:  PORT_RANGE.optional(),
+});
+const classBPbftSchema = Joi.object({
+    usesMainchainKeystore: Joi.boolean().valid(true).default(true),
+    ipAddress: IP_OR_HOST.default(null),
+}).default();
+const classBMinerSchema = Joi.object({
+    enabled: Joi.boolean().default(false),
+    // 0x + 40 hex shape gate; route layer applies EIP-55 + warn.
+    rewardAddress: Joi.string().regex(/^0x[0-9a-fA-F]{40}$/).allow('').default(''),
+    rewardAddressSource: Joi.string().valid('shared', 'per-chain').default('per-chain'),
+    evmKeystoreAddr: Joi.string().regex(/^0x[0-9a-fA-F]{40}$/).allow('').default(''),
+    evmKeystorePasswordEncrypted: Joi.string().allow('').default(''),
+    threads: Joi.number().integer().min(1).max(16).default(1),
+}).default();
+const classBSyncSchema = Joi.object({
+    mode: Joi.string().valid('fast', 'full', 'archive').default('fast'),
+}).default();
+const classBSchema = Joi.object({
+    enabled: Joi.boolean().default(false),
+    binaryPath: Joi.string().allow('').default(''),
+    binaryVersion: Joi.string().allow('').default(''),
+    activeNet: Joi.string().valid('mainnet', 'testnet').default('mainnet'),
+    ports: classBPortsSchema.required(),
+    pbft: classBPbftSchema,
+    miner: classBMinerSchema,
+    sync: classBSyncSchema,
+    bootnodes: Joi.array().items(Joi.string().max(512)).default([]),
+    healing: perChainHealingSchema,
+});
+
 const classCPlaceholderSchema = Joi.object().unknown(true);  // Oracles (M4, M5)
 const classDPlaceholderSchema = Joi.object().unknown(true);  // Arbiter (M6)
 const classEPlaceholderSchema = Joi.object().unknown(true);  // SPV (M6-opt)
@@ -235,9 +289,11 @@ const enmConfigSchema = Joi.object({
         // singleton (only one mainchain ever).
         mainchain: mainchainSchema.optional(),
     })
-        // Class B chainIds — esc, eid, pg. Real schema lands in M3 (ESC,
-        // EID) and M5 (PG). For now any object shape is accepted.
-        .pattern(/^(esc|eid|pg)$/, classBPlaceholderSchema)
+        // Class B chainIds — esc, eid, pg. Real schema landed in M3.3
+        // (replaces the M1.2 .unknown(true) placeholder). PG additions
+        // (closed-source SHA256 manifest) layer on in M5.1 but the
+        // current shape covers all three.
+        .pattern(/^(esc|eid|pg)$/, classBSchema)
         // Class C chainIds — oracles. Real schema in M4 (ESC, EID Oracle)
         // and M5 (PG Oracle).
         .pattern(/^(esc-oracle|eid-oracle|pg-oracle)$/, classCPlaceholderSchema)
