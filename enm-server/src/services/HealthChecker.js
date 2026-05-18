@@ -29,6 +29,14 @@
 
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
+// beta.3.77 — _probeDposDesyncSignal (line ~926) used path.join but the
+// module never required node:path. The error was swallowed by the
+// catch + .debug log, so the F22 desync detector silently returned
+// false every tick. Logs show "_probeDposDesyncSignal(mainchain)
+// failed (non-fatal): path is not defined" repeated every poll —
+// F22 was effectively dead. Importing path here re-enables the
+// detector.
+const path = require('node:path');
 
 const {
     ENM_LOG_PREFIX,
