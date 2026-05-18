@@ -78,18 +78,32 @@
                     bpos_wallet_label:    'Wallet',
                     bpos_wallet_value:    'paired in the next step',
                     bpos_install_label:   'Auto-installs',
-                    bpos_install_value:   'ela mainchain + arbiter',
-                    council_title:   'Council node',
-                    council_sub:     'Run a Cyber Republic Council member’s node for proposal review and voting. Temporarily unavailable while the integration lands.',
+                    // beta.0.4.2 — clarified: setup auto-installs mainchain only.
+                    // Sidechains (ESC/EID/PG), Oracles, and Arbiter are opt-in
+                    // via the chain selector + Settings after setup completes.
+                    // Pre-0.4.2 said "ela mainchain + arbiter" which was wrong —
+                    // Arbiter has its own 4/4-preflight install flow (M6.2).
+                    bpos_install_value:   'ela mainchain (add ESC/EID/PG/Arbiter after setup)',
+                    // beta.0.4.2 — RENAMED from "Council node" to "CR Council
+                    // delegate" to remove naming collision with the multi-chain
+                    // BPoS supernode work shipped in M1-M6 (which is "Council
+                    // operator" in informal speech but lives entirely under
+                    // the BPoS card path). This card is specifically about
+                    // Cyber Republic GOVERNANCE — voting on community treasury
+                    // proposals — a completely separate Elastos feature that
+                    // ENM does not yet implement.
+                    council_title:   'CR Council delegate',
+                    council_sub:     'Run a Cyber Republic delegate node for voting on community treasury proposals. Governance role only — distinct from running multiple chains, which is part of the BPoS supernode option on the left.',
                     council_meta:    'Coming soon',
                     // 0.2.0-beta.3.6 — phase-06 mock compact variant text:
                     // "Soon" (4 chars) fits the narrow chip on <480px.
                     council_meta_compact: 'Soon',
                     council_status_label: 'Status',
-                    council_status_value: 'not yet supported in this build',
+                    council_status_value: 'CR governance not yet implemented',
                     council_disabled: true,
                     footer:     "* Rewards depend on votes from the community. We'll show you how after setup.\n"
-                              + "Council node setup will land in a later release.",
+                              + "CR Council delegate (governance voting) lands in a later release. "
+                              + "Multi-chain operation (ESC/EID/PG/Oracles/Arbiter) is available now under the BPoS supernode option above.",
                 },
                 card_b: {
                     title_idle:        'Ready when you are',

@@ -794,6 +794,14 @@
         this._revealContent();
         this._clearPanes();
         if (this.els.tabs) { this.els.tabs.hidden = true; }
+        // beta.0.4.2 — hide the chain selector during the setup wizard.
+        // Pre-0.4.2 the selector mounted in init() and stayed visible
+        // through every screen including welcome — confusing the
+        // operator who saw "Multi-chain overview" as a clickable option
+        // before they'd even installed mainchain. The selector belongs
+        // on the dashboard, not the welcome screen.
+        var selectorEl = document.getElementById('enm-chain-selector');
+        if (selectorEl) { selectorEl.hidden = true; }
 
         // alpha.28.1 batch 79 (Round-22 finding #3) — if init() already
         // fetched /setup/state and passed us the result, branch
@@ -909,6 +917,10 @@
     };
 
     ENMApp.prototype._showDashboard = function () {
+        // beta.0.4.2 — restore the chain selector when leaving setup
+        // wizard for the dashboard. Pairs with _showSetupWizard's hide.
+        var selectorEl = document.getElementById('enm-chain-selector');
+        if (selectorEl) { selectorEl.hidden = false; }
         // 0.2.0-alpha.1 — Apple Hero phase 2: paint the page wash before
         // the technical view mounts. The gradient controller corrects
         // to the truthful bucket on the first 'enm:chain-state' event

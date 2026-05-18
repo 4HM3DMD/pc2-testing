@@ -190,14 +190,18 @@
         });
 
         // Footer explainer when in BPoS-only mode — tells the operator
-        // why most options are grayed.
+        // why most options are grayed. beta.0.4.2 — reworded to remove
+        // "council-node" naming collision with the welcome screen's
+        // "Council node" card (which is CR Council governance, a
+        // separate Elastos feature). This footer is about adding more
+        // chains to your existing BPoS supernode setup.
         if (this._mode === 'bpos-only') {
             var foot = document.createElement('div');
             foot.className = 'enm-chain-selector-footer';
             foot.textContent =
-                'BPoS-only node — only Main chain is active. '
-                + 'Install sidechain modules (ESC / EID / PG / Arbiter / SPV) '
-                + 'to enable council-node views.';
+                'Main chain only. Add sidechain modules '
+                + '(ESC / EID / PG / Arbiter / SPV) via Settings → '
+                + 'Install chain to run a full multi-chain supernode.';
             this.menu.appendChild(foot);
         }
     };
