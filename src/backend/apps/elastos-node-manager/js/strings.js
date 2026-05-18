@@ -191,6 +191,24 @@
                     sub_done:        'Your ElastOS is now a node and is starting up.',
                     cta:             'Take me home',
                 },
+                // beta.0.4.6 — Card D2: pre-flight checks. Sits
+                // between Card D (mainchain up) and Card E (inputs)
+                // on the Council path. Surfaces blockers UPFRONT so
+                // the operator doesn't watch the install fail at
+                // step 3 of 8 because GitHub is unreachable or disk
+                // is full. The Re-run button retries after the
+                // operator fixes the underlying issue without
+                // restarting the wizard.
+                card_d2: {
+                    title:  'Pre-flight checks',
+                    sub:    'Quick check that everything Council install needs is ready before we '
+                          + 'start. Re-run if something fails after fixing it (e.g. firewall, '
+                          + 'disk).',
+                    cta:    'Continue',
+                    rerun:  'Re-run checks',
+                    running: 'Running checks…',
+                    error_prefix: 'Pre-flight call failed: ',
+                },
                 // beta.0.4.5 — Card E redesigned per operator
                 // directive 2026-05-18 ("too many steps and doesn't
                 // actually understand what is it doing"). Collapsed

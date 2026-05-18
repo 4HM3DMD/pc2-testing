@@ -231,6 +231,8 @@
         else if (card === 'd')  { this._renderCardD(seq); }
         // beta.0.4.4 — Council expansion cards. Reachable only when
         // self._goal === 'council' on Card D completion.
+        // beta.0.4.6 — d2 pre-flight check card inserted before e.
+        else if (card === 'd2') { this._renderCardD2(seq); }
         else if (card === 'e')  { this._renderCardE(seq); }
         else if (card === 'f')  { this._renderCardF(seq); }
 
@@ -1323,9 +1325,15 @@
                     self._continueBtn.removeEventListener('click', onDone);
                     // beta.0.4.4 — branch by setup intent. BPoS lands
                     // on the dashboard now; Council continues into
-                    // the multi-chain expansion installer (Cards E+F).
+                    // the multi-chain expansion installer.
+                    // beta.0.4.6 — Council now lands on Card D2
+                    // (pre-flight checks) before Card E (inputs). The
+                    // pre-flight surfaces upstream URL reachability +
+                    // disk space + mainchain state so the operator
+                    // sees blockers BEFORE committing time to the
+                    // install. Card E → Card F unchanged.
                     if (self._goal === 'council') {
-                        self._goto('e');
+                        self._goto('d2');
                     } else {
                         self.onComplete();
                     }
@@ -1343,6 +1351,97 @@
                     self._renderCardD(self._cardSeq);
                 });
             });
+    };
+
+    // ====================================================================
+    // beta.0.4.6 — Card D2: Council pre-flight checks
+    // ====================================================================
+    //
+    // Sits between Card D (mainchain ready) and Card E (operator
+    // inputs). Calls GET /setup/install-council/preflight and renders
+    // each check as a row. Continue button stays disabled until every
+    // 'required' check is green.
+    //
+    // Rationale (operator feedback 2026-05-18): the orchestrator used
+    // to plow straight into install and fail mid-way on bad upstream
+    // URLs or insufficient disk. Surfacing the blockers upfront —
+    // BEFORE the operator commits time to the install — is the
+    // single biggest UX win on this flow.
+
+    /** @private */
+    SetupConversation.prototype._renderCardD2 = function (seq) {
+        var t = root.enmT;
+        var heading = t('friendly.setup.card_d2.title') || 'Pre-flight checks';
+        var sub = t('friendly.setup.card_d2.sub')
+            || 'Quick check that everything Council install needs is ready before we start. '
+             + 'Re-run if something fails after fixing it (e.g. firewall, disk).';
+        this.root.setAttribute('aria-label', heading);
+        this._body.innerHTML = ''
+            + '<h2 class="enm-wiz-heading" id="enm-wiz-heading-d2">' + escapeHtml(heading) + '</h2>'
+            + '<p class="enm-wiz-para">' + escapeHtml(sub) + '</p>'
+            + '<ul class="enm-preflight-list" role="status" aria-live="polite">'
+            +   '<li class="enm-preflight-row" data-state="checking">'
+            +     '<span class="enm-preflight-icon">⟳</span>'
+            +     '<span class="enm-preflight-text">Running checks…</span>'
+            +   '</li>'
+            + '</ul>'
+            + '<div class="enm-preflight-actions">'
+            +   '<button type="button" class="enm-btn enm-btn-secondary" '
+            +     'data-action="rerun">Re-run checks</button>'
+            + '</div>';
+        var self = this;
+        var listEl = this._body.querySelector('.enm-preflight-list');
+        var rerunBtn = this._body.querySelector('[data-action="rerun"]');
+
+        this._cancelBtn.hidden = true;
+        this._continueBtn.hidden = false;
+        this._continueBtn.disabled = true;
+        this._continueBtn.textContent = t('friendly.setup.card_d2.cta') || 'Continue';
+
+        function runChecks() {
+            listEl.innerHTML = '<li class="enm-preflight-row" data-state="checking">'
+                + '<span class="enm-preflight-icon">⟳</span>'
+                + '<span class="enm-preflight-text">Running checks…</span></li>';
+            self._continueBtn.disabled = true;
+            self.api.get('/setup/install-council/preflight', { skipCache: true })
+                .then(function (data) {
+                    if (self._destroyed || !self._stillRendering(seq)) { return; }
+                    var result = (data && data.result) ? data.result : data;
+                    listEl.innerHTML = '';
+                    (result.checks || []).forEach(function (c) {
+                        var icon = c.ok ? '✓' : (c.severity === 'required' ? '✗' : '⚠');
+                        var stateAttr = c.ok ? 'ok'
+                                      : (c.severity === 'required' ? 'error' : 'warn');
+                        var row = document.createElement('li');
+                        row.className = 'enm-preflight-row';
+                        row.setAttribute('data-state', stateAttr);
+                        row.innerHTML = ''
+                            + '<span class="enm-preflight-icon">' + icon + '</span>'
+                            + '<div class="enm-preflight-text">'
+                            +   '<div class="enm-preflight-label">' + escapeHtml(c.label) + '</div>'
+                            +   '<div class="enm-preflight-message">' + escapeHtml(c.message) + '</div>'
+                            + '</div>';
+                        listEl.appendChild(row);
+                    });
+                    self._continueBtn.disabled = !result.allRequiredOk;
+                })
+                .catch(function (err) {
+                    if (self._destroyed || !self._stillRendering(seq)) { return; }
+                    listEl.innerHTML = '<li class="enm-preflight-row" data-state="error">'
+                        + '<span class="enm-preflight-icon">✗</span>'
+                        + '<span class="enm-preflight-text">Pre-flight call failed: '
+                        + escapeHtml((err && err.message) || String(err))
+                        + '</span></li>';
+                });
+        }
+
+        rerunBtn.addEventListener('click', runChecks);
+        this._continueBtn.addEventListener('click', function () {
+            if (self._destroyed || !self._stillRendering(seq)) { return; }
+            if (self._continueBtn.disabled) { return; }
+            self._goto('e');
+        });
+        runChecks();
     };
 
     // ====================================================================
@@ -1373,6 +1472,11 @@
             || 'ENM uses this for everything: ESC, EID, PG block rewards AND the '
              + 'Arbiter\'s cross-chain signing. One address from your wallet — that\'s it.';
         this.root.setAttribute('aria-label', heading);
+        // beta.0.4.6 — added (a) PG opt-in checkbox (default OFF: closed-
+        // source, can't auto-download script), (b) confirm-last-4 input
+        // that requires the operator to retype the last 4 chars of
+        // their address before Continue enables (anti-typo gate — a
+        // typo'd reward address means lost rewards forever).
         this._body.innerHTML = ''
             + '<h2 class="enm-wiz-heading" id="enm-wiz-heading-e">' + escapeHtml(heading) + '</h2>'
             + '<p class="enm-wiz-para">' + escapeHtml(sub) + '</p>'
@@ -1389,6 +1493,25 @@
                      + 'one wallet, one input.') + '</span>'
             +     '<span class="enm-council-form-error" data-for="reward" hidden></span>'
             +   '</label>'
+            +   '<label class="enm-council-form-row" id="enm-council-confirm-row" hidden>'
+            +     '<span class="enm-council-form-label">Confirm: retype the LAST 4 characters</span>'
+            +     '<input type="text" id="enm-council-last4" spellcheck="false" '
+            +       'autocomplete="off" maxlength="4" '
+            +       'placeholder="last 4 chars" style="text-transform:lowercase">'
+            +     '<span class="enm-council-form-hint">Anti-typo gate: a wrong reward address '
+            +       'means lost rewards forever. Retype the last 4 characters of the address '
+            +       'above to confirm.</span>'
+            +     '<span class="enm-council-form-error" data-for="last4" hidden></span>'
+            +   '</label>'
+            +   '<label class="enm-council-form-row enm-council-form-checkbox">'
+            +     '<input type="checkbox" id="enm-council-include-pg">'
+            +     '<span>'
+            +       '<span class="enm-council-form-label">Include PG chain?</span>'
+            +       '<span class="enm-council-form-hint">PG is closed-source; its oracle script '
+            +         'can\'t be auto-downloaded. Leave OFF unless you have the script ready '
+            +         'on disk. You can add PG later via Settings.</span>'
+            +     '</span>'
+            +   '</label>'
             +   '<div class="enm-council-form-note">'
             +     '<strong>Heads up:</strong> mining is OFF by default on the EVM '
             +     'sidechains. Most Council rewards come from BPoS mainchain blocks '
@@ -1399,6 +1522,9 @@
             + '</form>';
         var self = this;
         var rewardEl = this._body.querySelector('#enm-council-reward');
+        var last4Row = this._body.querySelector('#enm-council-confirm-row');
+        var last4El = this._body.querySelector('#enm-council-last4');
+        var pgEl = this._body.querySelector('#enm-council-include-pg');
 
         function showError(field, msg) {
             var el = self._body.querySelector('.enm-council-form-error[data-for="' + field + '"]');
@@ -1411,6 +1537,20 @@
             return null;
         }
 
+        // beta.0.4.6 — reveal the confirm-last-4 input only when the
+        // reward field has a syntactically-valid address. Hides until
+        // the address is at least the right shape.
+        rewardEl.addEventListener('input', function () {
+            showError('reward', '');
+            showError('last4', '');
+            if (validateEth(rewardEl.value.trim()) === null) {
+                last4Row.hidden = false;
+            } else {
+                last4Row.hidden = true;
+                last4El.value = '';
+            }
+        });
+
         this._cancelBtn.hidden = true;
         this._continueBtn.hidden = false;
         this._continueBtn.disabled = false;
@@ -1419,16 +1559,25 @@
         this._continueBtn.addEventListener('click', function () {
             if (self._destroyed || !self._stillRendering(seq)) { return; }
             showError('reward', '');
+            showError('last4', '');
             var reward = rewardEl.value.trim();
             var err = validateEth(reward);
             if (err) { showError('reward', err); return; }
-            // beta.0.4.5 — single input. Backend reads the mainchain
-            // keystore password from cfg.chains.mainchain.dpos
-            // .keystorePasswordEncrypted and uses the reward address
-            // for both EVM rewards AND Arbiter mining.
+            // beta.0.4.6 — anti-typo: retype the last 4 chars.
+            var last4 = (last4El.value || '').trim().toLowerCase();
+            var expected = reward.slice(-4).toLowerCase();
+            if (last4.length === 0) {
+                showError('last4', 'Retype the last 4 characters of the address above.');
+                return;
+            }
+            if (last4 !== expected) {
+                showError('last4', 'Mismatch — expected "' + expected + '".');
+                return;
+            }
             self._councilInputs = {
                 rewardAddress: reward,
                 activeNet: 'mainnet',
+                includePg: !!(pgEl && pgEl.checked),
             };
             self._goto('f');
         });
@@ -1456,34 +1605,51 @@
     // must show real progress, not spinners (saved as feedback memory
     // 2026-05-18 — feedback_destructive_ui_needs_progress.md).
 
+    // beta.0.4.6 — step labels track the server-side PLAN exactly.
+    // PG opt-out shrinks the plan; the wizard renders only the active
+    // step rows. install-binaries-parallel covers ESC + EID (+ PG if
+    // included) + Arbiter all at once.
     var COUNCIL_STEP_LABELS = {
-        'council-strategy':       'Council strategy (Layer 1)',
-        'install-esc-cfg':        'Smart Chain (ESC) — config',
-        'install-esc-binary':     'Smart Chain (ESC) — binary',
-        'install-eid-cfg':        'Identity Chain (EID) — config',
-        'install-eid-binary':     'Identity Chain (EID) — binary',
-        'install-pg-cfg':         'PG Chain — config',
-        'install-pg-binary':      'PG Chain — binary',
-        'install-node-runtime':   'Node.js v23.10.0 runtime',
-        'download-oracle-scripts': 'Oracle scripts (crosschain_*.js)',
-        'install-esc-oracle':     'ESC Oracle',
-        'install-eid-oracle':     'EID Oracle',
-        'install-pg-oracle':      'PG Oracle',
-        'install-arbiter-cfg':    'Arbiter — config',
-        'install-arbiter-binary': 'Arbiter — binary',
-        'start-chains':           'Start all chains',
+        'council-strategy':         'Council strategy (Layer 1)',
+        'install-esc-cfg':          'Smart Chain (ESC) — config',
+        'install-eid-cfg':          'Identity Chain (EID) — config',
+        'install-pg-cfg':           'PG Chain — config',
+        'install-binaries-parallel': 'Download binaries (in parallel)',
+        'install-node-runtime':     'Node.js runtime',
+        'download-oracle-scripts':  'Oracle scripts (crosschain_*.js)',
+        'install-esc-oracle':       'ESC Oracle',
+        'install-eid-oracle':       'EID Oracle',
+        'install-pg-oracle':        'PG Oracle',
+        'install-arbiter-cfg':      'Arbiter — config',
+        'start-chains':             'Start all chains',
     };
-    var COUNCIL_STEP_ORDER = Object.keys(COUNCIL_STEP_LABELS);
+    // beta.0.4.6 — order matters for rendering; PG rows present only
+    // when includePg=true. Computed at render time in _renderCardF.
+    function councilStepOrder(includePg) {
+        var base = ['council-strategy', 'install-esc-cfg', 'install-eid-cfg'];
+        if (includePg) { base.push('install-pg-cfg'); }
+        base.push('install-binaries-parallel');
+        base.push('install-node-runtime');
+        base.push('download-oracle-scripts');
+        base.push('install-esc-oracle');
+        base.push('install-eid-oracle');
+        if (includePg) { base.push('install-pg-oracle'); }
+        base.push('install-arbiter-cfg');
+        base.push('start-chains');
+        return base;
+    }
 
     /** @private */
     SetupConversation.prototype._renderCardF = function (seq) {
         var t = root.enmT;
         var heading = t('friendly.setup.card_f.title') || 'Installing Council stack';
         var sub = t('friendly.setup.card_f.sub')
-            || 'ENM is installing the remaining services. This usually takes 5–10 minutes '
-            + 'depending on your network speed. Each step is real progress — not a spinner.';
+            || 'ENM is installing the remaining services. This usually takes 3–5 minutes '
+            + '(binaries download in parallel). Each step is real progress — not a spinner.';
         this.root.setAttribute('aria-label', heading);
-        var stepsHtml = COUNCIL_STEP_ORDER.map(function (step) {
+        var inputs = this._councilInputs || { includePg: false };
+        var stepOrder = councilStepOrder(!!inputs.includePg);
+        var stepsHtml = stepOrder.map(function (step) {
             return '<li class="enm-council-step" data-step="' + escapeHtml(step) + '" data-status="pending">'
                 + '<span class="enm-council-step-icon" aria-hidden="true">◯</span>'
                 + '<span class="enm-council-step-label">' + escapeHtml(COUNCIL_STEP_LABELS[step]) + '</span>'
@@ -1531,7 +1697,48 @@
             if (t) { t.textContent = text || ''; }
         }
 
-        // Subscribe to SSE BEFORE POSTing so we don't miss early events.
+        // beta.0.4.6 — poll fallback for when SSE drops mid-install.
+        // Card F restarts a poll cadence (every 3s) if 30s pass with
+        // no SSE event. Each poll fetches /install-council/status and
+        // applies its completedSteps array onto the stepper. Cancels
+        // when an SSE event lands OR the install finishes.
+        var lastEventAt = Date.now();
+        function applyStatusSnapshot(s) {
+            if (!s || !Array.isArray(s.completedSteps)) { return; }
+            s.completedSteps.forEach(function (step) { setStep(step, 'done'); });
+            if (s.currentStep && stepOrder.indexOf(s.currentStep) !== -1) {
+                setStep(s.currentStep, 'start');
+            }
+            var pct = s.totalSteps > 0
+                ? Math.round((s.completedSteps.length / s.totalSteps) * 100) : 0;
+            if (!s.running && s.success) {
+                setSummary('done', 'All chains installed. Click Continue to open the dashboard.', 100);
+                self._continueBtn.disabled = false;
+                self._continueBtn.textContent = 'Open dashboard';
+            } else if (!s.running && s.error) {
+                setSummary('error', s.error, pct);
+                self._continueBtn.disabled = false;
+                self._continueBtn.textContent = 'Retry';
+            } else if (s.running) {
+                setSummary('running', s.currentStep
+                    ? (COUNCIL_STEP_LABELS[s.currentStep] || s.currentStep) + '…' : 'Running…', pct);
+            }
+        }
+        function pollOnce() {
+            if (self._destroyed || !self._stillRendering(seq)) { return; }
+            self.api.get('/setup/install-council/status', { skipCache: true })
+                .then(function (data) {
+                    if (self._destroyed || !self._stillRendering(seq)) { return; }
+                    var s = (data && data.result) ? data.result : data;
+                    applyStatusSnapshot(s);
+                })
+                .catch(function () { /* silently ignore — SSE may resume */ });
+        }
+        var pollTimer = setInterval(function () {
+            if (Date.now() - lastEventAt > 30_000) { pollOnce(); }
+        }, 3_000);
+
+        // SSE subscription.
         this._teardownCouncilSse = null;
         if (this.sse && typeof this.sse.subscribe === 'function') {
             this._teardownCouncilSse = this.sse.subscribe(
@@ -1539,6 +1746,7 @@
                 function (payload) {
                     if (self._destroyed || !self._stillRendering(seq)) { return; }
                     if (!payload || !payload.step) { return; }
+                    lastEventAt = Date.now();
                     if (payload.step === 'finalize') {
                         if (payload.status === 'done') {
                             setSummary('done', 'All chains installed. Click Continue to open the dashboard.', 100);
@@ -1561,19 +1769,34 @@
             );
         }
 
-        // POST install-council with the inputs from Card E.
-        var inputs = this._councilInputs || {};
-        this.api.post('/setup/install-council', inputs)
-            .then(function (r) {
+        // beta.0.4.6 — auto-resume on refresh. Before POSTing fresh,
+        // check whether a job is already running OR just-finished.
+        // If running → don't re-POST; apply the snapshot + let SSE
+        // take over. If finished + success<60s ago → onComplete.
+        // Otherwise → POST install-council with the inputs from Card E.
+        this.api.get('/setup/install-council/status', { skipCache: true })
+            .then(function (data) {
                 if (self._destroyed) { return; }
+                var s = (data && data.result) ? data.result : data;
+                if (s && s.running) {
+                    applyStatusSnapshot(s);
+                    return null;
+                }
+                if (s && s.success && s.finishedAt
+                    && (Date.now() - s.finishedAt) < 60_000) {
+                    try { window.localStorage.removeItem('enm:setup-intent'); } catch (_) {}
+                    self.onComplete();
+                    return null;
+                }
+                return self.api.post('/setup/install-council', inputs);
+            })
+            .then(function (r) {
+                if (self._destroyed || !r) { return; }
                 if (r && r.success === false) {
                     setSummary('error', r.error || 'Server rejected install', 0);
                     self._continueBtn.disabled = false;
                     self._continueBtn.textContent = 'Retry';
-                    return;
                 }
-                // 202 — orchestrator running in background; SSE events
-                // drive progress from here.
             })
             .catch(function (err) {
                 if (self._destroyed) { return; }
@@ -1582,18 +1805,19 @@
                 self._continueBtn.textContent = 'Retry';
             });
 
-        // Continue button — either Open dashboard (success) or Retry (error).
+        // Continue button — Open dashboard (success) or Retry (error).
         this._continueBtn.addEventListener('click', function () {
             if (self._destroyed || !self._stillRendering(seq)) { return; }
             var state = self._body.querySelector('.enm-council-summary').getAttribute('data-state');
             if (state === 'done') {
+                clearInterval(pollTimer);
                 if (self._teardownCouncilSse) {
                     try { self._teardownCouncilSse(); } catch (_) {}
                 }
-                // Clear the setup-intent flag — Council install completed.
                 try { window.localStorage.removeItem('enm:setup-intent'); } catch (_) {}
                 self.onComplete();
             } else if (state === 'error') {
+                clearInterval(pollTimer);
                 self._renderCardF(self._cardSeq);
             }
         });

@@ -6758,6 +6758,103 @@ body[data-enm-overview="1"] .enm-app .enm-tabs {
     color: var(--text-primary);
 }
 
+/* beta.0.4.6 — Card E PG-include checkbox row. The .enm-council-form
+   parent already lays out rows as flex-column with gap; the checkbox
+   row inverts that into a horizontal flex so the checkbox sits to
+   the LEFT of its label/hint stack. */
+.enm-app .enm-council-form-row.enm-council-form-checkbox {
+    flex-direction: row;
+    align-items: flex-start;
+    gap: var(--sp-3, 12px);
+    cursor: pointer;
+}
+.enm-app .enm-council-form-row.enm-council-form-checkbox input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    margin-top: 2px;
+    accent-color: var(--state-syncing, #ffb74d);
+    cursor: pointer;
+}
+.enm-app .enm-council-form-row.enm-council-form-checkbox > span {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-1, 4px);
+    flex: 1;
+}
+
+/* ============================================================
+   beta.0.4.6 — Card D2: pre-flight checks
+   ============================================================
+   Each .enm-preflight-row is one check (mainchain alive, github
+   reachable, disk space, ...). The data-state attribute drives
+   the icon + tone:
+     checking → ⟳ (text-muted, pulse)
+     ok       → ✓ (state-healthy)
+     warn     → ⚠ (state-syncing) — non-required failure
+     error    → ✗ (state-error)   — required failure (blocks Continue) */
+.enm-app .enm-preflight-list {
+    list-style: none;
+    padding: 0;
+    margin: 0 auto var(--sp-4, 16px) auto;
+    max-width: 640px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color, var(--border-subtle));
+    border-radius: 10px;
+    overflow: hidden;
+}
+.enm-app .enm-preflight-row {
+    display: grid;
+    grid-template-columns: 24px 1fr;
+    gap: var(--sp-3, 12px);
+    align-items: flex-start;
+    padding: var(--sp-3, 12px) var(--sp-4, 16px);
+    border-bottom: 1px solid var(--border-color, var(--border-subtle));
+    font-size: 13px;
+    color: var(--text-primary);
+}
+.enm-app .enm-preflight-row:last-child {
+    border-bottom: none;
+}
+.enm-app .enm-preflight-icon {
+    font-size: 16px;
+    text-align: center;
+    line-height: 1.4;
+    color: var(--text-muted, var(--text-primary));
+}
+.enm-app .enm-preflight-row[data-state="checking"] .enm-preflight-icon {
+    color: var(--state-syncing, #ffb74d);
+    animation: enm-overview-pulse 1.4s ease-in-out infinite;
+}
+.enm-app .enm-preflight-row[data-state="ok"] .enm-preflight-icon {
+    color: var(--state-healthy, #4caf50);
+}
+.enm-app .enm-preflight-row[data-state="warn"] .enm-preflight-icon {
+    color: var(--state-syncing, #ffb74d);
+}
+.enm-app .enm-preflight-row[data-state="error"] .enm-preflight-icon {
+    color: var(--state-error, #ef5350);
+}
+.enm-app .enm-preflight-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+.enm-app .enm-preflight-label {
+    font-weight: 600;
+}
+.enm-app .enm-preflight-message {
+    font-size: 12px;
+    color: var(--text-muted, var(--text-primary));
+    line-height: 1.4;
+}
+.enm-app .enm-preflight-actions {
+    display: flex;
+    justify-content: center;
+    margin-bottom: var(--sp-3, 12px);
+}
+
 /* ============================================================
    beta.3.91 (Wave M2.3) — Multi-chain overview pane
    ============================================================

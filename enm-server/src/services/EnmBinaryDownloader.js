@@ -61,13 +61,18 @@ const CHAINS = Object.freeze({
         binary:  'esc',
         cli:     null,
         description: 'EVM sidechain (ESC) — Solidity smart contracts.',
-        fallbackVersion: 'v0.1.4',
+        // beta.0.4.6 — bumped from v0.1.4 (stale; pre-existed in catalog).
+        // Upstream's latest at time of write is v0.2.7.1. Auto-resolution
+        // via the directory-index scrape still happens first; fallback
+        // only kicks in if the scrape fails.
+        fallbackVersion: 'v0.2.7.1',
     },
     eid: {
         urlSlug: 'elastos-eid',
         binary:  'eid',
         cli:     null,
         description: 'Identity Chain (EID) — decentralised identity (DID).',
+        // beta.0.4.6 — v1.2.4 confirmed via upstream catalog.
         fallbackVersion: 'v1.2.4',
     },
     // beta.4.02 (Wave M3.8) — PG entry added. PG is closed-source per
@@ -93,7 +98,10 @@ const CHAINS = Object.freeze({
         binary:  'arbiter',
         cli:     null,
         description: 'Arbiter — cross-chain signer (multisig 1-of-N across all 4 chains).',
-        fallbackVersion: 'v1.4.1',
+        // beta.0.4.6 — corrected from v1.4.1 (didn't exist upstream).
+        // Probed download.elastos.io/elastos-arbiter/?F=1 — latest is
+        // v0.4.1.2. Arbiter still on 0.x as of 2026-05-18.
+        fallbackVersion: 'v0.4.1.2',
     },
     // ECO entry removed per H3 (ECO chain is permanently out-of-scope
     // for ENM; the plan §10 hard rules forbid ECO support).

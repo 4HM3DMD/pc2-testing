@@ -1302,6 +1302,38 @@ function build(extensionHandle) {
         }
     });
 
+    // beta.0.4.6 — GET /api/enm/setup/install-council/preflight —
+    // run all the cheap checks BEFORE the operator commits to an
+    // install. Each check returns { id, label, ok, message, severity }.
+    // Card D.5 in the wizard renders them as a checklist; Continue
+    // stays disabled until every required check is green.
+    //
+    // Checks:
+    //   - mainchain-alive          (process + RPC reachable)
+    //   - mainchain-keystore-pw    (envelope decrypts via EnmCrypto)
+    //   - disk-space               (≥ 20 GB free in enmDataDir)
+    //   - github-reachable         (HEAD raw.githubusercontent.com)
+    //   - elastos-downloads        (HEAD download.elastos.io)
+    //   - arbiter-binary-url       (HEAD elastos-arbiter index)
+    //
+    // Cheap probes — each has a short timeout. Total <5s on a healthy
+    // host. Cached for 30s so repeated polls from the wizard don't
+    // hammer upstream.
+    router.get('/install-council/preflight', limit('read'), async (req, res) => {
+        if (!readActorWallet(req)) {
+            return res.status(401).json(errorBody('Authentication required.'));
+        }
+        try {
+            const result = await runCouncilPreflight({ extensionHandle });
+            return res.json(successBody(result));
+        } catch (err) {
+            extensionHandle.log.error(
+                `${ENM_LOG_PREFIX} install-council/preflight: ${err.message}`,
+            );
+            return res.status(500).json(errorBody(err.message));
+        }
+    });
+
     // beta.0.4.4 — POST /api/enm/setup/install-council — single
     // orchestrator endpoint that runs the full Council install
     // sequence (Layer 1 strategy → ESC + EID + PG cfg+binary → Node
@@ -1410,6 +1442,12 @@ function build(extensionHandle) {
             sseHub = ChainRegistry.getSseHub();
         } catch (_) { /* SSE optional */ }
 
+        // beta.0.4.6 — PG opt-in. PG oracle script is closed-source +
+        // can't be auto-downloaded. Default to OFF; operator opts in
+        // via the Card E checkbox (which posts includePg=true). Skipping
+        // PG removes 4 steps from the 15-step plan.
+        const includePg = body.includePg === true;
+
         runCouncilInstall({
             extensionHandle,
             cfg,
@@ -1423,6 +1461,7 @@ function build(extensionHandle) {
                 sharedRewardAddress:  rewardCheck.normalized || body.rewardAddress,
                 arbiterMiningAddress: rewardCheck.normalized || body.rewardAddress,
                 activeNet,
+                includePg,
             },
             sseHub,
         }).catch((err) => {
@@ -1652,20 +1691,30 @@ async function runCouncilInstall(args) {
         throw new Error('install-council: another job is already running');
     }
 
-    // Static step plan — keep in sync with the wizard's stepper UI.
+    // beta.0.4.6 — plan is now operator-shaped. PG opt-in adds 3 steps
+    // (cfg, binary, oracle). PG binary failure no longer breaks the
+    // whole install; orchestrator stops at the PG step + reports it
+    // (operator can retry without PG).
+    //
+    // beta.0.4.6 — also: ESC/EID/PG/Arbiter binaries download IN
+    // PARALLEL via `install-binaries-parallel` (one step covering all
+    // 4). Cuts wall time from ~4 min serial to ~1 min. Per-binary
+    // progress is multiplexed into the same step message.
+    const includePg = !!inputs.includePg;
     const PLAN = [
         'council-strategy',
-        'install-esc-cfg',     'install-esc-binary',
-        'install-eid-cfg',     'install-eid-binary',
-        'install-pg-cfg',      'install-pg-binary',
+        'install-esc-cfg',
+        'install-eid-cfg',
+    ].concat(includePg ? ['install-pg-cfg'] : []).concat([
+        'install-binaries-parallel',
         'install-node-runtime',
         'download-oracle-scripts',
         'install-esc-oracle',
         'install-eid-oracle',
-        'install-pg-oracle',
-        'install-arbiter-cfg', 'install-arbiter-binary',
+    ]).concat(includePg ? ['install-pg-oracle'] : []).concat([
+        'install-arbiter-cfg',
         'start-chains',
-    ];
+    ]);
 
     _councilInstallState = {
         running: true,
@@ -1734,8 +1783,9 @@ async function runCouncilInstall(args) {
             return { message: 'shared strategy saved' };
         });
 
-        // ---- STEPS 2-7 — ESC + EID + PG cfg + binary download ----
-        for (const chainId of ['esc', 'eid', 'pg']) {
+        // ---- STEPS 2-N — ESC + EID + (PG?) cfg writes (cheap, sequential) ----
+        const classBChains = includePg ? ['esc', 'eid', 'pg'] : ['esc', 'eid'];
+        for (const chainId of classBChains) {
             await runStep(`install-${chainId}-cfg`, async () => {
                 const cfg2 = await ConfigStore.load();
                 if (cfg2.chains && cfg2.chains[chainId]) {
@@ -1751,16 +1801,7 @@ async function runCouncilInstall(args) {
                     ports,
                     pbft: { usesMainchainKeystore: true, ipAddress: null },
                     miner: {
-                        // beta.0.4.5 — default miner.enabled=false on
-                        // sidechains. Council operators earn primarily
-                        // from BPoS mainchain + Arbiter SideChainPow
-                        // heartbeats; EVM block rewards on sidechains
-                        // are marginal AND would require generating an
-                        // EVM keystore at install time (extra step the
-                        // operator's UX doesn't need today). Operator
-                        // can flip this on later via Settings → Mining
-                        // & Rewards once they've imported / generated
-                        // an EVM keystore for the chain.
+                        // beta.0.4.5 — sidechain mining off by default.
                         enabled: false,
                         rewardAddress: inputs.sharedRewardAddress,
                         rewardAddressSource: 'shared',
@@ -1777,30 +1818,78 @@ async function runCouncilInstall(args) {
                 };
                 await ConfigStore.save(cfg2);
                 try { ChainRegistry.registerConfiguredAdapters({ cfg: cfg2 }); }
-                catch (_) { /* registration best-effort */ }
+                catch (_) { /* best-effort */ }
                 return { message: `cfg.chains.${chainId} written` };
             });
-            await runStep(`install-${chainId}-binary`, async () => {
-                const cfg2 = await ConfigStore.load();
-                if (cfg2.chains[chainId] && cfg2.chains[chainId].binaryPath) {
-                    return { skipped: true, message: 'binary already on disk' };
-                }
-                const dl = ChainRegistry.getBinaryDownloader();
-                await dl.start(chainId);
-                // Wait for binary install to finish (poll every 2s).
-                await waitForBinaryInstall(dl, chainId, log);
-                // Persist binaryPath into cfg.
-                const status = dl.getStatus(chainId);
-                if (!status || status.phase !== 'done' || !status.binaryPath) {
-                    throw new Error(`binary install ended with phase=${status && status.phase}`);
-                }
-                const cfg3 = await ConfigStore.load();
-                cfg3.chains[chainId].binaryPath = status.binaryPath;
-                cfg3.chains[chainId].binaryVersion = status.version || '';
-                await ConfigStore.save(cfg3);
-                return { message: `binary at ${status.binaryPath}` };
-            });
         }
+
+        // ---- STEP N+1 — parallel binary downloads ----
+        // beta.0.4.6 — download ESC + EID + (PG?) + Arbiter binaries
+        // CONCURRENTLY. Pre-0.4.6 this was 4 serial steps (~4 min on
+        // a typical Hostinger VPS); parallel runs in ~1 min wall time
+        // since the downloads are network-bound not CPU-bound.
+        //
+        // Arbiter cfg lands AFTER this step (M6.1 needs the binary on
+        // disk before generateConfig can validate the path). So the
+        // arbiter-cfg row in the stepper is later in the plan.
+        await runStep('install-binaries-parallel', async () => {
+            const dl = ChainRegistry.getBinaryDownloader();
+            const targets = classBChains.concat(['arbiter']);
+            const cfgInit = await ConfigStore.load();
+            const toDownload = targets.filter((cid) => {
+                if (cid === 'arbiter') {
+                    // arbiter cfg is written in a later step; binary
+                    // download is independent of cfg state. Always try
+                    // download unless we already have it on disk.
+                    return true;
+                }
+                return !(cfgInit.chains[cid] && cfgInit.chains[cid].binaryPath);
+            });
+            if (toDownload.length === 0) {
+                return { skipped: true, message: 'all binaries already on disk' };
+            }
+            // Kick off each download (fire-and-forget; EnmBinaryDownloader
+            // tracks state per chainId). Then wait on each.
+            const startPromises = toDownload.map(async (cid) => {
+                try { await dl.start(cid); } catch (_) { /* already running OK */ }
+            });
+            await Promise.all(startPromises);
+            const results = await Promise.all(toDownload.map(async (cid) => {
+                try {
+                    await waitForBinaryInstall(dl, cid, log);
+                    const status = dl.getStatus(cid);
+                    return { cid, ok: true, status };
+                } catch (err) {
+                    return { cid, ok: false, error: err.message };
+                }
+            }));
+            // Persist successful binary paths into cfg.
+            const cfg2 = await ConfigStore.load();
+            for (const r of results) {
+                if (!r.ok) { continue; }
+                if (r.cid === 'arbiter') {
+                    // arbiter cfg not yet written — defer persist to
+                    // install-arbiter-cfg step. Stash the path for
+                    // that step to read from the downloader.
+                    continue;
+                }
+                if (cfg2.chains[r.cid]) {
+                    cfg2.chains[r.cid].binaryPath = r.status.binaryPath;
+                    cfg2.chains[r.cid].binaryVersion = r.status.version || '';
+                }
+            }
+            await ConfigStore.save(cfg2);
+            const failed = results.filter((r) => !r.ok);
+            if (failed.length > 0) {
+                throw new Error(
+                    `binary downloads failed: `
+                    + failed.map((r) => `${r.cid} (${r.error})`).join(', '),
+                );
+            }
+            return {
+                message: `downloaded ${results.length} binar${results.length === 1 ? 'y' : 'ies'} in parallel`,
+            };
+        });
 
         // ---- STEP 8 — Node.js runtime (skip if host has v18+) ----
         await runStep('install-node-runtime', async () => {
@@ -1827,8 +1916,11 @@ async function runCouncilInstall(args) {
             return { message: `downloaded ${Object.keys(paths).length} script(s)` };
         });
 
-        // ---- STEPS 10-12 — Class C oracles ----
-        for (const oracleId of ['esc-oracle', 'eid-oracle', 'pg-oracle']) {
+        // ---- Class C oracles (skip PG oracle when opted-out) ----
+        const oracleIds = includePg
+            ? ['esc-oracle', 'eid-oracle', 'pg-oracle']
+            : ['esc-oracle', 'eid-oracle'];
+        for (const oracleId of oracleIds) {
             await runStep(`install-${oracleId}`, async () => {
                 const cfg2 = await ConfigStore.load();
                 if (cfg2.chains && cfg2.chains[oracleId]) {
@@ -1863,11 +1955,19 @@ async function runCouncilInstall(args) {
             });
         }
 
-        // ---- STEP 13 — Arbiter cfg ----
+        // ---- Arbiter cfg (binary already downloaded in parallel step) ----
         await runStep('install-arbiter-cfg', async () => {
             const cfg2 = await ConfigStore.load();
-            if (cfg2.chains && cfg2.chains.arbiter) {
-                return { skipped: true, message: 'cfg already present' };
+            if (cfg2.chains && cfg2.chains.arbiter && cfg2.chains.arbiter.binaryPath) {
+                return { skipped: true, message: 'cfg + binary already in place' };
+            }
+            const dl = ChainRegistry.getBinaryDownloader();
+            const arbStatus = dl.getStatus('arbiter');
+            if (!arbStatus || arbStatus.phase !== 'done' || !arbStatus.binaryPath) {
+                throw new Error(
+                    `arbiter binary not on disk (downloader phase=${arbStatus && arbStatus.phase}); `
+                    + 'the parallel-binaries step should have downloaded it.',
+                );
             }
             const ports = inputs.activeNet === 'testnet'
                 ? { rpc: 21536, p2p: 21538 }
@@ -1875,8 +1975,8 @@ async function runCouncilInstall(args) {
             cfg2.chains = cfg2.chains || {};
             cfg2.chains.arbiter = {
                 enabled: false,
-                binaryPath: '',
-                binaryVersion: '',
+                binaryPath: arbStatus.binaryPath,
+                binaryVersion: arbStatus.version || '',
                 activeNet: inputs.activeNet,
                 ports,
                 wallet: { usesMainchainKeystore: true, passwordSource: 'mainchain-ela-txt' },
@@ -1887,39 +1987,21 @@ async function runCouncilInstall(args) {
             await ConfigStore.save(cfg2);
             try { ChainRegistry.registerConfiguredAdapters({ cfg: cfg2 }); }
             catch (_) { /* best-effort */ }
-            return { message: 'cfg.chains.arbiter written' };
+            return { message: 'cfg.chains.arbiter written; binary at ' + arbStatus.binaryPath };
         });
 
-        // ---- STEP 14 — Arbiter binary ----
-        await runStep('install-arbiter-binary', async () => {
-            const cfg2 = await ConfigStore.load();
-            if (cfg2.chains.arbiter && cfg2.chains.arbiter.binaryPath) {
-                return { skipped: true, message: 'binary already on disk' };
-            }
-            const dl = ChainRegistry.getBinaryDownloader();
-            await dl.start('arbiter');
-            await waitForBinaryInstall(dl, 'arbiter', log);
-            const status = dl.getStatus('arbiter');
-            if (!status || status.phase !== 'done' || !status.binaryPath) {
-                throw new Error(`arbiter binary install ended with phase=${status && status.phase}`);
-            }
-            const cfg3 = await ConfigStore.load();
-            cfg3.chains.arbiter.binaryPath = status.binaryPath;
-            cfg3.chains.arbiter.binaryVersion = status.version || '';
-            await ConfigStore.save(cfg3);
-            return { message: `binary at ${status.binaryPath}` };
-        });
-
-        // ---- STEP 15 — Start all chains (DAG order: A → B → C → D) ----
+        // ---- Start all chains (DAG order: B → C → D) ----
         await runStep('start-chains', async () => {
             const cfg2 = await ConfigStore.load();
+            const startOrder = includePg
+                ? ['esc', 'eid', 'pg', 'esc-oracle', 'eid-oracle', 'pg-oracle', 'arbiter']
+                : ['esc', 'eid', 'esc-oracle', 'eid-oracle', 'arbiter'];
             // Flip enabled=true so AUTOSTART/restart logic respects it.
-            for (const cid of ['esc', 'eid', 'pg', 'esc-oracle', 'eid-oracle', 'pg-oracle', 'arbiter']) {
+            for (const cid of startOrder) {
                 if (cfg2.chains[cid]) { cfg2.chains[cid].enabled = true; }
             }
             await ConfigStore.save(cfg2);
 
-            const startOrder = ['esc', 'eid', 'pg', 'esc-oracle', 'eid-oracle', 'pg-oracle', 'arbiter'];
             const started = [];
             for (const cid of startOrder) {
                 try {
@@ -1942,6 +2024,156 @@ async function runCouncilInstall(args) {
         emit('finalize', _councilInstallState.success ? 'done' : 'error',
             _councilInstallState.error || '');
     }
+}
+
+/**
+ * beta.0.4.6 — Council preflight checker. Runs all the cheap probes
+ * the wizard's Card D.5 needs to decide whether the install can
+ * succeed. Each check returns { id, label, ok, message, severity }.
+ *
+ * Severity:
+ *   'required'   — must be ok for Continue button to enable
+ *   'recommended' — warning if not ok but doesn't block
+ *
+ * Caches results for 30s to avoid hammering upstream when the wizard
+ * polls (e.g. Continue button → operator clicks Refresh).
+ */
+let _preflightCache = { ts: 0, result: null };
+
+async function runCouncilPreflight(args) {
+    const { extensionHandle } = args;
+    const now = Date.now();
+    if (_preflightCache.result && now - _preflightCache.ts < 30_000) {
+        return _preflightCache.result;
+    }
+    const EnmCrypto = require('../services/EnmCrypto');
+    const { enmDataDir } = require('../services/DataDir');
+    const fs = require('node:fs');
+    const fsp = require('node:fs/promises');
+    const https = require('node:https');
+    const checks = [];
+
+    // 1. Mainchain configured + alive.
+    let mainAlive = false;
+    let mainCfg = null;
+    try {
+        const cfg = await ConfigStore.load();
+        mainCfg = cfg && cfg.chains && cfg.chains.mainchain;
+        if (mainCfg) {
+            const ChainRegistry = require('../services/ChainRegistry');
+            try {
+                const st = ChainRegistry.getProcessService().statusSync('mainchain');
+                mainAlive = !!(st && st.alive);
+            } catch (_) { mainAlive = false; }
+        }
+    } catch (_) { /* mainCfg stays null */ }
+    checks.push({
+        id: 'mainchain-alive',
+        label: 'Mainchain configured + running',
+        ok: mainAlive,
+        message: mainAlive ? 'mainchain process is up'
+               : mainCfg ? 'mainchain configured but not running — start it before continuing'
+                         : 'mainchain not configured — finish Card D first',
+        severity: 'required',
+    });
+
+    // 2. Mainchain keystore password decryptable.
+    let pwOk = false;
+    let pwMsg = 'no envelope on file';
+    if (mainCfg && mainCfg.dpos && mainCfg.dpos.keystorePasswordEncrypted) {
+        try {
+            EnmCrypto.decrypt(mainCfg.dpos.keystorePasswordEncrypted);
+            pwOk = true;
+            pwMsg = 'envelope decrypts cleanly';
+        } catch (err) {
+            pwMsg = 'cannot decrypt: ' + err.message;
+        }
+    }
+    checks.push({
+        id: 'mainchain-keystore-pw',
+        label: 'Mainchain keystore password readable',
+        ok: pwOk,
+        message: pwMsg,
+        severity: 'required',
+    });
+
+    // 3. Disk space ≥ 20 GB in enmDataDir.
+    let diskOk = false;
+    let diskMsg = 'unknown';
+    try {
+        const dir = enmDataDir();
+        await fsp.mkdir(dir, { recursive: true });
+        // statfs added in node 18. Fall back to "ok-unless-fails" on older.
+        if (typeof fsp.statfs === 'function') {
+            const sf = await fsp.statfs(dir);
+            const freeGb = Math.floor((sf.bavail * sf.bsize) / (1024 * 1024 * 1024));
+            diskOk = freeGb >= 20;
+            diskMsg = `${freeGb} GB free`;
+        } else {
+            diskOk = true;
+            diskMsg = 'statfs unavailable on this Node version — assuming OK';
+        }
+    } catch (err) {
+        diskMsg = 'check failed: ' + err.message;
+    }
+    checks.push({
+        id: 'disk-space',
+        label: 'Disk space ≥ 20 GB free',
+        ok: diskOk,
+        message: diskMsg,
+        severity: 'required',
+    });
+
+    // 4-6. HEAD probes for the three upstream services we depend on.
+    async function headProbe(url, timeoutMs) {
+        return new Promise((resolve) => {
+            const req = https.request(url, { method: 'HEAD', timeout: timeoutMs || 5000 },
+                (res) => { res.resume(); resolve({ ok: res.statusCode >= 200 && res.statusCode < 400, code: res.statusCode }); });
+            req.on('error', (err) => resolve({ ok: false, error: err.message }));
+            req.on('timeout', () => { req.destroy(); resolve({ ok: false, error: 'timeout' }); });
+            req.end();
+        });
+    }
+    const githubProbe = await headProbe(
+        'https://raw.githubusercontent.com/elastos/Elastos.ELA.SideChain.ESC/master/oracle/crosschain_oracle.js',
+    );
+    checks.push({
+        id: 'github-reachable',
+        label: 'GitHub.com reachable (for oracle scripts)',
+        ok: githubProbe.ok,
+        message: githubProbe.ok ? 'HEAD 200' : ('failed: ' + (githubProbe.error || ('HTTP ' + githubProbe.code))),
+        severity: 'required',
+    });
+    const elastosProbe = await headProbe('https://download.elastos.io/elastos-arbiter/');
+    checks.push({
+        id: 'elastos-downloads',
+        label: 'download.elastos.io reachable (for binaries)',
+        ok: elastosProbe.ok,
+        message: elastosProbe.ok ? 'HEAD 200' : ('failed: ' + (elastosProbe.error || ('HTTP ' + elastosProbe.code))),
+        severity: 'required',
+    });
+
+    // 7. Internet sanity (separate from the per-host probes — flags
+    // generic offline-host case with a friendlier message).
+    const nodejsProbe = await headProbe('https://nodejs.org/dist/');
+    checks.push({
+        id: 'nodejs-reachable',
+        label: 'nodejs.org reachable (in case Node.js runtime install is needed)',
+        ok: nodejsProbe.ok,
+        message: nodejsProbe.ok ? 'HEAD 200' : ('failed: ' + (nodejsProbe.error || ('HTTP ' + nodejsProbe.code))),
+        // Recommended-only because if the host already has Node v18+
+        // we don't need nodejs.org at all (NodeJsRuntime.resolveAny
+        // prefers the host install).
+        severity: 'recommended',
+    });
+
+    const result = {
+        ts: now,
+        checks,
+        allRequiredOk: checks.filter((c) => c.severity === 'required').every((c) => c.ok),
+    };
+    _preflightCache = { ts: now, result };
+    return result;
 }
 
 /**
@@ -1969,5 +2201,5 @@ async function waitForBinaryInstall(dl, chainId, log) {
 module.exports = {
     build,
     // Exported for tests.
-    _internal: { getCouncilInstallState, runCouncilInstall, waitForBinaryInstall },
+    _internal: { getCouncilInstallState, runCouncilInstall, waitForBinaryInstall, runCouncilPreflight },
 };

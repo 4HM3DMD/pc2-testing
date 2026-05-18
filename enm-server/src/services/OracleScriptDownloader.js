@@ -46,25 +46,36 @@ const https = require('node:https');
 const { enmDataDir } = require('./DataDir');
 const { ENM_LOG_PREFIX } = require('./EnmConstants');
 
-// Map per-oracle scriptFilename → upstream raw URL. Mirrors the
-// scriptFilename getters on EscOracleAdapter / EidOracleAdapter /
-// PgOracleAdapter (M4.1 + M5.4). Single source of truth so adding
-// a new oracle = add one row.
+// Map per-oracle scriptFilename → upstream raw URL.
+//
+// beta.0.4.6 — CORRECTED URLs after probing the real upstream repos.
+// Pre-0.4.6 I guessed `…/Elastos.ELA.SideChain.{ESC,EID,PG}.Oracle`
+// which 404'd; the actual oracle scripts live INSIDE the sidechain
+// repo itself under an `oracle/` subdirectory (verified via the
+// GitHub Contents API). Hard-coding the working paths here so the
+// next install-council orchestrator step doesn't immediately fail.
+//
+// PG is genuinely closed-source per plan §11 risk #2 — no public
+// repo exists. PG oracle install is OPT-IN; operator must supply
+// the scriptPath manually via Card E (the PG-include checkbox).
+// We KEEP a 'pg-oracle' entry here as a placeholder so callers
+// trying to download it get a clear "supply manually" error
+// instead of a confusing 404.
 const ORACLE_SOURCES = Object.freeze({
     'esc-oracle': {
         scriptName: 'crosschain_oracle.js',
-        url: 'https://raw.githubusercontent.com/elastos/Elastos.ELA.SideChain.ESC.Oracle/master/crosschain_oracle.js',
+        url: 'https://raw.githubusercontent.com/elastos/Elastos.ELA.SideChain.ESC/master/oracle/crosschain_oracle.js',
+        autoDownloadable: true,
     },
     'eid-oracle': {
         scriptName: 'crosschain_eid.js',
-        url: 'https://raw.githubusercontent.com/elastos/Elastos.ELA.SideChain.EID.Oracle/master/crosschain_eid.js',
+        url: 'https://raw.githubusercontent.com/elastos/Elastos.ELA.SideChain.EID/master/oracle/crosschain_eid.js',
+        autoDownloadable: true,
     },
     'pg-oracle': {
         scriptName: 'crosschain_pg.js',
-        // PG is closed-source per plan §11 risk #2; the raw URL may
-        // 404 publicly. Operator can override via cfg/body.scriptPath
-        // pointing at a manually-placed file.
-        url: 'https://raw.githubusercontent.com/elastos/Elastos.ELA.SideChain.PG.Oracle/master/crosschain_pg.js',
+        url: null,                 // closed-source — no public URL
+        autoDownloadable: false,   // caller must check before attempting
     },
 });
 
@@ -131,6 +142,14 @@ async function downloadOne(chainId, opts) {
     const src = ORACLE_SOURCES[chainId];
     if (!src) {
         throw new Error(`OracleScriptDownloader: unknown oracle chainId "${chainId}"`);
+    }
+    if (!src.autoDownloadable || !src.url) {
+        throw new Error(
+            `OracleScriptDownloader: "${chainId}" is not auto-downloadable `
+            + '(closed-source per plan §11). Place the script manually at '
+            + scriptPathFor(chainId) + ' before installing this oracle, '
+            + 'or skip it via the Council install Card E checkbox.',
+        );
     }
     await fsp.mkdir(scriptsDir(), { recursive: true, mode: 0o755 });
     const dest = scriptPathFor(chainId);
