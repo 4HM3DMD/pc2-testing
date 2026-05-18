@@ -103,6 +103,11 @@ const AUDIT_DECISION = Object.freeze({
     EXECUTED: 'executed',
     FAILED: 'failed',
     MANUAL_ONLY: 'manual-only',
+    // beta.3.80 — emitted when an AUTOMATED-SAFE action was suppressed
+    // by a master toggle (currently cfg.global.healing.autoExecuteSafe).
+    // Distinct from REJECTED (which means the operator declined a
+    // proposal) and FAILED (which means execution attempted but errored).
+    SKIPPED: 'skipped',
 });
 
 // HTTP error format (matches PC2 convention from Rev 4 audit:

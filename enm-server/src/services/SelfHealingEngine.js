@@ -256,6 +256,59 @@ class SelfHealingEngine {
 
     /** @private */
     async _applyAutomatedSafe(chainId, det, chainConfig) {
+        // beta.3.80 — Wave A item ① — honour the master "auto-execute
+        // safe healing" toggle from Settings → Security. Prior to this
+        // it was persisted via PUT /config/general but never read; the
+        // operator-facing switch was dead. Treat undefined as true
+        // (preserves the default-on behaviour for any config that never
+        // explicitly set the field).
+        //
+        // ConfigStore.load() is cached by mtime so the hot-path cost is
+        // a single fs.stat per tick — negligible.
+        try {
+            const ConfigStore = require('./ConfigStore');
+            const cfg = await ConfigStore.load();
+            const autoSafe = cfg && cfg.global && cfg.global.healing
+                ? cfg.global.healing.autoExecuteSafe
+                : undefined;
+            if (autoSafe === false) {
+                // Audit the skip so the operator can confirm the gate
+                // is engaged + which rule was suppressed. Failure to
+                // write the audit row is non-fatal — we must not silently
+                // bypass the gate just because the DB hiccupped.
+                try {
+                    const db = this.getDb();
+                    await AuditLog.append(db, {
+                        walletAddress: 'system',
+                        chainId,
+                        ruleId: det.ruleId,
+                        tier: HEALING_TIERS.AUTOMATED_SAFE,
+                        decision: AUDIT_DECISION.SKIPPED,
+                        executor: 'system',
+                        outcome: 'autoExecuteSafe master toggle is off — operator must intervene manually',
+                        durationMs: 0,
+                        payload: det.payload || null,
+                    });
+                } catch (auditErr) {
+                    this.extensionHandle.log.debug(
+                        `${ENM_LOG_PREFIX} ${chainId}/${det.ruleId} skip-audit failed (non-fatal): ${auditErr.message}`,
+                    );
+                }
+                this.extensionHandle.log.info(
+                    `${ENM_LOG_PREFIX} ${chainId}/${det.ruleId} skipped — autoExecuteSafe toggle is off.`,
+                );
+                return;
+            }
+        } catch (cfgErr) {
+            // Fail-open: if config can't load, preserve default-on
+            // behaviour. A dead engine that won't heal because config
+            // is unreadable is worse than one that heals with a
+            // possibly-stale "on" assumption — operator can always
+            // toggle off again once config is reachable.
+            this.extensionHandle.log.debug(
+                `${ENM_LOG_PREFIX} ${chainId}/${det.ruleId} autoExecuteSafe probe failed (non-fatal): ${cfgErr.message}`,
+            );
+        }
         // Restart-loop budget: count attempts within a rolling window.
         if (this._isRestartAction(det)) {
             // beta.3.58 — if an OWNER-CONFIRMS escalation proposal for
@@ -370,8 +423,16 @@ class SelfHealingEngine {
             );
             return;
         }
+        // beta.3.80 — Wave A item ② — attribute autonomous engine actions
+        // to the literal string 'system'. Pre-3.80 we wrote
+        // `walletAddress: this.ownerWallet` which made every F1/AUTOSTART
+        // audit row look operator-initiated (e.g. "wallet:
+        // 0xf0e57...") even though `executor: 'system'` was set right
+        // next to it. Operators reading the audit log couldn't tell
+        // "I did this" from "the engine did this". The two fields
+        // now agree.
         await AuditLog.append(db, {
-            walletAddress: this.ownerWallet,
+            walletAddress: 'system',
             chainId,
             ruleId: det.ruleId,
             tier: HEALING_TIERS.AUTOMATED_SAFE,
