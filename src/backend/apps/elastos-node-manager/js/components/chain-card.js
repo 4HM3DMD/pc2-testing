@@ -45,6 +45,43 @@
         disabled:     'off',
     };
 
+    // beta.3.92 (Wave M2.4) — operator-facing display-name fallback
+    // for every known chainId. Used when the per-chain API response
+    // doesn't carry a displayName (rare) or to bridge the brief window
+    // between mount + first refresh(). The map mirrors the one in
+    // multi-chain-overview.js + chain-selector.js so the chip text,
+    // the overview row, and the selector trigger label all match.
+    //
+    // No ECO entry per H3 (ECO is permanently out-of-scope).
+    var CHAIN_DISPLAY_FALLBACK = {
+        mainchain:    'Mainchain',
+        esc:          'Smart Chain',
+        'esc-oracle': 'ESC Oracle',
+        eid:          'Identity Chain',
+        'eid-oracle': 'EID Oracle',
+        pg:           'PG Chain',
+        'pg-oracle':  'PG Oracle',
+        arbiter:      'Arbiter',
+        spv:          'SPV',
+    };
+
+    // beta.3.92 (M2.4) — chainId → chain class mapping for in-component
+    // section gating. The producer-state chip variant + DPoS rotation
+    // strip are Class A only. Mirror of ChainAdapter.CHAIN_ID_TO_CLASS
+    // (backend) so the frontend doesn't need to wait for the first /chain
+    // API roundtrip to decide which sections to render.
+    var CHAIN_ID_TO_CLASS = {
+        mainchain:    'A',
+        esc:          'B',
+        eid:          'B',
+        pg:           'B',
+        'esc-oracle': 'C',
+        'eid-oracle': 'C',
+        'pg-oracle':  'C',
+        arbiter:      'D',
+        spv:          'E',
+    };
+
     function ChainCard(opts) {
         if (!opts || !opts.chainId || !opts.api || !opts.notifications) {
             throw new TypeError('ChainCard: { chainId, api, notifications } required');
@@ -53,6 +90,14 @@
         this.api = opts.api;
         this.notifications = opts.notifications;
         this.sse = opts.sse || null;
+        // beta.3.92 (M2.4) — chainClass for class-aware section gating.
+        // Caller (PaneRouter / app.js _mountDashboardForActiveChain) can
+        // pass it explicitly; otherwise we fall back to the static lookup.
+        // Both paths converge on 'A' for mainchain (the only chain we
+        // actively render today), so existing call sites work unchanged.
+        this.chainClass = opts.chainClass
+            || CHAIN_ID_TO_CLASS[this.chainId]
+            || null;
         // 0.2.0-alpha.1 — height-series client backs the sparkline. When
         // absent (test rigs, defensive boot) the sparkline simply never
         // shows; the rest of the card still works.
@@ -63,6 +108,12 @@
         this.root = document.createElement('article');
         this.root.className = 'enm-chain-card';
         this.root.dataset.chainId = this.chainId;
+        // beta.3.92 — also surface the class on the root so CSS can
+        // layer per-class styles (e.g. arbiter card uses a different
+        // hero color in M6). Defensive: only set when known.
+        if (this.chainClass) {
+            this.root.dataset.chainClass = this.chainClass;
+        }
         this.root.dataset.state = 'unconfigured';
         this._busy = false;
 
@@ -661,9 +712,24 @@
         //   stalled / error / stopped: just the state name (e.g. "Stopped")
         // We render the producer state on top of that when applicable
         // (the chain has both a system state AND a producer state).
-        var producerState = state && state.producerState;
-        var chainNameLabel = (this.chainId === 'mainchain')
-            ? 'Mainchain' : String(this.chainId || 'Chain');
+        // beta.3.92 (M2.4) — chain name now sources from (1) the
+        // server-side displayName (canonical, set per-class by the
+        // adapter), (2) the static CHAIN_DISPLAY_FALLBACK table for
+        // the chainIds we know, (3) the chainId itself as last resort.
+        // Pre-3.92 the hardcoded `(chainId === 'mainchain') ? 'Mainchain'
+        // : String(chainId)` ternary printed "esc" / "eid" / "arbiter"
+        // as the chip text once non-mainchain dashboards land in M3+.
+        var chainNameLabel = (state && state.displayName)
+            || CHAIN_DISPLAY_FALLBACK[this.chainId]
+            || String(this.chainId || 'Chain');
+        // beta.3.92 (M2.4) — producer-state chip variant is Class A
+        // (BPoS mainchain) only. EVM sidechains have a separate
+        // mining/miner-address concept (M3); Oracles + Arbiter have
+        // no producer at all. Gating by chainClass keeps the chip
+        // honest if a future regression accidentally returns
+        // producerState on a non-A chain's response.
+        var producerState = (this.chainClass === 'A' && state && state.producerState)
+            ? state.producerState : null;
         var version = (state && state.binaryVersion) ? state.binaryVersion : '';
         var versionSuffix = version ? ' · ' + version : '';
         var chipText;
@@ -1227,6 +1293,16 @@
      */
     ChainCard.prototype._refreshRotation = function () {
         if (this._destroyed) return;
+        // beta.3.92 (M2.4) — rotation strip is BPoS-only (Class A).
+        // Non-A chains (EVM sidechains, Oracles, Arbiter, SPV) have no
+        // DPoS arbiter rotation concept; the rotation endpoint would
+        // 501 (M1.4 gating in chains.js routes) anyway. Hide the strip
+        // + skip the poll entirely for non-A chains so we don't burn
+        // 60 fetches/hr against an endpoint that can't answer.
+        if (this.chainClass && this.chainClass !== 'A') {
+            if (this._rotationStrip) this._rotationStrip.hidden = true;
+            return;
+        }
         // Skip when the chain is dead — no rotation context.
         if (this._lastCoarseState && (this._lastCoarseState === 'stopped'
             || this._lastCoarseState === 'unconfigured')) {

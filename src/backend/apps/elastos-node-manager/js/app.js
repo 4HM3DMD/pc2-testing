@@ -1212,11 +1212,25 @@
         var pane = this.els.paneDashboard;
         if (!pane) { return; }
         var chainId = this._activeChainId || 'mainchain';
+        // beta.3.92 (M2.4) — chainClass static lookup mirrors the
+        // server-side ChainAdapter.CHAIN_ID_TO_CLASS table. Passed
+        // down to chain-card (and future per-class components) so
+        // they can gate class-specific sections without waiting for
+        // the first /chains/<id> API roundtrip. mainchain → 'A' for
+        // the only chain we actively render today; non-A chains hit
+        // the stub branch below.
+        var CHAIN_CLASS = {
+            mainchain: 'A', esc: 'B', eid: 'B', pg: 'B',
+            'esc-oracle': 'C', 'eid-oracle': 'C', 'pg-oracle': 'C',
+            arbiter: 'D', spv: 'E',
+        };
+        var chainClass = CHAIN_CLASS[chainId] || null;
         var common = {
             api: this.services.api,
             sse: this.services.sse,
             notifications: this.services.notifications,
             chainId: chainId,
+            chainClass: chainClass,
             heightSeries: this.services.heightSeries || null,
         };
         this._dashboardMounts = [];
