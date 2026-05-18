@@ -825,6 +825,193 @@ function build(extensionHandle) {
         }
     });
 
+    // beta.3.99 (Wave M3.5) — Class B install endpoint. Creates the
+    // cfg.chains.<chainId> entry for an EVM sidechain (ESC/EID/PG)
+    // with the canonical port tuple, the operator-supplied (or shared)
+    // miner address, and the encrypted EVM keystore password.
+    //
+    // PRE-REQUISITES (returns 412 on any miss):
+    //   - cfg.global.council.passwordStrategy must be set (M3.4 wizard)
+    //   - cfg.global.council.minerAddressStrategy must be set
+    //   - When strategy='shared': the sharedPasswordEncrypted /
+    //     sharedMinerAddress must be populated on cfg.global.council
+    //
+    // BINARY: M3.5 does NOT download the binary — that's M3.8. The
+    // entry lands with binaryPath='' and enabled=false; the operator
+    // runs the M3.8 download endpoint next to fetch + verify the
+    // binary, then can flip enabled=true.
+    //
+    // Body shape:
+    //   {
+    //     chainId: 'esc' | 'eid' | 'pg',
+    //     activeNet?: 'mainnet' | 'testnet',  // default 'mainnet'
+    //     miner: {
+    //       enabled?: boolean,                // default false
+    //       rewardAddress?: string,           // required when strategy='per-chain'
+    //       evmKeystoreAddr?: string,
+    //       threads?: number,                 // default 1
+    //     },
+    //     evmKeystorePassword?: string,       // required when password strategy='per-chain'
+    //     sync?: { mode?: 'fast'|'full'|'archive' },
+    //   }
+    router.post('/install-class-b', limit('admin'), requireOwner, async (req, res) => {
+        try {
+            const body = req.body || {};
+            const ClassBPorts = require('../services/ClassBPorts');
+            const EnmCrypto = require('../services/EnmCrypto');
+            const chainId = String(body.chainId || '');
+            if (!ClassBPorts.knownChainIds().includes(chainId)) {
+                return res.status(400).json(errorBody(
+                    `install-class-b: chainId must be one of ${ClassBPorts.knownChainIds().join('|')}, `
+                    + `got "${chainId}".`,
+                ));
+            }
+            const activeNet = body.activeNet === 'testnet' ? 'testnet' : 'mainnet';
+
+            const cfg = await ConfigStore.load();
+            const council = (cfg.global && cfg.global.council) || {};
+            // Pre-requisite check 1 — Layer 1 strategy answered.
+            if (!council.passwordStrategy || !council.minerAddressStrategy) {
+                return res.status(412).json(errorBody(
+                    'install-class-b: Council strategy not set. POST '
+                    + '/api/enm/setup/council-strategy with passwordStrategy + '
+                    + 'minerAddressStrategy before installing the first Class B chain.',
+                ));
+            }
+            // Pre-requisite check 2 — already-installed-chain idempotency.
+            if (cfg.chains && cfg.chains[chainId]) {
+                return res.status(409).json(errorBody(
+                    `install-class-b: chain "${chainId}" is already configured. `
+                    + 'Use the Settings tab on its pane to edit; uninstall first if you need to reset.',
+                ));
+            }
+            // Resolve miner.rewardAddress per strategy.
+            let rewardAddress = '';
+            let rewardAddressSource = council.minerAddressStrategy;
+            if (council.minerAddressStrategy === 'shared') {
+                rewardAddress = council.sharedMinerAddress || '';
+                if (!rewardAddress) {
+                    return res.status(412).json(errorBody(
+                        'install-class-b: minerAddressStrategy="shared" but sharedMinerAddress not set. '
+                        + 'Re-run council-strategy with sharedMinerAddress populated.',
+                    ));
+                }
+            } else if ((body.miner && body.miner.rewardAddress) || body.miner === undefined) {
+                rewardAddress = String((body.miner && body.miner.rewardAddress) || '');
+                if (rewardAddress) {
+                    const v = EnmCrypto.validateEthAddress(rewardAddress);
+                    if (!v.valid) {
+                        return res.status(400).json(errorBody(
+                            `miner.rewardAddress: ${v.warning}`,
+                        ));
+                    }
+                    rewardAddress = v.normalized || rewardAddress;
+                }
+            }
+            // Resolve EVM keystore password envelope per strategy.
+            let evmKeystorePasswordEncrypted = '';
+            if (council.passwordStrategy === 'shared') {
+                evmKeystorePasswordEncrypted = council.sharedPasswordEncrypted || '';
+                if (!evmKeystorePasswordEncrypted) {
+                    return res.status(412).json(errorBody(
+                        'install-class-b: passwordStrategy="shared" but sharedPasswordEncrypted not set. '
+                        + 'Re-run council-strategy with sharedPassword supplied.',
+                    ));
+                }
+            } else if (typeof body.evmKeystorePassword === 'string' && body.evmKeystorePassword.length > 0) {
+                if (!EnmCrypto.validatePasswordComplexity(body.evmKeystorePassword)) {
+                    return res.status(400).json(errorBody(
+                        'install-class-b: evmKeystorePassword fails complexity '
+                        + '(16+ chars, upper + lower + digit + non-alnum required).',
+                    ));
+                }
+                evmKeystorePasswordEncrypted = EnmCrypto.encrypt(body.evmKeystorePassword);
+            }
+            // EVM keystore address (optional pass-through).
+            let evmKeystoreAddr = '';
+            if (body.miner && body.miner.evmKeystoreAddr) {
+                const v = EnmCrypto.validateEthAddress(String(body.miner.evmKeystoreAddr));
+                if (!v.valid) {
+                    return res.status(400).json(errorBody(
+                        `miner.evmKeystoreAddr: ${v.warning}`,
+                    ));
+                }
+                evmKeystoreAddr = v.normalized || body.miner.evmKeystoreAddr;
+            }
+            // Threads + sync.mode validations.
+            let threads = 1;
+            if (body.miner && Number.isInteger(body.miner.threads)) {
+                if (body.miner.threads < 1 || body.miner.threads > 16) {
+                    return res.status(400).json(errorBody('miner.threads must be integer in [1, 16]'));
+                }
+                threads = body.miner.threads;
+            }
+            let syncMode = 'fast';
+            if (body.sync && body.sync.mode) {
+                if (!['fast', 'full', 'archive'].includes(body.sync.mode)) {
+                    return res.status(400).json(errorBody(
+                        'sync.mode must be one of fast | full | archive',
+                    ));
+                }
+                syncMode = body.sync.mode;
+            }
+            const minerEnabled = body.miner && body.miner.enabled === true;
+            // Assemble the chain cfg block.
+            const ports = ClassBPorts.portsFor(chainId, activeNet);
+            const chainCfg = {
+                enabled: false,           // operator flips after M3.8 binary download
+                binaryPath: '',           // filled by M3.8 install endpoint
+                binaryVersion: '',
+                activeNet,
+                ports,
+                pbft: {
+                    usesMainchainKeystore: true,  // H23 invariant
+                    ipAddress: null,              // EnmIpResolver fills at start
+                },
+                miner: {
+                    enabled: !!minerEnabled,
+                    rewardAddress,
+                    rewardAddressSource,
+                    evmKeystoreAddr,
+                    evmKeystorePasswordEncrypted,
+                    threads,
+                },
+                sync: { mode: syncMode },
+                bootnodes: [],
+                healing: { enabledRules: {} },
+            };
+            cfg.chains = cfg.chains || {};
+            cfg.chains[chainId] = chainCfg;
+            await ConfigStore.save(cfg);
+
+            // Register the adapter immediately so listChains / overview pick
+            // it up without waiting for a reboot.
+            try {
+                const ChainRegistry = require('../services/ChainRegistry');
+                ChainRegistry.registerConfiguredAdapters({ cfg });
+            } catch (err) {
+                extensionHandle.log.warn(
+                    `${ENM_LOG_PREFIX} install-class-b ${chainId}: post-install register failed: ${err.message}`,
+                );
+            }
+
+            extensionHandle.log.info(
+                `${ENM_LOG_PREFIX} install-class-b ${chainId} installed `
+                + `(net=${activeNet}, miner=${minerEnabled ? 'on' : 'off'}, sync=${syncMode})`,
+            );
+            return res.json(successBody({
+                chainId,
+                chainCfg,
+                next: 'POST /api/enm/setup/binary/' + chainId + ' to download the binary (M3.8)',
+            }));
+        } catch (err) {
+            extensionHandle.log.error(
+                `${ENM_LOG_PREFIX} POST /setup/install-class-b: ${err.message}`,
+            );
+            return res.status(500).json(errorBody(err.message));
+        }
+    });
+
     return router;
 }
 
