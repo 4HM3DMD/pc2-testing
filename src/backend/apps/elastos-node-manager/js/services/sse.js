@@ -36,6 +36,16 @@
     // total horizon since the operator may legitimately be on a slow
     // recovering network.
     var MAX_RECONNECT_ATTEMPTS = 12;
+    // 0.5.104 audit Session 104 — watchdog timing. Server's heartbeat
+    // interval is 25s (SseHub HEARTBEAT_MS); we require at least 60s of
+    // silence before treating the connection as zombie. 60s = 2.4×
+    // heartbeat, so two missed heartbeats trigger reconnect — tight
+    // enough that operator notices a hung server within ~1 min, loose
+    // enough that a single dropped heartbeat (transient packet loss)
+    // doesn't churn the connection. Check tick is shorter than the
+    // window so the worst-case detection latency is ~75s.
+    var WATCHDOG_STALE_MS = 60_000;
+    var WATCHDOG_TICK_MS  = 15_000;
 
     /**
      * Browser EventSource can't send Authorization headers. Read the
@@ -77,6 +87,17 @@
         // This flag batches all sub/unsub deltas in the same microtask
         // into ONE reconnect at the end of the tick.
         this._reconnectScheduled = false;
+        // 0.5.104 audit Session 104 — heartbeat watchdog state.
+        // _lastMessageAt is bumped on every received SSE frame (topic
+        // events AND enm:heartbeat). _watchdogTimer ticks every
+        // WATCHDOG_TICK_MS and forces a reconnect when the gap exceeds
+        // WATCHDOG_STALE_MS. Covers the hung-server / dead-proxy
+        // scenarios where EventSource.onerror never fires because TCP
+        // stays open but the server is no longer sending. Pre-0.5.104
+        // the comment-line heartbeat couldn't reach JS, so this watchdog
+        // would have been blind.
+        this._lastMessageAt  = 0;
+        this._watchdogTimer  = null;
     }
 
     /**
@@ -227,6 +248,13 @@
         es.onopen = function () {
             clearTimeout(self._openTimer);
             self._openTimer = null;
+            // 0.5.104 audit Session 104 — seed the watchdog at open
+            // time so a fresh connection has a known baseline. Without
+            // this, a connection that opens but never receives a frame
+            // (immediate proxy hang) would compare against
+            // _lastMessageAt=0 and trigger reconnect on the first tick.
+            self._lastMessageAt = Date.now();
+            self._armWatchdog();
             // alpha.28.1 batch 91 (Round-29 audit, MED) — debounce the
             // counter reset. Previous shape eagerly reset
             // _connectAttempts to 0 on every onopen. A flapping
@@ -262,10 +290,23 @@
             }
             self._emitState('reconnecting');
         };
+        // 0.5.104 audit Session 104 — heartbeat listener. The server
+        // emits `event: enm:heartbeat` every 25s (SseHub._sendHeartbeats);
+        // we don't dispatch the payload to consumers, we just use it to
+        // bump the watchdog timestamp so a server that's idle on every
+        // topic still proves it's alive.
+        es.addEventListener('enm:heartbeat', function () {
+            self._lastMessageAt = Date.now();
+        });
         // Register a listener per subscribed topic. SSE 'event:' field values
         // map to addEventListener names exactly.
         this._topics.forEach(function (topic) {
             es.addEventListener(topic, function (ev) {
+                // 0.5.104 audit Session 104 — every topic event also
+                // counts as liveness, so even if the server skips a
+                // heartbeat under load the steady event stream resets
+                // the watchdog.
+                self._lastMessageAt = Date.now();
                 // alpha.28.1 batch 71 (Round-19B audit finding #5) —
                 // drop unparseable payloads instead of propagating the
                 // raw string as if it were a valid envelope. All
@@ -302,6 +343,38 @@
         this._es = es;
     };
 
+    /**
+     * @private
+     * 0.5.104 audit Session 104 — heartbeat watchdog. Ticks every
+     * WATCHDOG_TICK_MS (15s) and forces a reconnect when no SSE frame
+     * has arrived in WATCHDOG_STALE_MS (60s = 2.4× server heartbeat).
+     * Covers the failure modes EventSource.onerror misses: server
+     * event-loop blocked, nginx<>ENM connection dead while
+     * browser<>nginx stays open, cloud-network blackholing one side.
+     *
+     * The reconnect path runs through _scheduleReconnect so it batches
+     * with any pending subscribe/unsubscribe deltas and goes through
+     * the same backoff + give-up logic as a normal error reconnect.
+     * We do NOT manually drive a `_emitState('reconnecting')` here —
+     * _reconnect's _emitState call will fire on the next attempt.
+     */
+    EnmSse.prototype._armWatchdog = function () {
+        var self = this;
+        if (this._watchdogTimer) {
+            clearInterval(this._watchdogTimer);
+            this._watchdogTimer = null;
+        }
+        this._watchdogTimer = setInterval(function () {
+            if (!self._es) { return; }
+            var idleMs = Date.now() - self._lastMessageAt;
+            if (idleMs > WATCHDOG_STALE_MS) {
+                // Zombie connection. Force a reconnect so the operator
+                // gets a real signal (state pill → reconnecting).
+                self._scheduleReconnect();
+            }
+        }, WATCHDOG_TICK_MS);
+    };
+
     /** @private */
     EnmSse.prototype._closeNative = function () {
         if (this._openTimer) {
@@ -313,6 +386,13 @@
         if (this._stableOpenTimer) {
             clearTimeout(this._stableOpenTimer);
             this._stableOpenTimer = null;
+        }
+        // 0.5.104 audit Session 104 — clear watchdog so a stale tick
+        // doesn't fire mid-reconnect against the next EventSource and
+        // double-trigger a reconnect.
+        if (this._watchdogTimer) {
+            clearInterval(this._watchdogTimer);
+            this._watchdogTimer = null;
         }
         if (this._es) {
             try { this._es.close(); } catch (_) { /* swallow */ }

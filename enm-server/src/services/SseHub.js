@@ -23,8 +23,16 @@
  *   data: <JSON-encoded payload>
  *   <blank line>
  *
- * Heartbeat: comment line `: keepalive\n\n` every 25s so reverse proxies
- * (nginx, Cloudflare) don't kill idle connections.
+ * Heartbeat: `event: enm:heartbeat\n…` SSE frame every 25s. Two jobs:
+ *   (a) bytes-on-wire keep reverse proxies (nginx, Cloudflare) from
+ *       killing idle connections — same effect as the old comment-line
+ *       heartbeat, just visible to JavaScript.
+ *   (b) clients can listen for the event to detect zombie sockets where
+ *       TCP stays open but no data flows (server hung, proxy<>server
+ *       link dead). Pre-0.5.104 the heartbeat was a comment line which
+ *       SSE deliberately discards before reaching browser JS, so the
+ *       client had no signal of a frozen-but-connected server and
+ *       state pills showed "open" forever.
  */
 
 'use strict';
@@ -51,7 +59,17 @@ class SseHub {
         /** @type {Map<import('express').Response, { topics: Set<string>, walletAddress: string|null }>} */
         this.connections = new Map();
 
-        /** Monotonic event id so clients can use Last-Event-ID for resume. */
+        /**
+         * Monotonic event id. Emitted as the SSE `id:` field so clients
+         * see a strictly-increasing sequence across all publishes from
+         * one process. v0.5.104: ids let CLIENTS detect gaps after a
+         * reconnect (compare last-seen id to first id after reconnect)
+         * but the route handler does NOT honor `Last-Event-ID` for
+         * server-side replay — events published during a disconnect
+         * window are not buffered or re-delivered. If durable replay is
+         * needed in future, hook the buffer here and read the header
+         * in routes/events.js. Counter resets on process restart.
+         */
         this.eventId = 0;
 
         this._heartbeat = setInterval(() => this._sendHeartbeats(), HEARTBEAT_MS);
@@ -242,12 +260,29 @@ class SseHub {
         this.connections.delete(res);
     }
 
-    /** @private */
+    /**
+     * @private
+     * v0.5.104 — emit an explicit `event: enm:heartbeat` SSE frame
+     * instead of the pre-0.5.104 comment-line `:heartbeat`. The comment
+     * was invisible to browser JS (SSE protocol strips colon-prefixed
+     * lines before dispatching), so clients had no way to detect a
+     * frozen-but-TCP-alive server. The explicit event lets the client
+     * watchdog (services/sse.js _watchdogTimer) force a reconnect when
+     * >60s elapses without any frame — covering the
+     * hung-server / dead-proxy scenarios EventSource.onerror doesn't
+     * catch on its own. Still keeps reverse proxies happy because the
+     * bytes flow.
+     *
+     * Broadcast to every connection regardless of topic subscription —
+     * this is connection-level liveness, not a topic event.
+     */
     _sendHeartbeats() {
         const now = Date.now();
+        const id = ++this.eventId;
+        const frame = `event: enm:heartbeat\nid: ${id}\ndata: ${now}\n\n`;
         for (const res of this.connections.keys()) {
             try {
-                res.write(`: heartbeat ${now}\n\n`);
+                res.write(frame);
             } catch (_) {
                 this._unsubscribe(res);
             }
