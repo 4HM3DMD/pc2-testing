@@ -176,7 +176,7 @@ class SelfHealingEngine {
             return {
                 ok: false,
                 proposal,
-                error: `Proposal is no longer pending (status=${proposal.status}).`,
+                error: 'Proposal is no longer pending — refresh to see its current status.',
             };
         }
 
@@ -248,7 +248,7 @@ class SelfHealingEngine {
             return { ok: false, error: 'Proposal does not belong to this wallet.' };
         }
         if (proposal.status !== ProposalStore.STATUS.PENDING) {
-            return { ok: false, proposal, error: `Proposal is no longer pending (status=${proposal.status}).` };
+            return { ok: false, proposal, error: 'Proposal is no longer pending — refresh to see its current status.' };
         }
 
         const updated = await ProposalStore.reject(db, proposalId, reason);
