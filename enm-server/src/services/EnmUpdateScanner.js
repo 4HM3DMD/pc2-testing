@@ -65,6 +65,24 @@ function _readKnownGoodElaVersion() {
 }
 const FALLBACK_LATEST = _readKnownGoodElaVersion();
 
+// 0.5.111 audit Session 111 — read the User-Agent version segment from
+// package.json instead of hardcoding "0.2.0". Pre-0.5.111 the
+// User-Agent stayed at "elastos-node-manager/0.2.0" while the actual
+// shipped versions went through 0.4.x and 0.5.x — GitHub's analytics +
+// any operator-side log scraper saw a misleading version string.
+// Reading at module load is fine because package.json is bundled with
+// the server and changes require a redeploy anyway.
+function _readPackageVersion() {
+    try {
+        const pkg = require('../../package.json');
+        if (pkg && typeof pkg.version === 'string') {
+            return pkg.version;
+        }
+    } catch (_) { /* fall through */ }
+    return '0.0.0';
+}
+const USER_AGENT = 'elastos-node-manager/' + _readPackageVersion();
+
 function makeEnvelope({ current, latest, severity, status, releaseNotes, publishedAt, htmlUrl, lastCheckedAt, error, source }) {
     return {
         current:        current || null,
@@ -252,7 +270,16 @@ class EnmUpdateScanner {
                 status:        fallbackStatus,
                 source:        fallbackSource,
                 lastCheckedAt: startedAt,
-                error:         err && err.message ? err.message : String(err),
+                // 0.5.111 audit Session 111 — replaced raw err.message
+                // interpolation with a static fallback. Pre-0.5.111 the
+                // Tools tab consumed envelope.error and surfaced verbose
+                // Node network errors verbatim ("getaddrinfo ENOTFOUND
+                // api.github.com", certificate-mismatch text, etc.). The
+                // server-side logger.warn above retains err.message for
+                // diagnostics; the operator-visible envelope is the
+                // sanitized version. Matches audit-chain pattern from
+                // Sessions 64/67/79/81-84.
+                error:         'Could not reach GitHub. The next scheduled poll will retry.',
             });
             this._scheduleNext(startedAt);
             return this._envelope;
@@ -269,7 +296,7 @@ class EnmUpdateScanner {
     _fetchLatestRelease() {
         return new Promise((resolve, reject) => {
             const headers = {
-                'User-Agent':     'elastos-node-manager/0.2.0',
+                'User-Agent':     USER_AGENT,
                 'Accept':         'application/vnd.github+json',
                 'X-GitHub-Api-Version': '2022-11-28',
             };

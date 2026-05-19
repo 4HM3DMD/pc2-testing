@@ -112,32 +112,63 @@ class EthRpcClient {
                 res.on('data', (c) => chunks.push(c));
                 res.on('end', () => {
                     if (res.statusCode !== 200) {
-                        return reject(new Error(
+                        // 0.5.111 audit Session 111 — typed transport error.
+                        // HTTP non-200 from geth's RPC server means the
+                        // request reached the server but was rejected
+                        // (rate-limit, bad path, malformed body). Distinct
+                        // from "server not running" — callers can branch
+                        // on instanceof EthRpcUnreachableError below.
+                        return reject(new EthRpcTransportError(
                             `EthRpcClient: ${method} → HTTP ${res.statusCode}`,
                         ));
                     }
                     let parsed;
                     try { parsed = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
                     catch (err) {
-                        return reject(new Error(
+                        return reject(new EthRpcTransportError(
                             `EthRpcClient: ${method} → invalid JSON: ${err.message}`,
                         ));
                     }
                     if (parsed && parsed.error) {
                         const msg = (parsed.error && parsed.error.message)
                             || JSON.stringify(parsed.error);
-                        return reject(new Error(`EthRpcClient: ${method} → ${msg}`));
+                        // 0.5.111 audit Session 111 — typed method error.
+                        // Chain-side errors (method not found, invalid
+                        // params) — operator-meaningful; preserve the
+                        // message. Caller can recognize via instanceof
+                        // EthRpcMethodError without string-matching.
+                        return reject(new EthRpcMethodError(
+                            `EthRpcClient: ${method} → ${msg}`,
+                            parsed.error.code,
+                        ));
                     }
                     return resolve(parsed && parsed.result);
                 });
                 res.on('error', reject);
             });
             req.on('timeout', () => {
-                req.destroy(new Error(
+                req.destroy(new EthRpcTransportError(
                     `EthRpcClient: ${method} timed out after ${self.timeoutMs}ms`,
                 ));
             });
-            req.on('error', reject);
+            req.on('error', (err) => {
+                // 0.5.111 audit Session 111 — mirror EnmRpcClient's typed-
+                // error branching. ECONNREFUSED is the canonical "node
+                // process not running" signal — F-rules consume this to
+                // distinguish "chain down" from "chain alive but slow".
+                // Pre-0.5.111 every transport failure looked identical to
+                // callers (plain Error), so the dashboard couldn't tell
+                // an off chain from a flaky one and showed the same
+                // generic pill for both.
+                if (err && err.code === 'ECONNREFUSED') {
+                    return reject(new EthRpcUnreachableError(
+                        `EthRpcClient: ${method} → connection refused at ${self.host}:${self.port}`,
+                    ));
+                }
+                reject(new EthRpcTransportError(
+                    `EthRpcClient: ${method} → ${err && err.message ? err.message : String(err)}`,
+                ));
+            });
             req.write(body);
             req.end();
         });
@@ -249,6 +280,26 @@ class EthRpcClient {
     }
 }
 
+// 0.5.111 audit Session 111 — typed error classes mirroring
+// EnmRpcClient's hierarchy. Pre-0.5.111 every failure path threw a plain
+// Error, so callers (chain-card health pill, HealthChecker F-rules)
+// couldn't tell "chain process down" from "method not supported" from
+// "timeout" without string-matching the message. Now: branch on
+// instanceof. Existing callers that just catch any Error still work —
+// these are subclasses.
+class EthRpcError extends Error {
+    constructor(message) { super(message); this.name = 'EthRpcError'; }
+}
+class EthRpcUnreachableError extends EthRpcError {
+    constructor(message) { super(message); this.name = 'EthRpcUnreachableError'; }
+}
+class EthRpcTransportError extends EthRpcError {
+    constructor(message) { super(message); this.name = 'EthRpcTransportError'; }
+}
+class EthRpcMethodError extends EthRpcError {
+    constructor(message, code) { super(message); this.name = 'EthRpcMethodError'; this.code = code; }
+}
+
 /**
  * Parse a hex-encoded number (with or without "0x" prefix) into a JS Number.
  * Throws if the value is out of safe-integer range so silent overflow is
@@ -274,6 +325,13 @@ function parseHexNumber(hex, ctx) {
 module.exports = {
     EthRpcClient,
     DEFAULT_TIMEOUT_MS,
+    // 0.5.111 audit Session 111 — typed error classes (parity with
+    // EnmRpcClient). Callers can `instanceof EthRpcUnreachableError`
+    // to branch on the ECONNREFUSED case without string-matching.
+    EthRpcError,
+    EthRpcUnreachableError,
+    EthRpcTransportError,
+    EthRpcMethodError,
     // Exported for tests.
     _internal: { parseHexNumber },
 };
