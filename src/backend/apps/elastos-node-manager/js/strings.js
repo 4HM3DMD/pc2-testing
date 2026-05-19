@@ -816,7 +816,6 @@
             // inline English. Both placeholder + aria-label use the
             // same string for visible/AT parity.
             anti_snipe_label:  'Anti-snipe password',
-            expires_in:        'Expires in {minutes} min',
             expired:           'Expired',
             executed:          'Executed',
             rejected:          'Rejected',
@@ -836,13 +835,6 @@
 
         common: {
             close: 'Close',
-            cancel: 'Cancel',
-            save: 'Save',
-            edit: 'Edit',
-            apply: 'Apply',
-            details: 'Details',
-            yes: 'Yes',
-            no: 'No',
             loading: 'Loading...',
             // alpha.28.1 — referenced by enmRunOnce labels in settings-tab
             // save handlers and by validator-registration-card's activate
@@ -851,11 +843,9 @@
             // fallbacks scattered through callers.
             saving: 'Saving…',
             failed: 'Failed',
-            empty: 'Empty',
             // alpha.28.1 batch 76 — "Done" transient button label used
             // by technical-view's _runMaintenance success branch (1.5s
             // flash before reverting to the original "Run" label).
-            done:   'Done',
         },
 
         settings: {
