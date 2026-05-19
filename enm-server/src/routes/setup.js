@@ -1370,19 +1370,19 @@ function build(extensionHandle) {
         }
     });
 
-    // beta.0.4.6 — GET /api/enm/setup/install-council/preflight —
-    // run all the cheap checks BEFORE the operator commits to an
-    // install. Each check returns { id, label, ok, message, severity }.
-    // Card D.5 in the wizard renders them as a checklist; Continue
-    // stays disabled until every required check is green.
+    // GET /api/enm/setup/install-council/preflight — environment +
+    // network readiness gate for Card 5 (Confirm + install). Each check
+    // returns { id, label, ok, message, severity }. Card 5 renders them
+    // as a checklist; Install everything stays disabled until every
+    // required check is green.
     //
-    // Checks:
-    //   - mainchain-alive          (process + RPC reachable)
-    //   - mainchain-keystore-pw    (envelope decrypts via EnmCrypto)
-    //   - disk-space               (≥ 20 GB free in enmDataDir)
+    // Checks (chain-state checks live in the orchestrator runStep
+    // handlers, NOT here — preflight is environment/network only):
+    //   - disk-space               (≥ 250 GB free in enmDataDir)
     //   - github-reachable         (HEAD raw.githubusercontent.com)
     //   - elastos-downloads        (HEAD download.elastos.io)
-    //   - arbiter-binary-url       (HEAD elastos-arbiter index)
+    //   - node-data-reachable      (HEAD node-data.elastos.io)
+    //   - nodejs-reachable         (HEAD nodejs.org/dist, recommended)
     //
     // Cheap probes — each has a short timeout. Total <5s on a healthy
     // host. Cached for 30s so repeated polls from the wizard don't
@@ -2492,49 +2492,16 @@ async function runCouncilPreflight(args) {
     const https = require('node:https');
     const checks = [];
 
-    // 1. Mainchain configured + alive.
-    let mainAlive = false;
-    let mainCfg = null;
-    try {
-        const cfg = await ConfigStore.load();
-        mainCfg = cfg && cfg.chains && cfg.chains.mainchain;
-        if (mainCfg) {
-            const ChainRegistry = require('../services/ChainRegistry');
-            try {
-                const st = ChainRegistry.getProcessService().statusSync('mainchain');
-                mainAlive = !!(st && st.alive);
-            } catch (_) { mainAlive = false; }
-        }
-    } catch (_) { /* mainCfg stays null */ }
-    checks.push({
-        id: 'mainchain-alive',
-        label: 'Mainchain configured + running',
-        ok: mainAlive,
-        message: mainAlive ? 'mainchain process is up'
-               : mainCfg ? 'mainchain configured but not running — start it before continuing'
-                         : 'mainchain not configured — finish Card D first',
-        severity: 'required',
-    });
-
-    // 2. Mainchain keystore password decryptable.
-    let pwOk = false;
-    let pwMsg = 'no envelope on file';
-    if (mainCfg && mainCfg.dpos && mainCfg.dpos.keystorePasswordEncrypted) {
-        try {
-            EnmCrypto.decrypt(mainCfg.dpos.keystorePasswordEncrypted);
-            pwOk = true;
-            pwMsg = 'envelope decrypts cleanly';
-        } catch (err) {
-            pwMsg = 'cannot decrypt: ' + err.message;
-        }
-    }
-    checks.push({
-        id: 'mainchain-keystore-pw',
-        label: 'Mainchain keystore password readable',
-        ok: pwOk,
-        message: pwMsg,
-        severity: 'required',
-    });
+    // beta.0.4.9 — `mainchain-alive` + `mainchain-keystore-pw` checks
+    // were dropped here. In v0.4.6 the Council install ran AFTER a
+    // completed BPoS-style mainchain setup, so requiring mainchain up
+    // + keystore-readable was correct. In v0.4.7.1+ the orchestrator
+    // INSTALLS mainchain itself (steps install-mainchain-binary /
+    // -keystore / -cfg before any sidechain work), so those checks
+    // were guaranteed-fail blockers on the redesigned wizard path.
+    // The orchestrator's own runStep handlers fail loudly if anything
+    // they need is missing — preflight just gates environment + network
+    // readiness, not chain state.
 
     // 3. Disk space ≥ 250 GB in enmDataDir.
     // beta.0.4.7 — bumped from 20 GB. Council snapshots are ~50 GB
