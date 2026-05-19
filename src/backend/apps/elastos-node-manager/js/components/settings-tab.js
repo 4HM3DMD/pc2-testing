@@ -1043,12 +1043,15 @@
     /** @private */
     SettingsTab.prototype._buildNetworkSection = function (t) {
         var self = this;
+        // 0.5.34 audit Session 34 — dropped helpCodes config-path leak
+        // ('chains.mainchain.dpos.ipAddressMode' + 'ipAddressManual').
+        // Operators don't edit the config file directly; the "Restart
+        // required" warn-tag already conveys the save consequence.
         var sec = makeSection({
             id: 'network',
             icon: '⇄',
             title: t('settings.heading_network'),
-            help: 'Mainchain DPoS IP announcement. Writes ',
-            helpCodes: ['chains.mainchain.dpos.ipAddressMode', 'ipAddressManual'],
+            help: 'Tells other DPoS peers which IP to dial this node at. Save requires a chain restart.',
             tag: { kind: 'warn', label: 'Restart required' },
         });
         this._network = {
@@ -1070,11 +1073,13 @@
             onChange: function (v) { self._onNetworkModeChange(v); },
         });
         this._network.seg = seg;
+        // 0.5.34 audit Session 34 — dropped helpCodes HTTP-path leak
+        // ('GET /system/extip'). Operators don't curl this endpoint;
+        // they want to know what the two modes do, not the API behind
+        // the probe. Same Session 33 leak-fix pattern.
         sec.body.appendChild(makeFormRow({
             label: 'External IP detection',
-            help: 'Auto = ENM queries ',
-            helpCodes: ['GET /system/extip'],
-            helpSuffix: ' on each restart. Manual = pin a static address.',
+            help: 'Auto: ENM detects the external IP automatically on each restart. Manual: pin a fixed address.',
             control: seg.el,
         }));
 
