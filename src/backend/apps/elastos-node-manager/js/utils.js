@@ -504,7 +504,22 @@
                     if (opts.notifications) {
                         opts.notifications.warning(
                             opts.failTitle || 'Copy unavailable',
-                            opts.failBody || 'Browser blocked clipboard access. The value is selected — press Ctrl-C (or ⌘-C on Mac) to copy.'
+                            // 0.5.74 audit Session 74 — aligned with the
+                            // copyToClipboard helper's default at L349
+                            // (canonical Mac-parity wording from Session
+                            // 49). Pre-0.5.74 the copyButton default
+                            // claimed "The value is selected" but the
+                            // selection only happens when the caller
+                            // passes getDisplayEl — without it, the
+                            // claim was false. All 6 current callers
+                            // (node-identity-card / setup-conversation /
+                            // validator-registration-card / settings-tab
+                            // x2 / tools-update-card) override failBody
+                            // or pass getDisplayEl, so the misleading
+                            // default never fired in practice. Aligning
+                            // both helpers' defaults so future callers
+                            // get an honest default either way.
+                            opts.failBody || 'Browser blocked clipboard access. Select the value and press Ctrl-C (or ⌘-C on Mac).'
                         );
                     }
                 },
