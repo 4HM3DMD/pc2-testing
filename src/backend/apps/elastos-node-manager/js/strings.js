@@ -443,22 +443,23 @@
                 card_7: {
                     title:           '🎉 Your Council node is live',
                     title_bpos:      '🎉 Your BPoS supernode is ready',
-                    // 0.5.7 audit Session 7 — clearer "what next" guidance.
-                    // Pre-0.5.7 copy said "register your wallet when you're
-                    // ready" with no map of HOW. Operators new to Elastos
-                    // had no pointer to the off-server Essentials wallet
-                    // flow. New copy names Essentials explicitly + says the
-                    // node-identity tile on the dashboard surfaces the
-                    // public key they paste into it.
+                    // 0.5.27 audit Session 27 — fixed stale pointer.
+                    // Pre-0.5.27 referenced "Producer Identity tile" but
+                    // that component (producer-identity.js) was dropped
+                    // in beta.3.15. The actual dashboard card is "Node
+                    // identity" (node-identity-card.js); the row is
+                    // labeled "Node public key" with a "Share with
+                    // Essentials" pill. Display-name parity: "Main chain"
+                    // replaces lowercase "mainchain" raw id.
                     sub:             'All 8 services are installed and starting up. On the dashboard, '
                                    + 'switch the chain selector to "Multi-chain overview" to watch them '
-                                   + 'come online. To earn rewards on the mainchain, paste your node '
-                                   + 'public key (shown on the Producer Identity tile) into Elastos '
-                                   + 'Essentials and register as a BPoS supernode.',
-                    sub_bpos:        'Mainchain is installed and starting up. On the dashboard, the '
-                                   + 'Producer Identity tile shows your node public key — paste that '
-                                   + 'into Elastos Essentials and register as a BPoS supernode to be '
-                                   + 'voted in by the community.',
+                                   + 'come online. To earn rewards on Main chain, copy the Node public '
+                                   + 'key from the Node identity card and paste it into Elastos '
+                                   + 'Essentials when registering as a BPoS supernode.',
+                    sub_bpos:        'Main chain is installed and starting up. On the dashboard, the '
+                                   + 'Node identity card shows your Node public key — copy that and '
+                                   + 'paste it into Elastos Essentials, then register as a BPoS '
+                                   + 'supernode to be voted in by the community.',
                     cta:             'Open dashboard',
                 },
             },
