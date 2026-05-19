@@ -454,7 +454,7 @@
             resetMs: 1400,
             notifications: modalSelf && modalSelf.notifications,
             failTitle: 'Copy unavailable',
-            failBody: 'Browser blocked clipboard access. Select the command text and copy manually.',
+            failBody: 'Browser blocked clipboard access. Select the command text and press Ctrl-C (or ⌘-C on Mac).',
         });
         copyBtn.classList.remove('enm-btn-secondary');
         copyBtn.classList.add('enm-btn-primary', 'upd-copy');
@@ -474,7 +474,7 @@
             '<header class="enm-tools-update-head">'
             +   '<h3>Binary update</h3>'
             +   '<p class="enm-stub" style="margin:0;text-align:left;padding:0">'
-            +     'Update info endpoint returned an error. Will retry in 6 hours.'
+            +     'Couldn\'t check for binary updates. Will retry in 6 hours.'
             +   '</p>'
             + '</header>';
     };
