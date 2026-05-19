@@ -793,7 +793,31 @@
     SetupConversation.prototype._renderCard3GeneratePrompt = function (body, seq) {
         var t = root.enmT;
         var self = this;
-        body.innerHTML = '';
+        // 0.5.105 audit Session 105 (Session 50 backlog #4) — recovery
+        // link for the localStorage-clear-mid-setup case. Pre-0.5.105,
+        // operators who copied their Card 3 password to a password
+        // manager and then cleared localStorage (browser settings reset,
+        // third-party-cookie purge, sandbox switch) had no way to
+        // resume with their saved password — the wizard restarted at
+        // Card 1 and Card 3 always offered Generate, never Paste.
+        // Clicking Generate produced a NEW password that didn't match
+        // the password manager entry. Operator only discovered the
+        // mismatch much later (Settings → Backup unlock fails).
+        //
+        // The Session 103 existing-keystore branch covers the
+        // post-install version of this gap, but the localStorage-clear
+        // can happen BEFORE the install ran (keystore.dat doesn't yet
+        // exist), so /identity returns keystoreExists=false and we
+        // wouldn't otherwise offer the paste input. The "Use a password
+        // I saved earlier" link below the Generate button surfaces the
+        // paste affordance unconditionally — operator self-selects.
+        body.innerHTML = ''
+            + '<div class="enm-master-pw-recover-row">'
+            +   '<button type="button" class="enm-link-button" '
+            +     'data-action="paste-saved">'
+            +     escapeHtml(t('friendly.setup.card_3.cta_paste_saved_link'))
+            +   '</button>'
+            + '</div>';
         this._continueBtn.hidden = false;
         this._continueBtn.disabled = false;
         this._continueBtn.textContent = t('friendly.setup.card_3.cta_generate');
@@ -805,6 +829,106 @@
             try { window.localStorage.setItem('enm:master-pw', pw); } catch (_) {}
             self._renderCard3Reveal(body, seq, pw);
         });
+        var pasteLink = body.querySelector('[data-action="paste-saved"]');
+        if (pasteLink) {
+            pasteLink.addEventListener('click', function () {
+                if (self._destroyed || !self._stillRendering(seq)) { return; }
+                self._renderCard3PasteSaved(body, seq);
+            });
+        }
+    };
+
+    /**
+     * Render the "paste a password you saved earlier" recovery branch.
+     * Reached from the Generate prompt's optional link. Distinct from
+     * _renderCard3ExistingKeystore (Session 103) which only fires when
+     * a keystore.dat is already on disk; this branch fires when no
+     * keystore exists yet but the operator has a saved password from a
+     * prior wizard run they couldn't complete (e.g. localStorage
+     * cleared between Card 3 and Card 5, browser closed without
+     * finishing, machine swap).
+     *
+     * Same downstream as _renderCard3ExistingKeystore — store the
+     * pasted value as _masterPassword + localStorage stash + route into
+     * _renderCard3Reveal. No verification (no keystore to test
+     * against). The install will use this password verbatim when it
+     * creates the keystore at Card 6.
+     *
+     * Includes a "Generate new instead" back-link in case the operator
+     * decided after clicking the recovery link that they don't actually
+     * have a saved password and want a fresh one. The link doesn't
+     * appear in _renderCard3ExistingKeystore because flipping back to
+     * generate there would create a keystore-vs-password mismatch.
+     * @private
+     */
+    SetupConversation.prototype._renderCard3PasteSaved = function (body, seq) {
+        var t = root.enmT;
+        var self = this;
+        body.innerHTML = ''
+            + '<div class="enm-password-warning enm-master-pw-warning" role="alert">'
+            +   '<span class="enm-password-warning-icon" aria-hidden="true">ℹ</span>'
+            +   '<span class="enm-password-warning-body">'
+            +     escapeHtml(t('friendly.setup.card_3.paste_saved_warning'))
+            +   '</span>'
+            + '</div>'
+            + '<label class="enm-council-form-row enm-master-pw-existing-row">'
+            +   '<span class="enm-council-form-label">'
+            +     escapeHtml(t('friendly.setup.card_3.paste_saved_input_label'))
+            +   '</span>'
+            +   '<input type="password" id="enm-wiz-3-saved-pw" '
+            +     'class="enm-council-form-input" '
+            +     'autocomplete="off" spellcheck="false" '
+            +     'placeholder="' + escapeHtml(t('friendly.setup.card_3.existing_input_placeholder')) + '" '
+            +     'aria-describedby="enm-wiz-3-saved-hint enm-wiz-3-saved-err">'
+            +   '<span class="enm-council-form-hint" id="enm-wiz-3-saved-hint">'
+            +     escapeHtml(t('friendly.setup.card_3.paste_saved_input_hint'))
+            +   '</span>'
+            +   '<span class="enm-council-form-error" id="enm-wiz-3-saved-err" hidden></span>'
+            + '</label>'
+            + '<div class="enm-master-pw-recover-row">'
+            +   '<button type="button" class="enm-link-button" '
+            +     'data-action="back-to-generate">'
+            +     escapeHtml(t('friendly.setup.card_3.cta_back_to_generate'))
+            +   '</button>'
+            + '</div>';
+
+        var inputEl = body.querySelector('#enm-wiz-3-saved-pw');
+        var errEl   = body.querySelector('#enm-wiz-3-saved-err');
+
+        var newContinue = this._continueBtn.cloneNode(false);
+        newContinue.hidden = false;
+        newContinue.disabled = true;
+        newContinue.textContent = t('friendly.setup.card_3.cta_use_saved');
+        this._continueBtn.parentNode.replaceChild(newContinue, this._continueBtn);
+        this._continueBtn = newContinue;
+
+        function showErr(msg) {
+            if (errEl) { errEl.textContent = msg || ''; errEl.hidden = !msg; }
+        }
+        function trim(s) { return String(s || '').trim(); }
+        inputEl.addEventListener('input', function () {
+            self._continueBtn.disabled = trim(inputEl.value).length === 0;
+            showErr('');
+        });
+        this._continueBtn.addEventListener('click', function onUseSaved() {
+            if (self._destroyed || !self._stillRendering(seq)) { return; }
+            var pw = trim(inputEl.value);
+            if (pw.length < 8 || pw.length > 64) {
+                showErr(t('friendly.setup.card_3.existing_input_err_length'));
+                return;
+            }
+            self._continueBtn.removeEventListener('click', onUseSaved);
+            self._masterPassword = pw;
+            try { window.localStorage.setItem('enm:master-pw', pw); } catch (_) {}
+            self._renderCard3Reveal(body, seq, pw);
+        });
+        var backLink = body.querySelector('[data-action="back-to-generate"]');
+        if (backLink) {
+            backLink.addEventListener('click', function () {
+                if (self._destroyed || !self._stillRendering(seq)) { return; }
+                self._renderCard3GeneratePrompt(body, seq);
+            });
+        }
     };
 
     /**

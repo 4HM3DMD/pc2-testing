@@ -382,6 +382,28 @@
                     existing_input_err_length: 'Master passwords are at least 8 characters. Check that '
                                              + 'you pasted the full value without trailing spaces.',
                     cta_use_existing:          'Continue with existing keystore',
+                    // 0.5.105 audit Session 105 — Session 50 backlog #4.
+                    // Recovery flow for the localStorage-clear-mid-setup
+                    // case: operator copied the Card 3 password to their
+                    // password manager, then localStorage got cleared
+                    // before the install ran (no keystore.dat exists
+                    // yet, so the Session 103 existing-keystore branch
+                    // doesn't trigger). The "Use a password I saved
+                    // earlier" link below the Generate button surfaces
+                    // a paste input so the operator can resume with
+                    // their saved password instead of regenerating and
+                    // making their password manager entry stale.
+                    cta_paste_saved_link:    'Use a password I saved earlier',
+                    paste_saved_warning:     'Paste the master password you saved during a previous setup. '
+                                           + 'No keystore was created yet, so any value works — the install '
+                                           + 'will use whatever you paste verbatim. Pulling straight from a '
+                                           + 'password manager avoids typos that would make your saved '
+                                           + 'entry useless later.',
+                    paste_saved_input_label: 'Saved master password',
+                    paste_saved_input_hint:  'Same length sanity check as the auto-generated value (8–64 '
+                                           + 'characters). No verification at this step.',
+                    cta_use_saved:           'Continue with saved password',
+                    cta_back_to_generate:    'Generate a new one instead',
                 },
                 card_4: {
                     title:           'Your wallet address',
