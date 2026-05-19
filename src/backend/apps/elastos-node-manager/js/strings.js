@@ -1517,7 +1517,13 @@
             // through escapeHtml at the call site.
             versions_line:         'Installed {current} → available {latest}',
             update_btn:            'Update via shell',
-            update_help:           'Opens a copy-paste-ready command. Apply-in-place (no shell required) lands in alpha.11+.',
+            // 0.5.33 audit Session 33 — dropped stale "Apply-in-place ...
+            // lands in alpha.11+" promise. Verified by grep across
+            // enm-server source: the apply-in-place feature was never
+            // built, and ENM is at v0.5.x so the alpha.11+ marker is
+            // doubly stale. 5th stale-pointer bug of the audit chain
+            // (parallel to v0.5.27 Card 7, v0.5.30 chain-selector).
+            update_help:           'Opens a copy-paste-ready command you\'ll run on the server.',
             // Relative-time-suffix used by the "Last checked" span.
             // {time} carries the human substring ("5 min ago").
             released_when:         'released {time}',
@@ -1538,9 +1544,15 @@
             modal_copy_btn_aria:   'Copy update shell command',
             modal_explainer_label: 'What does this do?',
             modal_step_download:   'Downloads ela {version} from GitHub.',
-            modal_step_uninstall:  'Uninstalls the old ENM bundle via <code>DELETE /api/installed-apps</code> (chain data + keystore safe under <code>extensions/elastos-node-manager/</code>).',
+            // 0.5.33 audit Session 33 — dropped HTTP method/path leak
+            // (DELETE /api/installed-apps + extensions/elastos-node-
+            // manager/). Operators reading "what does this do?" want
+            // safety reassurance, not REST semantics.
+            modal_step_uninstall:  'Removes the old ENM files. Your chain data and keystore stay safe in their own folder.',
             modal_step_reinstall:  'Reinstalls with the new binary; pc2-node spawns it under the supervisor.',
-            modal_step_healthcheck:"Health-checks for 24s; auto-rollback if the new binary doesn't come up.",
+            // 0.5.33 audit Session 33 — "24s" → "24 seconds" (dev
+            // shorthand for operator copy).
+            modal_step_healthcheck:"Checks for 24 seconds that the new ENM is healthy; auto-rolls back if it doesn't come up.",
             modal_release_notes:   'Release notes: {githubLink}',
         },
 
