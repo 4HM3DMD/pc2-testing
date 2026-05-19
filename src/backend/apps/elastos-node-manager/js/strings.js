@@ -516,8 +516,9 @@
             // Round-7 i18n audit acbcec6b.
             backendUnreachable: 'ENM backend unavailable',
             backendHelp:
-                'The enm-server sidecar at :4180 is not responding. On the host, run '
-                + '`docker compose logs enm-server` to investigate.',
+                'The ENM extension inside pc2-node is not responding. Reload to retry. '
+                + 'If this keeps happening, ask whoever manages your PC2 server to check '
+                + 'the pc2-node service is running.',
             // alpha.28.1 — offline override surfaced by app._showError when
             // navigator.onLine === false. Kept in the same family so the
             // copy can move together when localised.
