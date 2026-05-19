@@ -346,7 +346,7 @@
         var btn = o.btn || null;
         var nf  = o.notifications || null;
         var failTitle = o.failTitle || 'Copy unavailable';
-        var failBody  = o.failBody  || 'Browser blocked clipboard access. Select the text and copy manually.';
+        var failBody  = o.failBody  || 'Browser blocked clipboard access. Select the value and press Ctrl-C (or ⌘-C on Mac).';
         var hasClipboard = !!(typeof navigator !== 'undefined'
             && navigator.clipboard
             && navigator.clipboard.writeText);
