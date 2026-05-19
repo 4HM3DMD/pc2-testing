@@ -858,17 +858,16 @@
         // Batch 29 already deleted the matching CSS cluster.
 
         notification: {
-            severity_info:    'Info',
-            severity_warning: 'Warning',
-            severity_critical: 'Critical',
-            severity_healing: 'Self-healing',
-            // alpha.28.1 batch 38 — SR-only severity prefix (batch 7
-            // introduced these inline in notifications.js renderToast).
-            // Kept distinct from severity_* above because the SR
-            // version reads more naturally aloud ("Notice: …" beats
-            // "Info: …") and "Action needed" is clearer than the
-            // technical "Self-healing" when announced to a user who
-            // can't see the visual amber stripe.
+            // 0.5.137 audit Session 137 — visible-text severity_* keys
+            // dropped (severity_info / severity_warning / severity_critical
+            // / severity_healing). Zero references anywhere in the tree —
+            // neither literal `notification.severity_info` nor dynamic
+            // `'notification.severity_' + sev`. The visible toast badges
+            // get their text from the inline notification body / CSS-
+            // driven colour stripe, not from a translated severity label.
+            // The sr_* variants below ARE alive — notifications.js:396
+            // constructs `'notification.sr_' + sev` for the SR-only
+            // prefix (per alpha.28.1 batch 38).
             sr_info:     'Notice',
             sr_warning:  'Warning',
             sr_critical: 'Critical',
