@@ -51,7 +51,29 @@ async function append(db, entry) {
 
     const ts = Date.now();
     const redactedPayload = entry.payload ? redactSensitive(entry.payload) : null;
-    const payloadJson = redactedPayload ? JSON.stringify(redactedPayload) : null;
+    // 0.5.112 audit Session 112 — guard against circular-reference
+    // payloads. Pre-0.5.112 JSON.stringify could throw if a caller
+    // (a future SelfHealingEngine extension or a test fixture) passed
+    // an object with cycles — the throw aborts append() before the
+    // INSERT runs, so the audit trail loses the row entirely.
+    // Healing decisions still execute; they just become invisible
+    // for audit / SSE. With this guard the row still gets written;
+    // only the payload diagnostic is null'd out and a stderr warning
+    // points the operator at the unserializable payload.
+    let payloadJson = null;
+    if (redactedPayload) {
+        try {
+            payloadJson = JSON.stringify(redactedPayload);
+        } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn(
+                `${ENM_LOG_PREFIX} EnmAuditLog.append: payload not serializable, `
+                + `writing row with payload_json=NULL (caller=${entry.executor || 'unknown'}, `
+                + `rule=${entry.ruleId || 'none'}): ${err.message}`,
+            );
+            payloadJson = null;
+        }
+    }
 
     // Defence in depth: lowercase EVM-shaped wallet addresses so a future
     // caller passing mixed case can't accidentally produce a row that doesn't

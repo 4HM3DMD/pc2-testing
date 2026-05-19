@@ -202,12 +202,20 @@ async function runFullDiagnose(deps) {
                     ],
                 });
             }
-        } catch (err) {
+        } catch (_) {
+            // 0.5.112 audit Session 112 — replaced err.message with a
+            // static fallback. After Session 110 the EnmBinaryLocator
+            // smokeTest doesn't throw for the common spawn failures
+            // (those return structured non-ok results), so reaching
+            // this catch means something unexpected — and unexpected
+            // err.message strings shouldn't leak into the operator-
+            // facing detail field. The server-side log.debug below
+            // retains the diagnostic for maintainers.
             findings.push({
                 id: 'binary-smoke',
                 status: STATUS.UNKNOWN,
                 title: 'Could not smoke-test the binary',
-                detail: err.message,
+                detail: 'An unexpected error blocked the version check. The binary may be present but unreadable, or the host may be under heavy load — try diagnosing again in a minute.',
             });
         }
     }
@@ -246,12 +254,18 @@ async function runFullDiagnose(deps) {
                 data: c.details,
             });
         }
-    } catch (err) {
+    } catch (_) {
+        // 0.5.112 audit Session 112 — static fallback. HostConflictScanner
+        // throwing is unexpected (its own probes catch their own errors)
+        // — reaching this branch means infrastructure failure (fs probe
+        // refusal, sub-shell unavailable) rather than an operator-
+        // actionable condition. err.message would be Node-internal
+        // wording with no recovery hint.
         findings.push({
             id: 'host-conflict-scan',
             status: STATUS.UNKNOWN,
             title: 'Host conflict scan failed',
-            detail: err.message,
+            detail: 'An unexpected error blocked the host probe. The chain may still be runnable; try diagnosing again or restart enm-server to clear transient state.',
         });
     }
 
