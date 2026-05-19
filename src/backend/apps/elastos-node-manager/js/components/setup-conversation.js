@@ -1372,23 +1372,30 @@
     // directive 2026-05-19). install-binaries-parallel covers ESC +
     // EID + PG + Arbiter binaries; download-snapshots-parallel covers
     // all 4 snapshots if useSnapshots=true.
+    //
+    // 0.5.24 audit Session 24 — labels rewritten to progressive verb
+    // form so every row reads as an action ("Installing X" rather
+    // than "X (config)"). Implementation leaks dropped: "(in parallel)",
+    // "(ela binary)", "(crosschain_*.js)" — operator doesn't care.
+    // Display name "Main chain" replaces raw "mainchain" id (parity
+    // with chain_name.* convention used everywhere else since v0.5.18).
     var COUNCIL_STEP_LABELS = {
-        'council-strategy':           'Council strategy (Layer 1)',
-        'install-mainchain-binary':   'Installing mainchain (ela binary)',
-        'install-mainchain-keystore': 'Creating mainchain keystore',
-        'install-mainchain-cfg':      'Writing mainchain config',
-        'install-esc-cfg':            'Smart Chain (ESC) — config',
-        'install-eid-cfg':            'Identity Chain (EID) — config',
-        'install-pg-cfg':             'PG Chain — config',
-        'download-snapshots-parallel':'Download snapshots (in parallel)',
-        'install-binaries-parallel':  'Download binaries (in parallel)',
-        'install-node-runtime':       'Node.js runtime',
-        'download-oracle-scripts':    'Oracle scripts (crosschain_*.js)',
-        'install-esc-oracle':         'ESC Oracle',
-        'install-eid-oracle':         'EID Oracle',
-        'install-pg-oracle':          'PG Oracle',
-        'install-arbiter-cfg':        'Arbiter — config',
-        'start-chains':               'Start all chains',
+        'council-strategy':           'Planning Council install',
+        'install-mainchain-binary':   'Installing Main chain',
+        'install-mainchain-keystore': 'Creating Main chain keystore',
+        'install-mainchain-cfg':      'Writing Main chain config',
+        'install-esc-cfg':            'Configuring Smart Chain (ESC)',
+        'install-eid-cfg':            'Configuring Identity Chain (EID)',
+        'install-pg-cfg':             'Configuring PG Chain',
+        'download-snapshots-parallel':'Downloading snapshots',
+        'install-binaries-parallel':  'Downloading sidechain binaries',
+        'install-node-runtime':       'Setting up Node.js (for oracles)',
+        'download-oracle-scripts':    'Downloading oracle scripts',
+        'install-esc-oracle':         'Installing ESC Oracle',
+        'install-eid-oracle':         'Installing EID Oracle',
+        'install-pg-oracle':          'Installing PG Oracle',
+        'install-arbiter-cfg':        'Configuring Arbiter Service',
+        'start-chains':               'Starting all chains',
     };
     var COUNCIL_STEP_ORDER = [
         'council-strategy',
@@ -1408,10 +1415,13 @@
         'install-arbiter-cfg',
         'start-chains',
     ];
+    // 0.5.24 audit Session 24 — same progressive-verb + display-name
+    // pass as the Council labels above. Keys unchanged so BPoS-only
+    // backend flow is untouched (operator rule 4 reference behavior).
     var BPOS_STEP_LABELS = {
-        'install-mainchain': 'Install mainchain binary',
-        'finalize-setup':    'Finalize configuration',
-        'start-chain':       'Start the mainchain',
+        'install-mainchain': 'Installing Main chain',
+        'finalize-setup':    'Finalizing configuration',
+        'start-chain':       'Starting Main chain',
     };
     var BPOS_STEP_ORDER = ['install-mainchain', 'finalize-setup', 'start-chain'];
 
