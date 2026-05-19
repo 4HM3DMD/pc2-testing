@@ -1065,6 +1065,13 @@
             : t('friendly.setup.card_5.cta_bpos');
 
         function runPreflight() {
+            // 0.5.21 audit Session 21 — disable Re-run button during in-
+            // flight request. Pre-0.5.21 a fast double-click fired two
+            // parallel preflight calls; whichever resolved last won the
+            // DOM. _stillRendering(seq) already absorbs stale callbacks
+            // when navigating between cards, but same-card double-fire
+            // races weren't gated.
+            rerunBtn.disabled = true;
             listEl.innerHTML = '<li class="enm-preflight-row" data-state="checking">'
                 + '<span class="enm-preflight-icon">⟳</span>'
                 + '<span class="enm-preflight-text">'
@@ -1079,16 +1086,34 @@
             self.api.get(endpoint, { skipCache: true })
                 .then(function (result) {
                     if (self._destroyed || !self._stillRendering(seq)) { return; }
+                    rerunBtn.disabled = false;
                     self._renderCard5Preflight(listEl, result);
                 })
                 .catch(function (err) {
                     if (self._destroyed || !self._stillRendering(seq)) { return; }
+                    rerunBtn.disabled = false;
+                    // 0.5.21 audit Session 21 — error row now matches the
+                    // visual structure of success rows (label + message)
+                    // and surfaces a retry hint pointing at the Re-run
+                    // button. Pre-0.5.21 dumped "Pre-flight call failed:
+                    // Failed to fetch" in a flat <span> with no recovery
+                    // affordance.
+                    var errMsg = (err && err.message) || String(err);
+                    var labelText = t('friendly.setup.card_5.err_label')
+                        || 'Pre-flight check could not run';
+                    var bodyTpl = t('friendly.setup.card_5.err_body')
+                        || 'Network or server problem: {error}';
+                    var bodyText = bodyTpl.replace('{error}', errMsg);
+                    var retryHint = t('friendly.setup.card_5.err_retry_hint')
+                        || 'Press Re-run pre-flight above to try again.';
                     listEl.innerHTML = '<li class="enm-preflight-row" data-state="error">'
                         + '<span class="enm-preflight-icon">✗</span>'
-                        + '<span class="enm-preflight-text">'
-                        + escapeHtml(t('friendly.setup.card_5.err_prefix'))
-                        + escapeHtml((err && err.message) || String(err))
-                        + '</span></li>';
+                        + '<div class="enm-preflight-text">'
+                        +   '<div class="enm-preflight-label">' + escapeHtml(labelText) + '</div>'
+                        +   '<div class="enm-preflight-message">'
+                        +     escapeHtml(bodyText) + ' ' + escapeHtml(retryHint)
+                        +   '</div>'
+                        + '</div></li>';
                 });
         }
 

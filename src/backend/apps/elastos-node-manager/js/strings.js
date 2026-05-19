@@ -393,7 +393,16 @@
                     cta_working:     'Starting install…',
                     running:         'Running pre-flight…',
                     blocked:         'Fix the blocking check above, then press Re-run pre-flight.',
-                    err_prefix:      'Pre-flight call failed: ',
+                    // 0.5.21 audit Session 21 — preflight error UX:
+                    //  - err_label: short row title (operator scans the list)
+                    //  - err_body: friendly explanation + technical detail
+                    //  - err_retry_hint: explicit pointer to the Re-run btn
+                    // Pre-0.5.21 there was a single `err_prefix` key that
+                    // produced "Pre-flight call failed: Failed to fetch" —
+                    // reads like a stack trace + no recovery affordance.
+                    err_label:       'Pre-flight check could not run',
+                    err_body:        'Network or server problem: {error}',
+                    err_retry_hint:  'Press Re-run pre-flight above to try again.',
                     err_install:     'Could not start install: {error}',
                 },
                 card_6: {
