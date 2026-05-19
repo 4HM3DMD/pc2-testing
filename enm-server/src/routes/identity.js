@@ -193,11 +193,11 @@ function build(deps) {
             const confirm = String(req.get('x-keystore-confirm') || '');
             const force = req.get('x-keystore-force') === 'true';
             if (!password) {
-                return res.status(400).json(errorBody('X-Keystore-Password header is required.'));
+                return res.status(400).json(errorBody('Keystore password is required.'));
             }
             if (confirm !== IMPORT_CONFIRM_PHRASE) {
                 return res.status(400).json(errorBody(
-                    `X-Keystore-Confirm header must be "${IMPORT_CONFIRM_PHRASE}".`,
+                    `Type "${IMPORT_CONFIRM_PHRASE}" in the confirm field to proceed.`,
                 ));
             }
             const buf = (req.body instanceof Buffer) ? req.body : null;
@@ -213,7 +213,7 @@ function build(deps) {
                         + 'node public key that won\'t match the on-chain registration — you\'ll miss '
                         + 'block-production rewards until you sign DPoSV2UpdateProducer in Essentials '
                         + 'with the new key. No deposit penalty (InactivePenalty=0 on mainnet). '
-                        + 'Re-submit with X-Keystore-Force: true to acknowledge.',
+                        + 'Acknowledge the rewards-loss warning to proceed.',
                     ),
                     code: 'PRODUCER_LOCKED_IN',
                     producerState: producer.state,
@@ -287,7 +287,7 @@ function build(deps) {
                 }
             }
         } catch (err) {
-            return res.status(500).json(errorBody(`Anti-snipe verify failed: ${err.message}`));
+            return res.status(500).json(errorBody('Anti-snipe verification failed. Please try again.'));
         }
         // Producer-state guard.
         const producer = await KeystoreIdentity.getProducerState(CHAIN_ID);
@@ -297,7 +297,7 @@ function build(deps) {
                     `Producer is ${producer.state}. Resetting generates a new node public key, `
                     + 'orphaning your on-chain registration. You\'ll miss block-production rewards '
                     + 'until you sign DPoSV2UpdateProducer in Essentials with the new key. No deposit '
-                    + 'penalty (InactivePenalty=0 on mainnet). Re-submit with force=true to acknowledge.',
+                    + 'penalty (InactivePenalty=0 on mainnet). Acknowledge the rewards-loss warning to proceed.',
                 ),
                 code: 'PRODUCER_LOCKED_IN',
                 producerState: producer.state,
