@@ -2415,18 +2415,34 @@ async function runCouncilInstall(args) {
             // `<chainDir>/elastos/data/` where ela reads from. No
             // --strip-components flag needed.
             //
-            // EVM chains (ESC/EID/PG) use geth's `--datadir <chainDir>/data`
-            // per EvmSidechainAdapter:DATA_RELPATH; tarball structure for
-            // those upstream snapshots is NOT yet verified against the same
-            // recovery procedure mainchain went through (v0.5.146 backlog).
-            // For now they keep the legacy `<chainDir>/data/` target — if
-            // they exhibit the same symptom, operator should report and we
-            // do the same trace for each chain's upstream tarball.
+            // 0.5.153 — BUG-C3: EVM snapshots double-nested → sidechains
+            // synced from genesis (the operator's "sidechains don't work /
+            // nothing changed" symptom). This was the v0.5.146 backlog item
+            // ("EVM tarball structure NOT yet verified") now traced + fixed.
+            //
+            // Trace (cycle-1 fresh install): the upstream EVM tarballs
+            // (esc/eid/pg, node-data.elastos.io) wrap their payload in a
+            // top-level `data/` dir — SAME convention as the mainchain
+            // tarball. geth runs with `--datadir <chainDir>/data`
+            // (EvmSidechainAdapter:182,221) and reads keystore at
+            // `<chainDir>/data/keystore`, chaindata under `<chainDir>/data/`.
+            // Pre-0.5.153 relpath='data' set the extract target to
+            // `<chainDir>/data/`, so the tarball's own `data/` produced
+            // `<chainDir>/data/data/{keystore,store,header,...}` — one level
+            // too deep. geth saw an empty datadir → genesis sync. Confirmed
+            // on disk: `chains/pg/data/data/` held the snapshot while geth's
+            // datadir is `chains/pg/data`.
+            //
+            // Fix: relpath='' so the tarball's own `data/` lands at exactly
+            // `<chainDir>/data/` (path.join(chainDir, '') === chainDir; the
+            // EVM snapshot tarballs contain only `data/`, so nothing else in
+            // the chain dir is touched). Mirrors mainchain's 'elastos' →
+            // tarball-`data/` → `<chainDir>/elastos/data/` logic.
             const SNAPSHOT_TARGET_RELPATH = {
                 mainchain: 'elastos',  // tarball's `data/` → <chainDir>/elastos/data/
-                esc:       'data',     // legacy — verify against upstream tarball structure
-                eid:       'data',     // legacy — verify
-                pg:        'data',     // legacy — verify
+                esc:       '',         // tarball's `data/` → <chainDir>/data/ (geth --datadir)
+                eid:       '',         // (was 'data' → <chainDir>/data/data/ = BUG-C3)
+                pg:        '',
             };
             for (const cid of ['mainchain', 'esc', 'eid', 'pg']) {
                 if (cfg2.chains && cfg2.chains[cid]) {
