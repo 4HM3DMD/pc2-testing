@@ -1067,11 +1067,20 @@
         // ('chains.mainchain.dpos.ipAddressMode' + 'ipAddressManual').
         // Operators don't edit the config file directly; the "Restart
         // required" warn-tag already conveys the save consequence.
+        // 0.5.139 audit Session 139 — wire up settings.network_intro per
+        // the same pattern as the other 5 sections (access, identity,
+        // security, alerts, storage, advanced all use t('settings.X_intro')).
+        // Pre-0.5.139 the Network section was the lone outlier using
+        // hardcoded inline English ("Tells other DPoS peers which IP to
+        // dial this node at. Save requires a chain restart."). The
+        // strings.js network_intro has the better operator-friendly copy
+        // ("How DPoS peers reach this node. Set once at first boot; only
+        // change if your public IP moves.") and was sitting orphan.
         var sec = makeSection({
             id: 'network',
             icon: '⇄',
             title: t('settings.heading_network'),
-            help: 'Tells other DPoS peers which IP to dial this node at. Save requires a chain restart.',
+            help: t('settings.network_intro'),
             tag: { kind: 'warn', label: 'Restart required' },
         });
         this._network = {

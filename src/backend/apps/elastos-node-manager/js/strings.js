@@ -932,12 +932,15 @@
             // 0.5.35 audit Session 35 — dropped orphan heading_general
             // i18n key. Only consumer was _buildGeneralSection_DEAD,
             // also removed this session.
-            ip_label:         'External IP / hostname',
-            ip_mode_auto:     'Auto-detect',
-            ip_mode_manual:   'Manual override',
-            ip_help:          'BPoS peers dial this address — leave blank for auto.',
+            // 0.5.139 audit Session 139 — dropped 5 dead pre-Phase-1-IA
+            // Network section keys: ip_label, ip_mode_auto, ip_mode_manual,
+            // ip_help, ip_save_btn. The beta.3.18 Phase 1 IA reshape (5
+            // task-oriented sections) rebuilt the Network section's labels
+            // inline with English strings + makeFormRow help text; only
+            // ip_detect_btn (alive — 1 hit) and the ip_detecting / ip_detected
+            // / ip_detect_failed / ip_detect_unknown result strings (all
+            // alive) survived from this block.
             ip_detect_btn:    'Detect now',
-            ip_save_btn:      'Save network settings',
             // alpha.28.1 batch 85 (Round-25 finding #1) — Detect-now
             // result text moved out of inline English. The four states
             // mirror _detectIp's promise paths:
@@ -968,12 +971,15 @@
 
             heading_danger:    'Danger zone',
             danger_intro:      'Permanently wipe this app and all its data from your PC2.',
-            danger_confirm_h:  'Type WIPE to confirm',
-            danger_confirm_ph: 'WIPE',
-            danger_wipe_btn:   'Wipe and uninstall',
-            danger_in_progress: 'Backing up keystore and uninstalling…',
-            danger_done:       'Done. Your keystore was preserved at {path}. Redirecting to PC2 home in 5…',
-            danger_failed:     'Wipe failed: {error}. The app has NOT been uninstalled.',
+            // 0.5.139 audit Session 139 — dropped 6 dead pre-Phase-1-IA
+            // wipe-surface keys: danger_confirm_h, danger_confirm_ph,
+            // danger_wipe_btn, danger_in_progress, danger_done, danger_failed.
+            // The Beta 3 Danger Zone redesign (S40) split wipe into 4
+            // separate cards (update / chain-resync / uninstall / nuke);
+            // each card builds its own typed-confirm UI with inline copy
+            // via _buildTypedConfirm / _buildDangerCard helpers in
+            // settings-tab.js:1693-1748. None of the old single-wipe
+            // strings are reachable.
 
             // beta.3.18 — Phase 1 IA reshape. The 3-section schema-dump
             // (Network / Mainchain Advanced / General) became 5 task-
@@ -1071,8 +1077,11 @@
             storage_disk_audit:       'Audit log',
             storage_disk_backups:     'Backups',
             storage_disk_total:       'Total',
-            storage_disk_loading:     'Reading disk usage…',
-            storage_disk_failed:      'Couldn’t read disk usage. Retrying.',
+            // 0.5.139 audit Session 139 — storage_disk_loading and
+            // storage_disk_failed dropped. settings-tab.js's
+            // _refreshStorageUsage paints these states inline with em-dash
+            // placeholders ('…' during load, '—' on failure) rather than
+            // routing through these keys.
             // Log retention.
             storage_log_gzip_label:   'Compress old logs after',
             storage_log_gzip_help:    'Closed log files older than this get gzipped in place. Default 7 days.',
@@ -1111,12 +1120,18 @@
             healing_rules_heading:        'What auto-runs',
             healing_rules_help:           'These are the healing actions ENM is allowed to run on its own when the toggle above is on. Anything not on this list waits for the operator to confirm.',
             healing_rules_load_failed:    'Couldn’t load the rule list.',
-            healing_rules_owner_heading:  'What needs your confirmation',
-            healing_rules_owner_help:     'Detected issues in this group surface as proposals on the dashboard — they never run without you saying yes. Auto-execute does not apply here.',
-            healing_rules_critical_heading: 'Critical alerts (notify only)',
-            healing_rules_critical_help:    'These detectors raise an alert but never propose an automatic fix. Action is always operator-driven.',
+            // 0.5.139 audit Session 139 — dropped 5 dead keys:
+            //   healing_rules_owner_heading + _owner_help
+            //   healing_rules_critical_heading + _critical_help
+            //   healing_activity_help
+            // The beta.3.23 redesign collapsed the 3-stacked-groups layout
+            // into a flat dotted list with a single help paragraph
+            // (healing_rules_help above + the per-tier summary line built
+            // dynamically in _paintHealingRules at settings-tab.js:2862).
+            // healing_activity_help was rendered as a third explanatory
+            // paragraph but was dropped when the activity panel collapsed
+            // into the <details> summary count line.
             healing_activity_heading:     'Recent healing activity',
-            healing_activity_help:        'What ENM did or proposed across the last 30 days. Loaded from the audit log; expires automatically per your retention setting.',
             healing_activity_empty:       'No healing activity yet. The list will populate as ENM detects and acts on issues.',
             healing_activity_load_failed: 'Couldn’t load activity. Retrying.',
             // beta.3.78 — settings.snapshot_* string keys removed with
@@ -1136,7 +1151,12 @@
             healing_tier_auto:            'auto',
             healing_tier_owner:           'owner',
             healing_tier_critical:        'critical',
-            healing_tier_manual:          'manual',
+            // 0.5.139 audit Session 139 — healing_tier_manual dropped. The
+            // 4-tier label set was consolidated to 3 in the beta.3.23
+            // chain-tier rename (NEVER_AUTOMATIC + CRITICAL_NOTIFY both
+            // bucket under healing_tier_critical at _paintHealingRules
+            // line 2865). No caller references 'manual' for the tier
+            // summary count line.
 
             // beta.3.33 — Danger Zone. Four destructive actions backed
             // by /api/enm/maintenance/*. The copy here is operator-
