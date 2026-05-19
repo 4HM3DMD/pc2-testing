@@ -572,12 +572,74 @@ function build(extensionHandle) {
             const KEYSTORE_FILENAME = 'keystore.dat';
             const existingKeystore = path.join(chainDir('mainchain'), KEYSTORE_FILENAME);
             if (!body.force && fs.existsSync(existingKeystore)) {
+                // 0.5.152 — BUG-K1 FIX (endpoint layer): validate the
+                // operator-supplied password against the EXISTING keystore
+                // before reusing it.
+                //
+                // Pre-0.5.152 this branch advanced the wizard on
+                // keystore_imported=1 WITHOUT ever checking the password —
+                // so a wrong password was accepted silently (operator
+                // complaint: "I entered a wrong master password and it worked
+                // lol"). The operator then believed they'd confirmed a
+                // password the node never actually uses; the real password
+                // (from the original wizard run) stays unknown to them AND to
+                // /setup/complete, so BPoS signing later fails opaquely.
+                //
+                // ela-cli wallet account -p <pw> exits non-zero on a wrong
+                // password, so EnmKeystoreService.readAccount() is a faithful
+                // validity probe (read-only; does not disturb a running node —
+                // node.sh itself runs `wallet account` right after create).
+                //   - password supplied + correct → reuse, AND stash the
+                //     now-verified envelope so /setup/complete can wire signing.
+                //   - password supplied + wrong   → 400, do NOT advance.
+                //   - password omitted            → can't validate; preserve
+                //     the legacy reuse path but report validated:false.
+                const ksReuse = ChainRegistry.getKeystoreService();
+                let verified = null;
+                if (password) {
+                    try {
+                        verified = await ksReuse.readAccount({ cliPath, password });
+                    } catch (verifyErr) {
+                        extensionHandle.log.warn(
+                            `${ENM_LOG_PREFIX} /setup/keystore: supplied password rejected `
+                            + `by existing keystore (${verifyErr.message}).`,
+                        );
+                        return res.status(400).json(errorBody(
+                            'That password does not match this node\'s existing '
+                            + 'keystore. Enter the master password you saved when '
+                            + 'this node\'s key was first created, or replace the '
+                            + 'keystore to start fresh.',
+                        ));
+                    }
+                }
+
                 extensionHandle.log.info(
-                    `${ENM_LOG_PREFIX} /setup/keystore: reusing existing keystore at ${existingKeystore} (force=false)`,
+                    `${ENM_LOG_PREFIX} /setup/keystore: reusing existing keystore at `
+                    + `${existingKeystore} (force=false, password `
+                    + `${password ? 'validated' : 'not supplied'})`,
                 );
-                // Try to read the cached identity file so we can return
-                // the pubkey + address. Missing identity file is OK — the
-                // wizard advances on keystore_imported regardless.
+
+                // A validated password is the real one — stash its envelope
+                // so /setup/complete wires mainchain.dpos.keystorePasswordEncrypted.
+                // Without this, a reused-keystore install left the node unable
+                // to sign because the envelope was never persisted.
+                if (verified && password) {
+                    try {
+                        await atomicWrite(ksStashPath, JSON.stringify({
+                            envelope: encrypt(password),
+                            publicKey: verified.publicKey,
+                            address: verified.address,
+                        }), { mode: 0o600 });
+                    } catch (stashErr) {
+                        extensionHandle.log.warn(
+                            `${ENM_LOG_PREFIX} /setup/keystore: failed to stash validated `
+                            + `password envelope (${stashErr.message}) — reuse still proceeds.`,
+                        );
+                    }
+                }
+
+                // Cached identity file for the response (fallback when no
+                // password was supplied to verify against).
                 const identityPath = path.join(chainDir('mainchain'), 'keystore-account.json');
                 let identity = null;
                 try {
@@ -592,10 +654,12 @@ function build(extensionHandle) {
                     enableArbiter: true,
                     keystoreImported: true,
                     reused: true,
-                    publicKey: identity && identity.publicKey || null,
-                    address: identity && identity.address || null,
-                    // No generatedPassword — we don't know it, and we
-                    // explicitly did NOT generate a new keystore.
+                    validated: !!verified,
+                    publicKey: (verified && verified.publicKey)
+                        || (identity && identity.publicKey) || null,
+                    address: (verified && verified.address)
+                        || (identity && identity.address) || null,
+                    // No generatedPassword — we did NOT generate a new keystore.
                     generatedPassword: null,
                 }));
             }
@@ -2037,16 +2101,48 @@ async function runCouncilInstall(args) {
                 throw new Error('cannot decrypt master password envelope: ' + err.message);
             }
 
-            // Idempotency: if keystore.dat is already on disk we
-            // assume it was created by an earlier orchestrator run with
-            // the same master password (the only way it can have gotten
-            // there during a Council install). Re-creating would
-            // either fail (force=false) or replace + lose the existing
-            // producer key.
+            // Idempotency: if keystore.dat is already on disk we reuse it
+            // rather than re-create (force=false would throw; force=true
+            // would replace + lose the producer key). BUT we must first
+            // confirm the master password the operator entered THIS run
+            // actually unlocks that existing keystore.
+            //
+            // 0.5.152 — BUG-K1 FIX (app-flow layer). Pre-0.5.152 this step
+            // skipped silently on an existing keystore and trusted the typed
+            // password matched. On a re-install where the operator typed the
+            // WRONG existing password (Card 3 _renderCard3ExistingKeystore
+            // accepts any 8–64 char string with NO verification), that wrong
+            // password was then encrypted into
+            // cfg.chains.mainchain.dpos.keystorePasswordEncrypted (and every
+            // sidechain via H23). The node started, ela failed to unlock
+            // keystore.dat, and the only signal was an opaque F1 alert long
+            // after the wizard reported success — exactly the operator's
+            // "wrong password worked" complaint. Validate here so a wrong
+            // password fails the install step with a clear message instead.
             const KEYSTORE_FILENAME = 'keystore.dat';
             const existingKeystore = path.join(chainDir('mainchain'), KEYSTORE_FILENAME);
             if (fs.existsSync(existingKeystore)) {
-                return { skipped: true, message: 'keystore already on disk' };
+                const dlChk = ChainRegistry.getBinaryDownloader();
+                const onDiskChk = await dlChk.getStatusWithDisk('mainchain');
+                const cliPathChk = onDiskChk && onDiskChk.cliPath;
+                if (cliPathChk) {
+                    try {
+                        await ChainRegistry.getKeystoreService()
+                            .readAccount({ cliPath: cliPathChk, password: plaintext });
+                    } catch (verifyErr) {
+                        extensionHandle.log.warn(
+                            `${ENM_LOG_PREFIX} install-mainchain-keystore: master password `
+                            + `does not unlock existing keystore (${verifyErr.message}).`,
+                        );
+                        throw new Error(
+                            'The master password you entered does not match this '
+                            + 'node\'s existing keystore. Re-run setup with the password '
+                            + 'you saved when the node\'s key was first created, or remove '
+                            + 'chains/mainchain/keystore.dat to generate a new one.',
+                        );
+                    }
+                }
+                return { skipped: true, message: 'keystore already on disk (password verified)' };
             }
 
             // Resolve ela-cli — in-memory state from Step A first, disk
