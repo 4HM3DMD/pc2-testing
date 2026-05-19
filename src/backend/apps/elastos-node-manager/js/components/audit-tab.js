@@ -1185,8 +1185,8 @@
         'F7':  'Port conflict on start',
         'F8':  'Binary version differs from install',
         'F9':  'Config file changed on disk',
-        'F10': 'RPC password rotation reminder',
-        'F11': 'BPoS deposit changed on-chain',
+        'F10': 'RPC password not set',
+        'F11': 'BPoS arbiter rotation stuck',
         'F12': 'Producer missing rounds (Inactive risk)',
         'F13': 'Clock skew detected',
         'F16': 'Recovered from peer-zero',
@@ -1198,7 +1198,7 @@
         // tier badge; the friendly label stays neutral.
         'F18': 'No inbound peers',
         'F19': 'Host port conflict',
-        'F22': 'Auto-healed DPoS state desync',
+        'F22': 'DPoS state desync detected',
         // beta.3.66 — missing label. AUTOSTART is the AUTOMATED-SAFE rule
         // fired by EnmAutoStart at ENM boot when an enabled chain isn't
         // running. Previously displayed as the raw string "AUTOSTART".

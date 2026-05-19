@@ -844,10 +844,17 @@ const RULE_METADATA = Object.freeze({
            description: 'The ela binary on disk reports a different version than ENM recorded at install. Suppressed for 1 hour after a fresh install (Geth-fork sidechains report their internal geth version on the `version` subcommand, not the elastos-fork tag). After the grace window, surfaces an OWNER_CONFIRMS proposal to update the recorded version.' },
     F9:  { tier: 'OWNER_CONFIRMS',  title: 'Config drift on disk',
            description: 'Notice when ela.conf on disk has been edited outside of ENM (manual operator change).' },
-    F10: { tier: 'OWNER_CONFIRMS',  title: 'RPC password rotation reminder',
-           description: 'Periodic suggestion to rotate the RPC password.' },
-    F11: { tier: 'CRITICAL_NOTIFY', title: 'BPoS deposit drift',
-           description: 'On-chain locked deposit no longer matches the original 2,000 ELA stake — surface a critical alert.' },
+    // 0.5.52 audit Session 52 — F10/F11 metadata realigned to detect-
+    // function reality. Pre-0.5.52 these described phantom features
+    // (rotation reminder / deposit-drift) that have never existed in
+    // any detect function. detectF10 fires on empty/missing RPC password;
+    // detectF11 fires on arbiter rotation stuck (same-index across H/H-1
+    // with our node in the empty slot). Behavior unchanged; pure label
+    // fix. Same Session 20 pattern as F7/F8.
+    F10: { tier: 'OWNER_CONFIRMS',  title: 'RPC password not set',
+           description: 'If the chain’s RPC password is missing or empty, surface a notice — ENM cannot start the chain without it.' },
+    F11: { tier: 'CRITICAL_NOTIFY', title: 'BPoS arbiter rotation stuck',
+           description: 'Compares on-duty arbiter index across consecutive heights via getarbitratorgroupbyheight. If the index doesn’t advance and our node is in the empty slot, surface a critical alert — consensus state needs manual investigation.' },
     F12: { tier: 'NEVER_AUTOMATIC', title: 'Producer inactiveRounds rising',
            description: 'Producer is missing rounds and approaching the forced-inactive penalty at 1,440. Manual investigation only.' },
     F13: { tier: 'OWNER_CONFIRMS',  title: 'Clock skew',
@@ -897,8 +904,8 @@ const DEFAULT_ENABLED = Object.freeze({
     F7: true,   // port conflict on start (0.5.20 — comment realigned to detectF7's actual implementation)
     F8: true,   // binary version drift (with 1h binaryInstalledAt grace from v0.5.0)
     F9: true,   // config drift on disk
-    F10: true,  // RPC password rotation reminder
-    F11: true,  // BPoS deposit drift
+    F10: true,  // RPC password not set (0.5.52 — comment realigned to detectF10)
+    F11: true,  // BPoS arbiter rotation stuck (0.5.52 — comment realigned to detectF11)
     F12: true,  // producer inactiveRounds (NEVER_AUTOMATIC; alert only)
     F13: true,  // clock skew
     F16: true,  // peer-zero fallback
