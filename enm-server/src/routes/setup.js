@@ -2273,10 +2273,38 @@ async function runCouncilInstall(args) {
             const result = await SnapshotDownloader.downloadAll(targetDirsByChain, {
                 chainIds: Object.keys(targetDirsByChain),
                 onProgress: (p) => {
-                    if (p && p.chainId && p.percent !== undefined) {
-                        chainPercents[p.chainId] = { percent: p.percent, phase: p.phase };
-                        publishThrottled();
+                    if (!p || !p.chainId) { return; }
+                    // 0.5.142 audit Session 142 — pin extract-phase to 100%
+                    // for the operator-visible composite.
+                    //
+                    // Operator-reported: "after mainchain went to 100% it
+                    // became 0% — so weird". Root cause: EnmSnapshotDownloader
+                    // emits `phase:'download', percent:0..100` during the
+                    // streaming download, then ONE `phase:'extract', percent:0`
+                    // event when extract begins (and no progressive extract
+                    // events — the system `tar` call runs synchronously to
+                    // completion). Pre-0.5.142 the aggregator blindly
+                    // overwrote chainPercents[chainId] with the latest event's
+                    // percent, so the visible bar fell from 100→0 the instant
+                    // extract started for any chain, even though the chain
+                    // was actually almost done.
+                    //
+                    // Fix: when phase === 'extract', show 100%. The chain
+                    // has finished downloading; extract is the last step
+                    // and is fast relative to download (seconds vs minutes
+                    // for the snapshot sizes ENM ships). The operator sees
+                    // a monotonic 0→100 bar per chain instead of the
+                    // confusing 0→100→0→done plummet.
+                    let pct;
+                    if (p.phase === 'extract') {
+                        pct = 100;
+                    } else if (typeof p.percent === 'number') {
+                        pct = p.percent;
+                    } else {
+                        return;
                     }
+                    chainPercents[p.chainId] = { percent: pct, phase: p.phase };
+                    publishThrottled();
                 },
             });
             // result.results: { chainId → fulfilled-value | { error } }
