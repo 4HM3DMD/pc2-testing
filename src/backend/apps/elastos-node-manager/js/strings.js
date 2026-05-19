@@ -422,11 +422,22 @@
                 card_7: {
                     title:           '🎉 Your Council node is live',
                     title_bpos:      '🎉 Your BPoS supernode is ready',
-                    sub:             'All chains are installed and the services are starting up. Head '
-                                   + 'to the dashboard to watch the chains come online and register '
-                                   + 'your wallet when you\'re ready.',
-                    sub_bpos:        'Mainchain is installed and starting up. Head to the dashboard '
-                                   + 'to watch it sync and register your wallet when you\'re ready.',
+                    // 0.5.7 audit Session 7 — clearer "what next" guidance.
+                    // Pre-0.5.7 copy said "register your wallet when you're
+                    // ready" with no map of HOW. Operators new to Elastos
+                    // had no pointer to the off-server Essentials wallet
+                    // flow. New copy names Essentials explicitly + says the
+                    // node-identity tile on the dashboard surfaces the
+                    // public key they paste into it.
+                    sub:             'All 8 services are installed and starting up. On the dashboard, '
+                                   + 'switch the chain selector to "Multi-chain overview" to watch them '
+                                   + 'come online. To earn rewards on the mainchain, paste your node '
+                                   + 'public key (shown on the Producer Identity tile) into Elastos '
+                                   + 'Essentials and register as a BPoS supernode.',
+                    sub_bpos:        'Mainchain is installed and starting up. On the dashboard, the '
+                                   + 'Producer Identity tile shows your node public key — paste that '
+                                   + 'into Elastos Essentials and register as a BPoS supernode to be '
+                                   + 'voted in by the community.',
                     cta:             'Open dashboard',
                 },
             },

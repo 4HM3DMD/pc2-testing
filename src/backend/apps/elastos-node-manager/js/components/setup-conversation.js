@@ -1789,7 +1789,17 @@
         this._continueBtn.addEventListener('click', function onDone() {
             if (self._destroyed || !self._stillRendering(seq)) { return; }
             self._continueBtn.removeEventListener('click', onDone);
+            // 0.5.7 audit Session 7 HIGH fix — clear both localStorage
+            // entries on Card 7 dismiss. Pre-0.5.7 only enm:setup-intent
+            // was cleared; enm:master-pw stayed indefinitely. The
+            // password is no longer needed in browser storage after
+            // setup completes — backend has cfg.global.council
+            // .masterPasswordEncrypted, operator has it in their
+            // password manager (we ensured via the ack checkbox). Any
+            // future XSS / compromised extension / debug session reading
+            // localStorage from this origin would otherwise extract it.
             try { window.localStorage.removeItem('enm:setup-intent'); } catch (_) {}
+            try { window.localStorage.removeItem('enm:master-pw'); } catch (_) {}
             self.onComplete();
         });
     };
