@@ -105,7 +105,7 @@ function build(deps) {
             }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} GET /identity: ${err.message}`);
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Failed to read node identity.'));
         }
     });
 
@@ -144,7 +144,7 @@ function build(deps) {
             }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} POST /identity/unlock: ${err.message}`);
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Could not verify keystore password. Try again.'));
         }
     });
 
@@ -172,7 +172,12 @@ function build(deps) {
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} GET /identity/backup: ${err.message}`);
             const status = err.code === 'NO_KEYSTORE' ? 404 : 500;
-            return res.status(status).json(errorBody(err.message));
+            // 404 NO_KEYSTORE is operator-correctable (finish setup first);
+            // 500 fallback per Sessions 64/67/79 template.
+            const responseMessage = status === 404
+                ? 'No keystore on disk yet — finish the setup wizard first.'
+                : 'Could not download the keystore backup. Try again.';
+            return res.status(status).json(errorBody(responseMessage));
         }
     });
 
@@ -250,7 +255,7 @@ function build(deps) {
                 }));
             } catch (err) {
                 extensionHandle.log.error(`${ENM_LOG_PREFIX} POST /identity/import: ${err.message}`);
-                return res.status(500).json(errorBody(err.message));
+                return res.status(500).json(errorBody('Keystore import failed. Try again.'));
             }
         });
 
@@ -338,7 +343,7 @@ function build(deps) {
             }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} POST /identity/reset: ${err.message}`);
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Keystore reset failed. Try again.'));
         }
     });
 
@@ -365,7 +370,7 @@ function build(deps) {
             return res.json(successBody(r));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} GET /identity/integrity: ${err.message}`);
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Failed to run the integrity check.'));
         }
     });
 
@@ -390,7 +395,7 @@ function build(deps) {
             return res.json(successBody({ baseline: b }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} POST /identity/integrity/rebaseline: ${err.message}`);
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Could not re-capture the integrity baseline. Try again.'));
         }
     });
 
