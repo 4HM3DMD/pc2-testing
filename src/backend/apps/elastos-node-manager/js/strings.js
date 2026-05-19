@@ -887,70 +887,7 @@
             // PUT; _saveNetwork was the outlier letting the manual-mode
             // empty value reach the backend.
             err_ip_required:  'Enter an external IP or hostname (or switch to Auto-detect).',
-            adv_log_level:    'Log level',
-            adv_archive_mode: 'Archive mode (full history)',
-            adv_memory_limit: 'Memory limit (MB)',
-            adv_rpc_user:     'RPC user',
-            adv_rpc_password: 'RPC password',
-            adv_white_ip:     'WhiteIPList (comma-separated)',
-            adv_white_ip_help: 'Default 127.0.0.1 only. Add LAN IPs (e.g. 192.168.1.42) or CIDR ranges (e.g. 192.168.1.0/24) to let other machines reach the RPC. The RPC is HTTP Basic-auth protected — anyone in this list still needs the user/password below.',
-            adv_save_btn:     'Save mainchain settings',
-
-            heading_rpc_creds:  'RPC access',
-            rpc_creds_intro:    'External apps connect via JSON-RPC. Off by default — toggle on once you\'ve set the allow-list. Treat the password like a key.',
-            // alpha.28.1 batch 47 — rpc_reveal_btn dropped (alpha.17 RPC
-            // redesign removed the reveal-on-click affordance; password
-            // visibility now lives in the rpc_show_pw / rpc_hide_pw
-            // toggle below). Round-7 i18n audit acbcec6b.
-            rpc_hide_btn:       'Hide',
-            rpc_show_pw:        'Show password',
-            rpc_hide_pw:        'Hide password',
-            rpc_copy:           'Copy',
-            rpc_copied:         'Copied',
-            // alpha.28.1 batch 88 (Round-28 finding #2) — UX parity with
-            // validator-card (batch 87): tell the operator when the
-            // clipboard API was blocked so they know the value is
-            // selected for manual copy. Previous shape selected silently
-            // with no toast.
-            rpc_copy_fail_title:'Copy unavailable',
-            rpc_copy_fail_body: 'Browser blocked clipboard access. The value is selected — press Ctrl-C (or ⌘-C on Mac) to copy.',
-            rpc_field_user:     'RPC user',
-            rpc_field_pw:       'RPC password',
-            // alpha.28.1 batch 47 — rpc_field_local / lan / white +
-            // rpc_url_group_heading dropped. Alpha.17 redesigned the
-            // RPC access tab to use rpc_url_same_machine / rpc_url_
-            // private_network / rpc_url_public_internet (still live
-            // below); the older "Connection URLs" group heading +
-            // per-row labels are no longer rendered.
-            rpc_url_same_machine:   'For apps on this server',
-            rpc_url_private_network:'For apps on your local network',
-            rpc_url_public_internet:'For apps over the internet',
-            rpc_url_public_warn:    'Open your firewall + whitelist the IP. Anyone with this URL + password can submit transactions.',
-            rpc_white_apply_btn:    'Apply changes',
-            rpc_white_help:         'Clients can connect ONLY from these. 127.0.0.1 is locked (needed for ENM). Add IPs or CIDR ranges.',
-            // alpha.28.1 batch 39 — chipInput format-hint error string
-            // (was inline English in settings-tab.js:1238 flashInvalid).
             rpc_white_invalid:      'Not a valid IPv4 or CIDR (try 192.168.1.5 or 192.168.1.0/24).',
-            rpc_white_apply_failed: 'Whitelist save failed: {error}',
-            rpc_white_applied:      'Whitelist saved.',
-            rpc_toggle_section:     'RPC server',
-            rpc_toggle_off:         'Off',
-            rpc_toggle_on:          'On',
-            rpc_toggle_off_help:    'External apps cannot connect. Apps on this server still work.',
-            rpc_toggle_on_help:     'Whitelisted IPs can connect.',
-            rpc_toggle_save_btn:    'Save',
-            rpc_toggle_saved:       'Restart mainchain to apply.',
-            rpc_toggle_save_failed: 'Save failed: {error}',
-            rpc_allow_section:      'Allowed IPs',
-            rpc_urls_section:       'URLs to share',
-            rpc_creds_section:      'Credentials',
-            rpc_white_no_change:    'No changes to apply.',
-            rpc_no_lan:         'No non-loopback interfaces detected.',
-            rpc_load_failed:    'Failed to load credentials: {error}',
-            general_auto_safe: 'Auto-execute AUTOMATED-SAFE healings',
-            general_audit_retention: 'Audit retention (days)',
-            general_critical_ack: 'CRITICAL notifications must be acknowledged',
-            general_save_btn: 'Save preferences',
             saved:            'Saved.',
             save_failed:      'Save failed: {error}',
             // alpha.28.1 batch 36 — three validation error messages
