@@ -2098,6 +2098,8 @@
                     })
                     .catch(function (err) {
                         if (self._destroyed) { return; }
+                        // 0.5.131 audit Session 131 — silence on 401, see _refreshIdentity line 2221.
+                        if (err && err.status === 401) { return; }
                         status.textContent = (err && err.message) || 'Integrity check failed.';
                         status.classList.add('err');
                     });
@@ -2175,6 +2177,8 @@
                     })
                     .catch(function (err) {
                         if (self._destroyed) { return; }
+                        // 0.5.131 audit Session 131 — silence on 401, see _refreshIdentity line 2221.
+                        if (err && err.status === 401) { return; }
                         status.textContent = (err && err.message) || 'Rebaseline failed.';
                         status.classList.add('err');
                     });
@@ -2288,6 +2292,8 @@
                     })
                     .catch(function (err) {
                         if (self._destroyed) { return; }
+                        // 0.5.131 audit Session 131 — silence on 401, see _refreshIdentity line 2221.
+                        if (err && err.status === 401) { return; }
                         status.textContent = (err && err.message) || 'Unlock failed.';
                         status.classList.add('err');
                     });
@@ -2337,7 +2343,15 @@
                                         }
                                     } catch (_) { /* not JSON — keep raw */ }
                                 }
-                                throw new Error(msg || ('HTTP ' + r.status));
+                                // 0.5.131 audit Session 131 — attach r.status to
+                                // the thrown Error so the catch below can apply
+                                // the same 401 silencer that every api-client
+                                // catch in this file uses. Raw fetch bypasses
+                                // the api client, so we have to thread status
+                                // through manually.
+                                var e = new Error(msg || ('HTTP ' + r.status));
+                                e.status = r.status;
+                                throw e;
                             });
                         }
                         var dispo = r.headers.get('Content-Disposition') || '';
@@ -2358,6 +2372,10 @@
                         status.classList.add('ok');
                     })
                     .catch(function (err) {
+                        if (self._destroyed) { return; }
+                        // 0.5.131 audit Session 131 — silence on 401. The
+                        // .status was attached above when we threw on !r.ok.
+                        if (err && err.status === 401) { return; }
                         status.textContent = (err && err.message) || 'Backup failed.';
                         status.classList.add('err');
                     });
@@ -2405,6 +2423,11 @@
                 }).then(function (res) {
                     if (self._destroyed) { return; }
                     if (!res.ok) {
+                        // 0.5.131 audit Session 131 — silence on 401. Raw fetch
+                        // bypasses the api client's session-expiry handling;
+                        // login overlay takes over, no need to paint stuck red
+                        // "Unauthorized" in status.
+                        if (res.status === 401) { return; }
                         var msg = (res.body && res.body.error) || ('HTTP ' + res.status);
                         status.textContent = msg;
                         status.classList.add('err');
@@ -2496,6 +2519,8 @@
                     })
                     .catch(function (err) {
                         if (self._destroyed) { return; }
+                        // 0.5.131 audit Session 131 — silence on 401, see _refreshIdentity line 2221.
+                        if (err && err.status === 401) { return; }
                         status.textContent = (err && err.message) || 'Reset failed.';
                         status.classList.add('err');
                     });
