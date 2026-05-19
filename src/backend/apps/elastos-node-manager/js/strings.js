@@ -409,6 +409,15 @@
                     summary_done:    'Everything is installed. Click Continue to open the dashboard.',
                     summary_error:   'Install failed at one of the steps above. Click Retry to resume '
                                    + 'from where it stopped — completed steps are skipped on retry.',
+                    // 0.5.6 audit Session 6 — copy for the refresh-recovery
+                    // path. If the operator refreshes at Card 6 BEFORE the
+                    // install kicks off, _installInputs is null in-memory;
+                    // backend would 412. Frontend now redirects to Card 5
+                    // with this notification.
+                    refresh_recovery_title: 'Re-confirm install settings',
+                    refresh_recovery_body:  'You refreshed before the install started. Confirm your '
+                                          + 'settings on the previous step and click Install everything '
+                                          + 'again.',
                 },
                 card_7: {
                     title:           '🎉 Your Council node is live',

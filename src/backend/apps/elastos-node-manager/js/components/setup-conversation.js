@@ -1277,7 +1277,7 @@
     // Card 6 — install stepper (SSE + poll fallback + auto-resume)
     // ====================================================================
     //
-    // For Council: subscribes to `setup:council:install`, renders 13
+    // For Council: subscribes to `setup:council:install`, renders 16
     // steps from the new orchestrator PLAN:
     //   council-strategy → install-{esc,eid,pg}-cfg →
     //   download-snapshots-parallel → install-binaries-parallel →
@@ -1414,9 +1414,17 @@
         function applyStatusSnapshot(s) {
             if (!s || !Array.isArray(s.completedSteps)) { return; }
             s.completedSteps.forEach(function (step) { setStep(step, 'done'); });
+            // 0.5.6 audit Session 6 MEDIUM-1 fix — mark the failing step
+            // red, not as 'start' (in-progress). Pre-0.5.6 a failed
+            // install left the summary red but the offending step row
+            // stayed yellow (start state). Operator could see "an error
+            // happened" but had to read the summary text to know which
+            // step. With s.error AND s.currentStep set, render the step
+            // as 'error' so the stepper itself answers "which one died".
             if (s.currentStep
                     && COUNCIL_STEP_ORDER.indexOf(s.currentStep) !== -1) {
-                setStep(s.currentStep, 'start');
+                setStep(s.currentStep, (!s.running && s.error) ? 'error' : 'start',
+                    (!s.running && s.error) ? (s.error || '').replace(s.currentStep + ': ', '') : '');
             }
             var pct = s.totalSteps > 0
                 ? Math.round((s.completedSteps.length / s.totalSteps) * 100)
@@ -1487,7 +1495,19 @@
         // successfully (<60s ago), go straight to Card 7. Otherwise
         // POST install-council to kick a fresh job using the inputs
         // collected on Card 5.
-        var inputs = this._installInputs || {};
+        //
+        // 0.5.6 audit Session 6 HIGH-2 fix — `_installInputs` is in-memory
+        // only; a page refresh at Card 6 leaves it null. Pre-0.5.6 the
+        // refresh path POSTed `{}` to install-council → backend rejected
+        // 412 "masterPassword missing" → catch block showed a generic
+        // network-error to the operator. Now: if NO job running AND no
+        // recent success AND no in-memory inputs, redirect back to
+        // Card 5 (with a notification) so the operator re-collects them.
+        var inputs = this._installInputs;
+        var inputsValid = inputs
+            && typeof inputs.masterPassword === 'string'
+            && inputs.masterPassword.length > 0
+            && typeof (inputs.rewardAddress || inputs.sharedRewardAddress) === 'string';
         this.api.get('/setup/install-council/status', { skipCache: true })
             .then(function (s) {
                 if (self._destroyed) { return; }
@@ -1498,6 +1518,25 @@
                 if (s && s.success && s.finishedAt
                         && (Date.now() - s.finishedAt) < 60_000) {
                     self._goto('7');
+                    return null;
+                }
+                if (!inputsValid) {
+                    // Refresh-at-Card-6 with empty inputs path. Surface a
+                    // notification + bounce to Card 5 so the operator can
+                    // re-confirm the snapshot toggle + click Install.
+                    if (self.notifications && typeof self.notifications.show === 'function') {
+                        self.notifications.show({
+                            id: 'card-6-refresh-recovery',
+                            severity: 'info',
+                            title: t('friendly.setup.card_6.refresh_recovery_title')
+                                || 'Re-confirm install settings',
+                            body: t('friendly.setup.card_6.refresh_recovery_body')
+                                || 'You refreshed before the install started. '
+                                 + 'Confirm your settings and click Install everything again.',
+                        });
+                    }
+                    self._teardownInstallTracking();
+                    self._goto('5');
                     return null;
                 }
                 return self.api.post('/setup/install-council', inputs);
