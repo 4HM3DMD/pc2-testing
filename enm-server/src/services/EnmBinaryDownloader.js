@@ -535,14 +535,47 @@ class EnmBinaryDownloader {
         return null;
     }
 
+    /**
+     * Confirm a downloaded binary is executable + reports its version.
+     * Elastos binaries don't share a single version flag convention:
+     *   - ela mainchain:   accepts `--version`
+     *   - arbiter:         accepts `-v` ONLY (help: "-v print version and exit")
+     *   - esc/eid/pg:      Geth forks; in practice reject `-version` on this build
+     *                       — try `version` subcommand and `--help` as fallbacks
+     *
+     * Try a sequence of flags; resolve {ok:true} on the FIRST one that exits 0.
+     * If all attempts fail, return the most-informative error string.
+     */
     static _smokeTest(binaryPath) {
+        const ATTEMPTS = [
+            ['--version'],   // ela, most geth-style
+            ['-v'],          // arbiter, urfave/cli-style binaries
+            ['version'],     // subcommand-style (geth-style "version" command)
+            ['--help'],      // last resort — executable + parses flags = good enough
+        ];
         return new Promise((resolve) => {
-            execFile(binaryPath, ['--version'], { timeout: 10_000 }, (err, stdout, stderr) => {
-                if (err) {
-                    return resolve({ ok: false, error: stderr.trim() || err.message });
+            let lastError = '';
+            let i = 0;
+            function tryNext() {
+                if (i >= ATTEMPTS.length) {
+                    return resolve({ ok: false, error: lastError || 'no version flag accepted' });
                 }
-                resolve({ ok: true, output: (stdout || stderr).trim() });
-            });
+                const args = ATTEMPTS[i++];
+                execFile(binaryPath, args, { timeout: 10_000 }, (err, stdout, stderr) => {
+                    if (!err) {
+                        return resolve({
+                            ok: true,
+                            output: (stdout || stderr).trim().split('\n')[0],
+                            flagUsed: args.join(' '),
+                        });
+                    }
+                    const errStr = (stderr || err.message || '').trim();
+                    // Hold onto the FIRST error — it's usually the most informative.
+                    if (!lastError) { lastError = errStr; }
+                    tryNext();
+                });
+            }
+            tryNext();
         });
     }
 

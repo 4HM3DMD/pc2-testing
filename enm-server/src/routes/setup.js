@@ -2164,23 +2164,43 @@ async function runCouncilInstall(args) {
                     targetDirsByChain[cid] = path.join(chainDir(cid), 'data');
                 }
             }
+            // beta.0.4.12 — operator feedback "snapshots flicker soooo
+            // fast!": EnmSnapshotDownloader fires onProgress ~every 500ms
+            // per chain. With 4 chains in parallel that's 8 SSE events/s
+            // each overwriting the step's message text — visually it's
+            // strobe. Fix: aggregate per-chain percent in a closure +
+            // throttle the SSE publish to once per 1000ms with a
+            // multi-chain message that shows all 4 simultaneously.
+            const chainPercents = {};
+            let lastPublishMs = 0;
+            const publishThrottled = () => {
+                if (!sseHub) return;
+                const now = Date.now();
+                if (now - lastPublishMs < 1000) return;
+                lastPublishMs = now;
+                const parts = Object.keys(chainPercents).sort().map(
+                    (cid) => `${cid} ${chainPercents[cid].percent}%`,
+                );
+                try {
+                    sseHub.publish('setup:council:install', {
+                        step: 'download-snapshots-parallel',
+                        status: 'start',
+                        message: parts.join(' · '),
+                        total: PLAN.length,
+                        completed: _councilInstallState.completedSteps.length,
+                        percent: Math.round(
+                            (_councilInstallState.completedSteps.length / PLAN.length) * 100,
+                        ),
+                        ts: now,
+                    });
+                } catch (_) { /* SSE best-effort */ }
+            };
             const result = await SnapshotDownloader.downloadAll(targetDirsByChain, {
                 chainIds: Object.keys(targetDirsByChain),
                 onProgress: (p) => {
-                    if (sseHub && p && p.percent !== undefined) {
-                        try {
-                            sseHub.publish('setup:council:install', {
-                                step: 'download-snapshots-parallel',
-                                status: 'start',
-                                message: `${p.chainId}: ${p.phase} ${p.percent}%`,
-                                total: PLAN.length,
-                                completed: _councilInstallState.completedSteps.length,
-                                percent: Math.round(
-                                    (_councilInstallState.completedSteps.length / PLAN.length) * 100,
-                                ),
-                                ts: Date.now(),
-                            });
-                        } catch (_) { /* SSE best-effort */ }
+                    if (p && p.chainId && p.percent !== undefined) {
+                        chainPercents[p.chainId] = { percent: p.percent, phase: p.phase };
+                        publishThrottled();
                     }
                 },
             });
