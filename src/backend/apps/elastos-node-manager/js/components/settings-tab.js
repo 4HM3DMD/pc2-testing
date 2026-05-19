@@ -3033,6 +3033,14 @@
                     'enm-healing-rules-toggle-off',
                     prevChecked !== 'true',
                 );
+                // 0.5.129 audit Session 129 — silence the toast on 401 so
+                // session-expiry mid-toggle doesn't flash a stale
+                // "Failed to update F<n>" while the login overlay is
+                // appearing. The optimistic-UI rollback above still runs
+                // (correct — the rule wasn't actually saved). Matches the
+                // 401 silencer in _saveAntiSnipe / _clearAntiSnipe /
+                // _saveSecurity / _refreshHealingRules / _refreshHealingActivity.
+                if (err && err.status === 401) { return; }
                 var msg = (err && err.message) || String(err);
                 if (self.services && self.services.notifications) {
                     self.services.notifications.show({
