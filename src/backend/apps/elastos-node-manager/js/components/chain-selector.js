@@ -162,8 +162,19 @@
             self._render();
             if (resetHappened) {
                 try {
+                    // 0.5.73 audit Session 73 — pre-0.5.73 hardcoded
+                    // key='mainchain'. Original beta.3.89 intent was the
+                    // BPoS-only reset path (active → mainchain). The
+                    // beta.0.5.0 council branch added _activeKey = 'all'
+                    // but forgot to update the dispatch. Result on
+                    // freshly-installed council nodes: selector UI
+                    // shows "Multi-chain overview" highlighted while
+                    // PaneRouter receives key='mainchain' and mounts
+                    // the mainchain dashboard underneath — desynced.
+                    // Use the resolved self._activeKey so both branches
+                    // dispatch what they actually set.
                     self.root.dispatchEvent(new CustomEvent('enm:chain-change', {
-                        detail: { key: 'mainchain', source: 'availability-refresh' },
+                        detail: { key: self._activeKey, source: 'availability-refresh' },
                         bubbles: true,
                     }));
                 } catch (_) { /* IE-era fallback unnecessary */ }
