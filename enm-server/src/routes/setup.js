@@ -2143,7 +2143,7 @@ async function runCouncilInstall(args) {
             await runStep(`install-${chainId}-cfg`, async () => {
                 const cfg2 = await ConfigStore.load();
                 if (cfg2.chains && cfg2.chains[chainId]) {
-                    return { skipped: true, message: 'cfg already present' };
+                    return { skipped: true, message: 'Config already present' };
                 }
                 cfg2.chains = cfg2.chains || {};
                 const ports = ClassBPorts.portsFor(chainId, inputs.activeNet);
@@ -2363,7 +2363,7 @@ async function runCouncilInstall(args) {
             await runStep(`install-${oracleId}`, async () => {
                 const cfg2 = await ConfigStore.load();
                 if (cfg2.chains && cfg2.chains[oracleId]) {
-                    return { skipped: true, message: 'cfg already present' };
+                    return { skipped: true, message: 'Config already present' };
                 }
                 const parent = oracleId === 'esc-oracle' ? 'esc'
                              : oracleId === 'eid-oracle' ? 'eid' : 'pg';
@@ -2407,7 +2407,7 @@ async function runCouncilInstall(args) {
         await runStep('install-arbiter-cfg', async () => {
             const cfg2 = await ConfigStore.load();
             if (cfg2.chains && cfg2.chains.arbiter && cfg2.chains.arbiter.binaryPath) {
-                return { skipped: true, message: 'cfg + binary already in place' };
+                return { skipped: true, message: 'Config and binary already in place' };
             }
             const dl = ChainRegistry.getBinaryDownloader();
             const arbStatus = dl.getStatus('arbiter');
