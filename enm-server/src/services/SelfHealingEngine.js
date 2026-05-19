@@ -300,7 +300,7 @@ class SelfHealingEngine {
                         tier: HEALING_TIERS.AUTOMATED_SAFE,
                         decision: AUDIT_DECISION.SKIPPED,
                         executor: 'system',
-                        outcome: 'autoExecuteSafe master toggle is off — operator must intervene manually',
+                        outcome: 'Auto-execute safe healing is off — operator must intervene manually.',
                         durationMs: 0,
                         payload: det.payload || null,
                     });
@@ -571,7 +571,7 @@ class SelfHealingEngine {
                 tier: HEALING_TIERS.OWNER_CONFIRMS,
                 decision: AUDIT_DECISION.PROPOSED,
                 executor: 'system',
-                outcome: 'pending_approval',
+                outcome: 'Awaiting operator confirmation.',
                 payload: det.payload || null,
             });
             this._publishNotification({
@@ -698,7 +698,7 @@ class SelfHealingEngine {
                     stoppedForMin,
                     recoveryHints: [
                         'Check Activity tab for an open proposal — F1 may have escalated.',
-                        `Try POST /api/enm/chains/${chainId}/start to restart manually.`,
+                        `Open the ${chainId} chain card and tap the power circle to restart.`,
                         'If repeated, check the external-sigterm-source forensic log:',
                         '  grep "external-sigterm-source" /var/lib/pc2/data/logs/elastos-node-manager.log | tail -1',
                     ],
@@ -833,7 +833,7 @@ class SelfHealingEngine {
             case 'config-rollback':
                 // Implemented in routes/config.js (Phase 5). Mark as deferred
                 // so the audit tab doesn't show a misleading success.
-                return { success: false, outcome: 'config-rollback handled by config route (Phase 5)' };
+                return { success: false, outcome: 'Rollback acknowledged — the .bak restore is operator-driven (not yet automated).' };
 
             case 'prune-suggestion':
             case 'oom-suggestion':
