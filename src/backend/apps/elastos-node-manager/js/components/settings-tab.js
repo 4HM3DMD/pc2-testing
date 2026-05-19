@@ -393,12 +393,16 @@
             var oracleCfg = (cfg.chains && cfg.chains[chainId]) || null;
             if (!oracleCfg) {
                 body.dataset.state = 'unconfigured';
+                // 0.5.12 audit Session 12 — strip M4.4 / plan refs from
+                // operator-facing copy. Pre-0.5.12 said "lands in M4.4 /
+                // For now use the parent chain pane to monitor + install"
+                // — dev-internal milestone refs the operator can't decode.
                 body.innerHTML = ''
                     + '<div class="enm-settings-class-stub">'
                     + '<p><strong>' + escapeHtml(name) + ' is not yet installed.</strong></p>'
-                    + '<p>Oracles are auto-suggested once their parent EVM '
-                    + 'sidechain is running (lands in <code>M4.4</code>). '
-                    + 'For now use the parent chain pane to monitor + install.</p>'
+                    + '<p>This oracle activates automatically when its parent chain '
+                    + 'finishes installing. Open the parent chain\'s dashboard to '
+                    + 'check status or trigger install from the setup wizard.</p>'
                     + '</div>';
                 return;
             }
@@ -418,12 +422,13 @@
      */
     SettingsTab.prototype._renderClassCInfo = function (parent, chainId, oracleCfg) {
         parent.dataset.state = 'ready';
+        var self = this;
         var fields = [
             { label: 'Parent chain',     value: oracleCfg.parentChainId || '—' },
             { label: 'HTTP port',        value: (oracleCfg.ports && oracleCfg.ports.httpRpc) || '—' },
             { label: 'Script path',      value: oracleCfg.scriptPath || '—' },
             { label: 'Node.js version',  value: oracleCfg.nodejsVersion || '—' },
-            { label: 'Active net',       value: oracleCfg.activeNet || 'mainnet' },
+            { label: 'Network',          value: oracleCfg.activeNet || 'mainnet' },
             { label: 'Process enabled',  value: oracleCfg.enabled ? 'on' : 'off' },
         ];
         var html = '<section class="enm-section enm-section-classc">'
@@ -434,15 +439,63 @@
                   + '<dd>' + escapeHtml(String(f.value)) + '</dd>';
         });
         html += '</dl></section>';
+        // 0.5.12 audit Session 12 — rewrite the "no editable fields"
+        // section in plain operator-friendly English. Pre-0.5.12 it
+        // referenced M4.4 milestone tags + told the operator to edit
+        // cfg.chains.<id> directly (i.e. hand-edit the JSON config
+        // file) for port/script changes — hostile UX for a non-power
+        // user. New copy explains the WHY (oracles are stateless
+        // relayers) and the WHAT (restart available below; deeper
+        // changes need a re-install).
         html += '<section class="enm-section enm-section-classc">'
-              + '<h3>Why no editable fields?</h3>'
-              + '<p>Oracles have no keystore, no mining rewards, and no peer '
-              + 'tuning. Restart is driven from the parent chain pane '
-              + '(<code>M4.4</code> wires the auto-restart-on-parent-restart '
-              + 'hook). For port or script-path changes, edit '
-              + '<code>cfg.chains.' + escapeHtml(chainId) + '</code> directly '
-              + 'and restart.</p></section>';
+              + '<h3>Nothing to tune</h3>'
+              + '<p>This oracle is a stateless relay between '
+              + '<code>' + escapeHtml(oracleCfg.parentChainId || 'its parent chain') + '</code> '
+              + 'and mainchain. It has no keystore, no mining rewards, and no peers '
+              + '— so there are no per-oracle settings to change. To move it to a '
+              + 'different port or swap the relayer script, re-install via the '
+              + 'setup wizard.</p>'
+              + '</section>';
+        // 0.5.12 audit Session 12 — add the Restart button promised in
+        // the function's docblock. Single Restart action is the only
+        // legitimate operator interaction for an oracle from this pane.
+        html += '<section class="enm-section enm-section-classc">'
+              + '<h3>Restart</h3>'
+              + '<p>If the oracle stalls or loses its parent connection, '
+              + 'a restart re-handshakes with both endpoints.</p>'
+              + '<button type="button" class="enm-btn enm-btn-secondary" '
+              +   'data-action="restart-oracle">Restart oracle</button>'
+              + '<p class="enm-section-status" data-role="restart-status" hidden></p>'
+              + '</section>';
         parent.innerHTML = html;
+
+        // Wire the Restart button.
+        var restartBtn = parent.querySelector('[data-action="restart-oracle"]');
+        var statusEl   = parent.querySelector('[data-role="restart-status"]');
+        if (restartBtn) {
+            restartBtn.addEventListener('click', function () {
+                if (self._destroyed) { return; }
+                restartBtn.disabled = true;
+                restartBtn.textContent = 'Restarting…';
+                statusEl.hidden = true;
+                self.api.post('/chains/' + chainId + '/restart', {})
+                    .then(function () {
+                        if (self._destroyed) { return; }
+                        restartBtn.disabled = false;
+                        restartBtn.textContent = 'Restart oracle';
+                        statusEl.hidden = false;
+                        statusEl.textContent = 'Restart requested. Watch the chain card for status.';
+                    })
+                    .catch(function (err) {
+                        if (self._destroyed) { return; }
+                        restartBtn.disabled = false;
+                        restartBtn.textContent = 'Restart oracle';
+                        statusEl.hidden = false;
+                        statusEl.textContent = 'Restart failed: '
+                            + ((err && err.message) || String(err));
+                    });
+            });
+        }
     };
 
     /**
