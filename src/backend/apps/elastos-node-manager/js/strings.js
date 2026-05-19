@@ -354,6 +354,34 @@
                     copy_fail_title: 'Copy unavailable',
                     copy_fail_body:  'Browser blocked clipboard access. The password is selected — '
                                    + 'press Ctrl-C (or ⌘-C on Mac) to copy.',
+                    // 0.5.103 audit Session 103 — Session 50 backlog #2.
+                    // Strings for the existing-keystore branch. The
+                    // wizard hits GET /identity at Card 3 mount; if a
+                    // keystore.dat is on disk (operator reinstalled
+                    // ENM but kept the chain data dir, or restored a
+                    // backup keystore manually), they get the paste-
+                    // existing-password input instead of the auto-
+                    // generate button. Pre-0.5.103 this case silently
+                    // installed with a brand-new password the existing
+                    // keystore couldn't unlock — first chain start
+                    // then fell over with a generic "process exited"
+                    // F1 alert and no operator-actionable hint.
+                    checking_existing:        'Checking for an existing keystore on this node…',
+                    existing_warning:         'An existing Main chain keystore was detected on disk. '
+                                            + 'Paste the master password you used when it was created — '
+                                            + 'generating a new one here would not unlock that keystore '
+                                            + 'and the chain would fail to start. If you lost the '
+                                            + 'password, delete the keystore.dat from the Main chain '
+                                            + 'data directory on this server before continuing.',
+                    existing_input_label:     'Existing master password',
+                    existing_input_placeholder: 'Paste the password from your password manager',
+                    existing_input_hint:       'No verification happens here — the chain itself checks '
+                                             + 'the password the first time it starts. A wrong '
+                                             + 'password surfaces as a chain-start failure on the '
+                                             + 'dashboard, not on this card.',
+                    existing_input_err_length: 'Master passwords are at least 8 characters. Check that '
+                                             + 'you pasted the full value without trailing spaces.',
+                    cta_use_existing:          'Continue with existing keystore',
                 },
                 card_4: {
                     title:           'Your wallet address',

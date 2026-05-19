@@ -736,6 +736,64 @@
             this._renderCard3Reveal(body, seq, stashed);
             return;
         }
+
+        // 0.5.103 audit Session 103 (Session 50 backlog #2) — detect an
+        // EXISTING keystore.dat on disk before defaulting to generate.
+        // The install-mainchain-keystore orchestrator step is idempotent
+        // (skips creation if the file exists) but happily encrypts the
+        // new client-side password into cfg.*.keystorePasswordEncrypted,
+        // which can't unlock the existing keystore — so the node fails
+        // to sign at first start, surfacing as an opaque F1 alert with
+        // no hint about the cause.
+        //
+        // Reach the existing-keystore branch when: operator reinstalled
+        // ENM but kept /var/lib/pc2/.../mainchain/keystore.dat; restored
+        // a backup keystore manually; or wiped localStorage between
+        // wizard runs while leaving the chain data dir intact.
+        //
+        // Render a placeholder ("Checking for an existing keystore…")
+        // up front so the operator never sees an empty body, then
+        // resolve from /identity. On fetch failure we silently fall
+        // through to the generate-new path — the operator can still
+        // proceed; the failure mode only matters when a keystore
+        // actually exists, and a failed /identity probe means we don't
+        // know whether one does.
+        body.innerHTML = '<p class="enm-wiz-para enm-master-pw-probe">'
+            + escapeHtml(t('friendly.setup.card_3.checking_existing'))
+            + '</p>';
+        this._continueBtn.hidden = true;
+        this.api.get('/identity', { skipCache: true })
+            .then(function (resp) {
+                if (self._destroyed || !self._stillRendering(seq)) { return; }
+                var exists = !!(resp && resp.keystoreExists);
+                if (exists) {
+                    self._renderCard3ExistingKeystore(body, seq);
+                } else {
+                    self._renderCard3GeneratePrompt(body, seq);
+                }
+            })
+            .catch(function () {
+                if (self._destroyed || !self._stillRendering(seq)) { return; }
+                // /identity unreachable (network blip, auth lapse, route
+                // 500). Fall through to generate — the failure mode this
+                // session addresses only triggers when a keystore is
+                // present; if we can't tell, the original flow is the
+                // safe default.
+                self._renderCard3GeneratePrompt(body, seq);
+            });
+    };
+
+    /**
+     * Render the original "Generate my master password" prompt. Split
+     * out of _renderCard3 in v0.5.103 so the /identity probe path can
+     * route here as the fallback after detecting that no keystore is
+     * present.
+     * @private
+     */
+    SetupConversation.prototype._renderCard3GeneratePrompt = function (body, seq) {
+        var t = root.enmT;
+        var self = this;
+        body.innerHTML = '';
         this._continueBtn.hidden = false;
         this._continueBtn.disabled = false;
         this._continueBtn.textContent = t('friendly.setup.card_3.cta_generate');
@@ -743,6 +801,86 @@
             if (self._destroyed || !self._stillRendering(seq)) { return; }
             self._continueBtn.removeEventListener('click', onGenerate);
             var pw = generateMasterPassword();
+            self._masterPassword = pw;
+            try { window.localStorage.setItem('enm:master-pw', pw); } catch (_) {}
+            self._renderCard3Reveal(body, seq, pw);
+        });
+    };
+
+    /**
+     * Render the "existing keystore detected" branch. Operator pastes
+     * the master password they used when the keystore was first
+     * generated; we store it as `_masterPassword` and route into the
+     * normal reveal panel so Card 5 / Card 6 see an indistinguishable
+     * shape. No password verification happens here — at Card 3 time
+     * the mainchain binary may not be installed yet (Council path).
+     * Verification falls to ela's first start: if the password doesn't
+     * unlock keystore.dat, the chain fails to spawn and F1 fires.
+     *
+     * The "Wipe and start fresh" link is intentionally not wired here
+     * — wiping a keystore is a destructive action and pre-install
+     * ENM doesn't have the unlock check needed to confirm intent.
+     * Operators who want a clean slate must delete keystore.dat
+     * manually (the body text spells out the path).
+     * @private
+     */
+    SetupConversation.prototype._renderCard3ExistingKeystore = function (body, seq) {
+        var t = root.enmT;
+        var self = this;
+        body.innerHTML = ''
+            + '<div class="enm-password-warning enm-master-pw-warning" role="alert">'
+            +   '<span class="enm-password-warning-icon" aria-hidden="true">⚠</span>'
+            +   '<span class="enm-password-warning-body">'
+            +     escapeHtml(t('friendly.setup.card_3.existing_warning'))
+            +   '</span>'
+            + '</div>'
+            + '<label class="enm-council-form-row enm-master-pw-existing-row">'
+            +   '<span class="enm-council-form-label">'
+            +     escapeHtml(t('friendly.setup.card_3.existing_input_label'))
+            +   '</span>'
+            +   '<input type="password" id="enm-wiz-3-existing-pw" '
+            +     'class="enm-council-form-input" '
+            +     'autocomplete="off" spellcheck="false" '
+            +     'placeholder="' + escapeHtml(t('friendly.setup.card_3.existing_input_placeholder')) + '" '
+            +     'aria-describedby="enm-wiz-3-existing-hint enm-wiz-3-existing-err">'
+            +   '<span class="enm-council-form-hint" id="enm-wiz-3-existing-hint">'
+            +     escapeHtml(t('friendly.setup.card_3.existing_input_hint'))
+            +   '</span>'
+            +   '<span class="enm-council-form-error" id="enm-wiz-3-existing-err" hidden></span>'
+            + '</label>';
+
+        var inputEl = body.querySelector('#enm-wiz-3-existing-pw');
+        var errEl   = body.querySelector('#enm-wiz-3-existing-err');
+
+        var newContinue = this._continueBtn.cloneNode(false);
+        newContinue.hidden = false;
+        newContinue.disabled = true;
+        newContinue.textContent = t('friendly.setup.card_3.cta_use_existing');
+        this._continueBtn.parentNode.replaceChild(newContinue, this._continueBtn);
+        this._continueBtn = newContinue;
+
+        function showErr(msg) {
+            if (errEl) { errEl.textContent = msg || ''; errEl.hidden = !msg; }
+        }
+        function trim(s) { return String(s || '').trim(); }
+        inputEl.addEventListener('input', function () {
+            self._continueBtn.disabled = trim(inputEl.value).length === 0;
+            showErr('');
+        });
+        this._continueBtn.addEventListener('click', function onUseExisting() {
+            if (self._destroyed || !self._stillRendering(seq)) { return; }
+            var pw = trim(inputEl.value);
+            // Length sanity check matches generateMasterPassword's
+            // output (32-char URL-safe base64). We accept anything in
+            // the 8-64 range so operators who imported a hand-rolled
+            // keystore from an older Elastos node (those used shorter
+            // passwords) aren't locked out. The real verification is
+            // ela-cli unlock at first chain start.
+            if (pw.length < 8 || pw.length > 64) {
+                showErr(t('friendly.setup.card_3.existing_input_err_length'));
+                return;
+            }
+            self._continueBtn.removeEventListener('click', onUseExisting);
             self._masterPassword = pw;
             try { window.localStorage.setItem('enm:master-pw', pw); } catch (_) {}
             self._renderCard3Reveal(body, seq, pw);
