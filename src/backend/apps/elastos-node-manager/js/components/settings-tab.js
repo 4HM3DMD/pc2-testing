@@ -2916,19 +2916,24 @@
             );
             toggle.textContent = rule.currentlyEnabled ? 'on' : 'off';
             if (!rule.currentlyEnabled) { toggle.classList.add('enm-healing-rules-toggle-off'); }
-            (function (toggle, ruleId, currentlyEnabled) {
+            // 0.5.19 audit Session 19 — thread rule.title through so the
+            // success / failure toasts in _toggleHealingRule can show
+            // "F18 (No inbound peers) is now off" instead of bare "F18".
+            // Friendly title shipped by backend /healing/rules already
+            // and rendered on this same row at idBadge + titleEl above.
+            (function (toggle, ruleId, ruleTitle, currentlyEnabled) {
                 function handleFlip(ev) {
                     if (ev) {
                         ev.preventDefault();
                         ev.stopPropagation();
                     }
-                    self._toggleHealingRule(ruleId, !currentlyEnabled, toggle);
+                    self._toggleHealingRule(ruleId, ruleTitle, !currentlyEnabled, toggle);
                 }
                 toggle.addEventListener('click', handleFlip);
                 toggle.addEventListener('keydown', function (ev) {
                     if (ev.key === ' ' || ev.key === 'Enter') { handleFlip(ev); }
                 });
-            }(toggle, rule.ruleId, rule.currentlyEnabled));
+            }(toggle, rule.ruleId, rule.title || rule.ruleId, rule.currentlyEnabled));
             ruleSummary.appendChild(toggle);
 
             ruleDetails.appendChild(ruleSummary);
@@ -2952,12 +2957,25 @@
      * the next render reflects the new state.
      * @private
      */
-    SettingsTab.prototype._toggleHealingRule = function (ruleId, nextEnabled, toggleEl) {
+    // 0.5.19 audit Session 19 — new `ruleTitle` param so toasts can
+    // include the operator-friendly label alongside the F-code. The
+    // toggle wiring in _paintHealingRules now passes rule.title (or
+    // the ruleId as fallback). Pre-0.5.19 the signature was
+    // (ruleId, nextEnabled, toggleEl) and toasts said bare "F18 is
+    // now off" — operators dismissing toasts hours later had no idea
+    // which rule they had toggled.
+    SettingsTab.prototype._toggleHealingRule = function (ruleId, ruleTitle, nextEnabled, toggleEl) {
         var self = this;
         if (!this.services || !this.services.api
             || typeof this.services.api.put !== 'function') {
             return;
         }
+        // Compose the toast label once. If the title is the same as the
+        // ruleId (no backend title) we render just the code to avoid
+        // "F18 (F18) is now off".
+        var ruleLabel = (ruleTitle && ruleTitle !== ruleId)
+            ? (ruleId + ' (' + ruleTitle + ')')
+            : ruleId;
         // Optimistic UI flip — restore on error.
         var prevText = toggleEl.textContent;
         var prevChecked = toggleEl.getAttribute('aria-checked');
@@ -2971,7 +2989,7 @@
                 if (self.services && self.services.notifications) {
                     self.services.notifications.show({
                         severity: 'info',
-                        title: ruleId + ' is now ' + (nextEnabled ? 'on' : 'off'),
+                        title: ruleLabel + ' is now ' + (nextEnabled ? 'on' : 'off'),
                         body: 'The healing engine will pick up this change within ~5 s.',
                     });
                 }
@@ -2991,7 +3009,7 @@
                 if (self.services && self.services.notifications) {
                     self.services.notifications.show({
                         severity: 'warning',
-                        title: 'Failed to update ' + ruleId,
+                        title: 'Failed to update ' + ruleLabel,
                         body: msg,
                     });
                 }

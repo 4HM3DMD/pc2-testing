@@ -245,6 +245,13 @@
         if (this._destroyed) { return Promise.resolve(); }
         if (this._refreshInFlight) { return this._refreshInFlight; }
         var self = this;
+        // 0.5.19 audit Session 19 — resolve display name once for the
+        // refresh-fail toast (parity with _do at chain-card.js:1023).
+        var t = root.enmTOrFallback;
+        var displayName = t('chain_name.' + this.chainId);
+        if (!displayName || displayName === 'chain_name.' + this.chainId) {
+            displayName = this.chainId;
+        }
         this._refreshInFlight = this.api.get('/chains/' + this.chainId, { skipCache: true }).then(function (state) {
             self._applyState(state);
         }).catch(function (err) {
@@ -265,7 +272,7 @@
             self.notifications.show({
                 id: 'chain-refresh-fail-' + self.chainId,
                 severity: 'warning',
-                title: 'Failed to refresh ' + self.chainId,
+                title: 'Failed to refresh ' + displayName,
                 body: err && err.message ? err.message : String(err),
             });
         }).then(function () {
