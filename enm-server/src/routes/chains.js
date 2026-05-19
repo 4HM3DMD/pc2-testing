@@ -572,7 +572,7 @@ function build(extensionHandle) {
             }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} POST /chains/${req.params.chainId}/start: ${err.message}`);
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Could not start the chain. Try again.'));
         }
     });
 
@@ -594,7 +594,7 @@ function build(extensionHandle) {
             return res.json(successBody(result));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} POST /chains/${req.params.chainId}/stop: ${err.message}`);
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Could not stop the chain. Try again.'));
         }
     });
 
@@ -625,7 +625,7 @@ function build(extensionHandle) {
             return res.json(successBody(result));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} POST /chains/${req.params.chainId}/restart: ${err.message}`);
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Could not restart the chain. Try again.'));
         }
     });
 
@@ -648,7 +648,7 @@ function build(extensionHandle) {
             }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} GET /chains/${req.params.chainId}/version: ${err.message}`);
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Failed to read binary version.'));
         }
     });
 
@@ -895,7 +895,7 @@ function build(extensionHandle) {
             extensionHandle.log.debug(
                 `${ENM_LOG_PREFIX} GET /chains/${req.params.chainId}/sync: ${err.message}`,
             );
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Failed to read sync status.'));
         }
     });
 
@@ -1055,7 +1055,10 @@ function build(extensionHandle) {
             extensionHandle.log.debug(
                 `${ENM_LOG_PREFIX} GET /chains/${req.params.chainId}/producer failed: ${err.message}`,
             );
-            return res.status(status).json(errorBody(err.message));
+            const responseMessage = status === 503
+                ? 'Chain RPC is unreachable. Is the chain running?'
+                : 'Failed to read producer state.';
+            return res.status(status).json(errorBody(responseMessage));
         }
     });
 
@@ -1084,7 +1087,7 @@ function build(extensionHandle) {
             return res.json(successBody(report));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} GET /chains/${req.params.chainId}/diagnose: ${err.message}`);
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Diagnosis failed. Try again.'));
         }
     });
 
@@ -1114,7 +1117,14 @@ function build(extensionHandle) {
             // restore; etc.) — they aren't internal-server errors. 500 stays
             // the default for genuinely-unexpected failures.
             const statusCode = classifyAutoFixError(err);
-            return res.status(statusCode).json(errorBody(err.message));
+            // 409 preconditions ("chain is running, stop it first", "no
+            // backup to restore", etc.) are operator-correctable — keep
+            // the err.message there. 500 is unhandled / unexpected;
+            // static fallback per Sessions 64/67 template.
+            const responseMessage = statusCode === 500
+                ? 'Auto-fix failed. Try again, or report this if it persists.'
+                : err.message;
+            return res.status(statusCode).json(errorBody(responseMessage));
         }
     });
 
@@ -1136,7 +1146,7 @@ function build(extensionHandle) {
             return res.json(successBody(report));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} POST /chains/${req.params.chainId}/compact-logs: ${err.message}`);
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Could not compact logs. Try again.'));
         }
     });
 
@@ -1171,7 +1181,7 @@ function build(extensionHandle) {
             }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} POST /chains/${req.params.chainId}/update: ${err.message}`);
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Could not start the binary update. Try again.'));
         }
     });
 
@@ -1214,7 +1224,13 @@ function build(extensionHandle) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} POST /chains/${req.params.chainId}/bootstrap: ${err.message}`);
             // 412 if it's a disk-space preflight failure — operator-actionable.
             const isPreflight = /insufficient disk|disk space|free, you have/i.test(err.message);
-            return res.status(isPreflight ? 412 : 500).json(errorBody(err.message));
+            // 412 preflight strings are operator-actionable ("Insufficient
+            // disk: 5 GB free, you have only 2 GB") — keep err.message
+            // there. 500 fallback is dev-jargon; static per Sessions 64/67.
+            const responseMessage = isPreflight
+                ? err.message
+                : 'Could not start the bootstrap. Try again.';
+            return res.status(isPreflight ? 412 : 500).json(errorBody(responseMessage));
         }
     });
 
@@ -1226,7 +1242,7 @@ function build(extensionHandle) {
             return res.json(successBody({ status: downloader.getStatus(adapter.chainId) }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} GET /chains/${req.params.chainId}/bootstrap: ${err.message}`);
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Failed to read bootstrap status.'));
         }
     });
 
@@ -1239,7 +1255,7 @@ function build(extensionHandle) {
             return res.json(successBody(result));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} DELETE /chains/${req.params.chainId}/bootstrap: ${err.message}`);
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Could not cancel the bootstrap. Try again.'));
         }
     });
 
@@ -1351,7 +1367,7 @@ function build(extensionHandle) {
             }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} POST /chains/${req.params.chainId}/bpos/activate: ${err.message}`);
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Producer reactivation failed. Try running the activate command via ela-cli manually.'));
         }
     });
 
@@ -1469,7 +1485,7 @@ function build(extensionHandle) {
             extensionHandle.log.error(
                 `${ENM_LOG_PREFIX} PUT /chains/${req.params.chainId}/class-b-config: ${err.message}`,
             );
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Could not save settings. Try again.'));
         }
     });
 
@@ -1724,7 +1740,10 @@ function wrapRpc(kind, fn, extensionHandle) {
             extensionHandle.log.debug(
                 `${ENM_LOG_PREFIX} GET /chains/${req.params.chainId}/${kind} failed: ${err.message}`,
             );
-            return res.status(status).json(errorBody(err.message));
+            const responseMessage = status === 503
+                ? 'Chain RPC is unreachable. Is the chain running?'
+                : 'Failed to read chain data.';
+            return res.status(status).json(errorBody(responseMessage));
         }
     };
 }
