@@ -565,8 +565,15 @@
         if (this._logViewer) { return; }
         if (!this.els.paneLogs) { return; }
         if (!root.EnmLogViewer) {
+            // 0.5.134 audit Session 134 — match the recovery guidance
+            // shown by _mountSettingsTabLazy + _mountAuditTabLazy. Pre-
+            // 0.5.134 the log viewer's "component not loaded" stub was
+            // a dead end for the operator (no recovery action). All three
+            // lazy mounts now offer the same Ctrl-Shift-R / ⌘-Shift-R
+            // hard-refresh hint per the Mac-parity rule (S31 audit).
             this.els.paneLogs.innerHTML =
-                '<p class="enm-stub">Log viewer component not loaded.</p>';
+                '<p class="enm-stub">Log viewer component not loaded. '
+                + 'Hard-refresh the page (Ctrl-Shift-R, or ⌘-Shift-R on Mac).</p>';
             return;
         }
         this._logViewer = new root.EnmLogViewer({
@@ -1505,9 +1512,18 @@
     };
 
     /**
-     * In v0.4 home mode, the 5-tab nav goes away — the home view IS
-     * the only view (settings drawer comes in Phase 5C). We keep the
-     * header bar visible because the theme toggle still lives there.
+     * Hide the 4-tab strip (Dashboard / Logs / Settings / Audit) while
+     * keeping the chrome (brand + env pill + gear icon) visible. Used
+     * when the operator transitions away from the home shell — e.g.
+     * landing on the welcome screen pre-setup, or entering multi-chain
+     * overview which is a single full-pane view.
+     *
+     * 0.5.134 audit Session 134 — JSDoc rewritten. Pre-0.5.134 the
+     * docstring referenced "v0.4 home mode" (we're on v0.5.x), a
+     * "settings drawer" (replaced with the in-pane Settings tab in
+     * Beta 3 — see _wireSettingsToggle), and a "theme toggle" (removed
+     * in alpha.29 v2 Phase 1c — see _wireThemeToggle removal comment
+     * at line 394). None of those concepts exist any more.
      *
      * @private
      */
