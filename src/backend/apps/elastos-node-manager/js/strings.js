@@ -774,25 +774,22 @@
             restarting: 'Restarting...',
         },
 
+        // 0.5.138 audit Session 138 — 5 dead keys dropped:
+        //   - chain_card.height (visual "Height" label never rendered;
+        //     only `peers / version / uptime` are wired via the
+        //     `['peers','version','uptime'].forEach` loop at
+        //     chain-card.js:457; the actual block-height value renders
+        //     under primary_label_height instead).
+        //   - chain_card.primary_metric_synced / _syncing / _height
+        //     (placeholder strings for the big number; chain-card.js
+        //     formats the height inline via enmFormatNumber rather
+        //     than routing through these templates).
+        //   - chain_card.sparkline_aria (the sparkline component sets
+        //     its own aria-label inline; this fallback never ran).
         chain_card: {
             version:    'Version',
-            height:     'Height',
             peers:      'Peers',
             uptime:     'Uptime',
-            // alpha.28.1 batch 45 — dropped: no_chains, details_show,
-            // details_hide. Round-7 i18n audit acbcec6b verified zero
-            // callers — no_chains is unreachable copy (setup auto-routes
-            // before this state can render); details_*  was for a
-            // never-shipped expand/collapse affordance.
-            // 0.2.0-alpha.1 — Apple Hero pattern: big number alone on
-            // the primary value line, small lowercase caption below.
-            // primary_metric_* drive the number (or em-dash placeholder
-            // when not applicable); primary_label_* drive the caption.
-            // When unconfigured/stopped, the caption carries the action
-            // hint so the operator knows where to click.
-            primary_metric_synced:       '{height}',
-            primary_metric_syncing:      '{local} / {network}',
-            primary_metric_height:       '{height}',
             primary_metric_off:          '—',
             primary_metric_unconfigured: '—',
             primary_label_height:        'block height',
@@ -803,7 +800,6 @@
             // "block height: —" state lasts about a minute and
             // resolves itself.
             primary_label_connecting:    'connecting to peers',
-            sparkline_aria:              'Block height, last hour',
             sse_reconnecting:            'Reconnecting…',
             tap_circle_aria:             'Status of {chainName}',
             // beta.3.16 — dynamic aria-label per coarse state. Stopped
@@ -838,11 +834,17 @@
             region_label: 'System status',
         },
 
+        // 0.5.138 audit Session 138 — 3 more dead keys dropped:
+        //   - log_viewer.heading (the "Logs" tab label comes from the
+        //     top-tab strip in app.js, not from this namespace)
+        //   - log_viewer.paused (the auto-resume pill renders inline
+        //     English in log-viewer.js — never routed through this key)
+        //   - log_viewer.empty (the empty-state copy lives inline in
+        //     log-viewer.js too)
+        // Only log_viewer.live remains alive — log-viewer.js:437 reads
+        // it via `t('log_viewer.live', 'Live')`.
         log_viewer: {
-            heading:    'Logs',
             live:       'Live',
-            paused:     'Paused (auto-resume on new line)',
-            empty:      'No log lines yet. The chain may not have started, or its log file is empty.',
             // alpha.28.1 batch 44 — dropped: connection_lost,
             // filter_placeholder, level_all/info/warn/error. No JS
             // caller; the filter UI was never built and the
@@ -1295,12 +1297,18 @@
             // essentials_guide_body 10 lines below). Same class of
             // stale-pointer bug as v0.5.27's Card 7 Producer Identity.
             note_after_confirm:         'Paste this into the "Register as new supernode" form in Essentials.',
-            open_essentials_btn:        'View registration guide',
+            // 0.5.138 audit Session 138 — open_essentials_btn dropped.
+            // Duplicate of view_guide_btn (same value 'View registration
+            // guide') and never referenced. The render path uses
+            // view_guide_btn instead.
 
             // Variant C (active).
             head_title_active:          'BPoS supernode',
             head_sub_active:            'On-chain producer record bound to this node’s signing key.',
-            head_sub_active_narrow:     'Bound to your wallet',
+            // 0.5.138 audit Session 138 — head_sub_active_narrow dropped.
+            // The compact-mode sub-text fallback is rendered inline in
+            // validator-registration-card.js, never routed through this
+            // key.
             chip_active:                'Active',
             chip_active_rank:           'Active · Rank #{rank}',
             stat_votes:                 'Votes',
@@ -1320,16 +1328,19 @@
             stat_inactive_rounds_meta_warn: 'Approaching forced-inactive — rewards will pause',
             note_active:                'Rewards and voting are managed in Elastos Essentials. ENM tracks on-chain producer status; claim, stake, and update operations require a signed transaction from your wallet.',
 
-            // Variant B (needs activation). The render path uses
-            // head_title_activation / head_sub_activation as key names;
-            // duplicated under needs_activation_* aliases for clarity.
+            // Variant B (needs activation).
+            // 0.5.138 audit Session 138 — head_title_needs_activation /
+            // head_sub_needs_activation aliases dropped. The render
+            // path only ever consumed the head_title_activation /
+            // head_sub_activation pair; the *_needs_activation_*
+            // aliases were retained "for clarity" per a beta-era
+            // comment but never wired. Also dropped activate_btn_running
+            // — chain-card.js handles the busy-state label inline via
+            // enmRunOnce's swap callback.
             head_title_activation:      'BPoS supernode: ready to activate',
             head_sub_activation:        'On-chain producer record found. Activate to start signing blocks.',
-            head_title_needs_activation:'BPoS supernode: ready to activate',
-            head_sub_needs_activation:  'On-chain producer record found. Activate to start signing blocks.',
             chip_ready_to_activate:     'Ready to activate',
             activate_btn:               'Activate supernode',
-            activate_btn_running:       'Activating…',
             activate_ok_title:          'Activation submitted',
             activate_ok_body:           'Wait a block or two for chain confirmation.',
 
@@ -1341,48 +1352,23 @@
             essentials_guide_body:      'Open Elastos Essentials → Wallet → Voting → BPoS supernodes → "Register as new supernode". Paste this node’s public key into the Node Public Key field, sign with the wallet that holds the 2,000 ELA deposit, then wait ~6 blocks (about 12 minutes) for chain confirmation.',
         },
 
-        validator_card: {
-            eyebrow:    'Next step',
-            title:      'Register as a BPoS validator',
-            sub:        'Your node is fully caught up with the network. Three quick steps and it can start earning ELA rewards.',
-
-            step1_title: 'Copy your producer public key',
-            step1_help:  "Your keystore was generated during setup and lives on this server. This is its public half — share it freely; the secret half never leaves the server.",
-            copy:        'Copy',
-            copied:      'Copied',
-
-            step2_title: 'Sign the registration in Elastos Essentials',
-            step2_help:  'The 2,000 ELA registration deposit must be signed by the wallet that owns it. This server has no signing key for that wallet on purpose — you do it on your phone.',
-            step2_a:     'Open Elastos Essentials → Wallet → Voting → BPoS supernodes.',
-            step2_b:     'Tap "Register as new supernode".',
-            step2_c:     'Fill in the form:',
-            step2_d:     'Confirm and sign. The 2,000 ELA deposit moves to a lockup address. Wait about 6 blocks (≈12 minutes) for the chain to confirm — you can leave this page open.',
-
-            field_name:       'Node name',
-            field_name_help:  'A public-facing display name. Up to 30 characters.',
-            field_pubkey:     'Node public key',
-            field_pubkey_help:'Paste the value you copied in step 1.',
-            field_addr:       'Node IP / URL',
-            field_addr_help:  "Your server's public address so other peers can dial you (your domain or external IP).",
-            field_url:        'Website (optional)',
-            field_url_help:   'Public page voters can read to learn who you are.',
-
-            deposit_note: 'The 2,000 ELA deposit is refundable — you get it back when you unregister, minus chain fees. It is NOT a payment.',
-
-            step3_title:        'Activate your supernode',
-            step3_help:         "Once the registration is confirmed on chain, tap below to send the activation transaction. Your server signs the activation with the node's signing keystore — the same key it uses to sign block proposals during your on-duty rounds. Your owner key stays in Essentials and is never asked to sign here.",
-            activate_btn:       'Activate BPoS supernode',
-            activate_btn_active:'Activating…',
-            activate_ok:        'Activation submitted — wait a block or two for chain confirmation.',
-            // alpha.28.1 batch 87 — copy button aria-label + clipboard
-            // fallback strings localised. Previous shape carried inline
-            // English in the Copy button's aria-label and in two
-            // duplicate hardcoded toast strings inside enmCopyToClipboard
-            // opts (Round-26 audit findings #2 + #4).
-            copy_aria:          'Copy public key',
-            copy_fail_title:    'Copy unavailable',
-            copy_fail_body:     'Browser blocked clipboard access. Public key is selected — press Ctrl-C (or ⌘-C on Mac) to copy.',
-        },
+        // 0.5.138 audit Session 138 — entire validator_card namespace
+        // dropped (30 keys, ~40 lines). validator_card was the original
+        // "Register as a BPoS validator" 3-step wizard card design.
+        // Beta 3.40 replaced it with the simpler bpos_card namespace
+        // (lines ~1274-1342 above) — see the comment at bpos_card's
+        // header explaining the migration. validator-registration-card.js
+        // (which still bears the old filename) now reads bpos_card.*
+        // keys exclusively; no consumer ever pointed back at
+        // validator_card. Also: validator_card.title used the stale
+        // "validator" terminology that v0.5.32 (S32 audit) renamed to
+        // "supernode" everywhere else in the catalog. The keys were
+        // doubly orphaned (wrong namespace AND wrong vocabulary).
+        // Total: 30 keys (eyebrow / title / sub / step1_title / step1_help
+        // / copy / copied / step2_* / step3_* / field_* / deposit_note /
+        // activate_* / copy_aria / copy_fail_*) — all zero references
+        // in the tree. If a future surface needs this 3-step wizard
+        // shape, resurrect from git history.
 
         audit: {
             // beta.3.48 — renamed "Audit log" → "Activity" for plain-
@@ -1390,12 +1376,13 @@
             // the page is just a chronological list of things that
             // happened on this node.
             heading:        'Activity',
-            filter_chain:   'Chain',
+            // 0.5.138 audit Session 138 — dropped filter_chain /
+            // filter_from / filter_to / apply_filter / export_btn.
+            // The filter toolbar in audit-tab.js renders its labels +
+            // button text inline; none of these keys had any consumer.
+            // filter_tier IS kept (2 hits via audit-tab.js — tier
+            // chip + filter label).
             filter_tier:    'Kind',
-            filter_from:    'From',
-            filter_to:      'To',
-            apply_filter:   'Apply',
-            export_btn:     'Export JSON',
             empty:          'No activity matches these filters.',
             // Default-friendly columns shown to all operators.
             col_when:       'When',
@@ -1424,7 +1411,8 @@
             // a wallet hex. Possible values: 'operator', 'system',
             // 'F1'/'F2'/'AUTOSTART'/etc. PC2 wallet never appears here
             // anymore (ENM identity = keystore, not PC2 wallet).
-            executor_you:       'You', // legacy key — no longer used
+            // 0.5.138 audit Session 138 — executor_you dropped per its
+            // own inline "legacy key — no longer used" tag.
             executor_system:    'System',
             executor_operator:  'Operator',
             // beta.3.48 — friendly names for the 5 healing tiers.
@@ -1447,7 +1435,11 @@
             outcome_friendly_done:           'Done',
             outcome_friendly_failed:         'Failed',
             outcome_friendly_skipped:        'Skipped',
-            outcome_friendly_noted:          'Notified', // legacy — kept for back-compat, not emitted by 3.66+
+            // 0.5.138 audit Session 138 — outcome_friendly_noted dropped
+            // per its own inline "legacy — kept for back-compat, not
+            // emitted by 3.66+" tag. audit-tab.js:1368 was explicitly
+            // changed FROM 'noted' to 'done' as the default fallback,
+            // and no other caller emits the noted classification.
             outcome_friendly_pending:        'Awaits you',
             outcome_friendly_auto_resolved:  'Auto-resolved',
             outcome_friendly_rejected:       'Rejected',
