@@ -42,7 +42,11 @@
         { key: 'eid',        label: 'Identity Chain',        hint: 'EID + EID Oracle' },
         { key: 'pg',         label: 'PG Chain',              hint: 'PG + PG Oracle' },
         { key: 'arbiter',    label: 'Arbiter Service',       hint: 'Cross-chain arbitration' },
-        { key: 'spv',        label: 'SPV Module',            hint: 'Light-client / SPV bridge' },
+        // 0.5.30 audit Session 30 — hint aligned with Session 15
+        // (v0.5.15) reframing. SPV is a wallet/client protocol Main
+        // chain serves automatically, not a node-mode an operator runs.
+        // Row is always grayed (cfg.chains.spv is never populated).
+        { key: 'spv',        label: 'SPV Module',            hint: 'Wallet protocol (served by Main chain)' },
     ];
 
     var STORAGE_KEY = 'enm:chain-selection';
@@ -217,18 +221,26 @@
         });
 
         // Footer explainer when in BPoS-only mode — tells the operator
-        // why most options are grayed. beta.0.4.2 — reworded to remove
-        // "council-node" naming collision with the welcome screen's
-        // "Council node" card (which is CR Council governance, a
-        // separate Elastos feature). This footer is about adding more
-        // chains to your existing BPoS supernode setup.
+        // why most options are grayed.
+        //
+        // 0.5.30 audit Session 30 — rewrote to fix three problems:
+        //  1. Pre-0.5.30 promised "Settings → Install chain" but that
+        //     path does NOT exist in ENM. Stale pointer bug parallel
+        //     to v0.5.27's Card 7 / "Producer Identity tile".
+        //  2. Listed SPV as an installable module (per Session 15
+        //     v0.5.15, SPV is a wallet protocol, not a node mode).
+        //  3. Listed Arbiter as a "sidechain module" (Arbiter is
+        //     Class D cross-chain signer, not a sidechain).
+        //  Per operator-rule positioning ([[feedback_enm_vocabulary]]):
+        //  BPoS-only and Council are DISTINCT roles chosen at install
+        //  time; upgrading BPoS-only → Council in place is not
+        //  supported. Honest copy beats a non-existent upgrade path.
         if (this._mode === 'bpos-only') {
             var foot = document.createElement('div');
             foot.className = 'enm-chain-selector-footer';
             foot.textContent =
-                'Main chain only. Add sidechain modules '
-                + '(ESC / EID / PG / Arbiter / SPV) via Settings → '
-                + 'Install chain to run a full multi-chain supernode.';
+                'This node runs Main chain only. The grayed rows '
+                + 'are for Council nodes that run additional chains.';
             this.menu.appendChild(foot);
         }
     };
