@@ -389,6 +389,21 @@
                                    + 'forever. Retype the last 4 characters of the address above to '
                                    + 'confirm.',
                     err_format:      'Must start with 0x followed by 40 hex characters.',
+                    // 0.5.102 audit Session 102 — EIP-55 backlog item
+                    // (Session 50 list #3). Surfaces a non-blocking
+                    // warning when the operator's pasted reward
+                    // address has mixed-case A-F chars (suggesting
+                    // EIP-55 checksum encoding). Doesn't do full
+                    // keccak verification (no built-in browser API
+                    // for keccak-256; SubtleCrypto provides standard
+                    // SHA-3 only, which differs in pad byte from
+                    // keccak-256 that EIP-55 uses) but prompts
+                    // operator awareness of the wrong-checksum
+                    // footgun: EVM chains accept ANY mixed-case as
+                    // valid and parse it to the lowercase address,
+                    // so a one-char typo in mixed-case sends to a
+                    // different wallet silently.
+                    warn_mixed_case: 'Mixed-case address detected — double-check it matches your wallet exactly. A wrong checksum sends to a different address silently.',
                     // 0.5.4 audit Session 4 — operators paste from Essentials /
                     // MetaMask / explorer pages and sometimes capture the 40
                     // hex chars without the 0x prefix. Pre-0.5.4 they hit the

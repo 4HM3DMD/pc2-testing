@@ -932,6 +932,16 @@
             +       'autocomplete="off" placeholder="0x…" required>'
             +     '<span class="enm-council-form-hint">' + escapeHtml(rewardHint) + '</span>'
             +     '<span class="enm-council-form-error" data-for="reward" hidden></span>'
+            // 0.5.102 audit Session 102 — EIP-55 mixed-case warning
+            // span, separate from the error span so it can display
+            // alongside a valid-format address (operator pastes a
+            // mixed-case address — format is valid, but checksum
+            // might be wrong). Inline-styled (no CSS class) per the
+            // audit-chain pattern of avoiding CSS changes in
+            // session-scope code fixes.
+            +     '<span class="enm-council-form-warn" data-for="reward" hidden '
+            +       'style="color: var(--state-warning, #c97a00); '
+            +       'font-size: 12px; display: block; margin-top: 4px;"></span>'
             +   '</label>'
             +   '<label class="enm-council-form-row" id="enm-wiz-4-confirm-row" hidden>'
             +     '<span class="enm-council-form-label">'
@@ -960,6 +970,24 @@
             var el = self._body.querySelector(
                 '.enm-council-form-error[data-for="' + field + '"]');
             if (el) { el.textContent = msg; el.hidden = !msg; }
+        }
+        // 0.5.102 audit Session 102 — parallel showWarn for the
+        // EIP-55 mixed-case soft warning (Session 50 backlog #3).
+        function showWarn(field, msg) {
+            var el = self._body.querySelector(
+                '.enm-council-form-warn[data-for="' + field + '"]');
+            if (el) { el.textContent = msg; el.hidden = !msg; }
+        }
+        // hasMixedCase — true when the address has any uppercase
+        // A-F hex char. EIP-55 encodes a checksum in mixed-case;
+        // wallet copies from Essentials / MetaMask produce
+        // mixed-case strings. Lowercase or all-uppercase addresses
+        // have no checksum to verify and don't need the warning.
+        function hasMixedCase(s) {
+            if (typeof s !== 'string') { return false; }
+            var hasUpper = /[A-F]/.test(s);
+            var hasLower = /[a-f]/.test(s);
+            return hasUpper && hasLower;
         }
         // 0.5.23 audit Session 23 — handle the two most common paste
         // mishaps that pre-0.5.23 fell through to a generic format error:
@@ -1002,11 +1030,22 @@
             // 0.5.23 audit Session 23 — normalize before validating so
             // a paste with stray whitespace shows the last-4 gate as
             // soon as the underlying address is otherwise valid.
-            if (validateEth(normalizeEthInput(rewardEl.value)) === null) {
+            var norm = normalizeEthInput(rewardEl.value);
+            if (validateEth(norm) === null) {
                 last4Row.hidden = false;
+                // 0.5.102 audit Session 102 — EIP-55 mixed-case
+                // soft warning. Doesn't block submission; the
+                // last-4 gate + operator inspection are the
+                // primary defenses. This just raises awareness.
+                if (hasMixedCase(norm)) {
+                    showWarn('reward', t('friendly.setup.card_4.warn_mixed_case'));
+                } else {
+                    showWarn('reward', '');
+                }
             } else {
                 last4Row.hidden = true;
                 last4El.value = '';
+                showWarn('reward', '');
             }
         });
 
