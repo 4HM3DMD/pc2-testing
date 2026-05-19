@@ -2,10 +2,12 @@
  * Copyright (C) 2026-present Elacity
  * SPDX-License-Identifier: AGPL-3.0
  *
- * components/system-status.js — top-bar with CPU / RAM / disk / OS.
+ * components/system-status.js — top-bar with CPU / RAM / disk / OS / uptime.
  *
- * Polls /api/system/status every 30 seconds. Phase 5 will replace polling
- * with SSE 'system' topic pushes for higher granularity.
+ * Polls /api/system/status every 5 seconds (visibility-paused). The strip
+ * marks every cell stale on poll failure and recovers on the next
+ * success. Uptime ticks smoothly at 1 Hz between polls, re-anchored from
+ * the server-reported value on every successful refresh.
  */
 
 (function (root) {
@@ -140,6 +142,14 @@
                 self._cells[k].classList.remove('enm-sys-stale');
             });
             self.root.dataset.stale = '0';
+            // 0.5.107 audit Session 107 — clear the stale tooltip set by
+            // the previous .catch path. Pre-0.5.107 the title attribute
+            // ("System status temporarily unavailable — values may be
+            // stale.") persisted across recovery because only
+            // dataset.stale and the per-cell class were reset. Operators
+            // who hovered the strip after a transient outage saw the
+            // stale warning long after the values were live again.
+            if (self.root.title) { self.root.title = ''; }
         }).catch(function (err) {
             if (self._destroyed) { return; }
             // Mark every cell as stale so the operator can see the values
@@ -156,11 +166,22 @@
                 // operator still sees the same warning recycled twelve
                 // times a minute). Single-id show() dedupes via dismiss-
                 // and-replace, so the toast updates in place instead.
+                //
+                // 0.5.107 audit Session 107 — static body. Pre-0.5.107
+                // we leaked err.message into the toast verbatim, which
+                // could expose backend paths / stack fragments on 500.
+                // /system/status has no operator-meaningful error
+                // codes (no 412/409/503 branches like the sessions-
+                // 64/67/79 routes), so a flat static fallback is the
+                // right shape — the visible stale cells + strip
+                // tooltip already convey "not live" without the toast
+                // needing to carry the raw error.
                 self.notifications.show({
                     id: 'enm-sys-status-unavailable',
                     severity: 'warning',
                     title: 'System status unavailable',
-                    body: err && err.message ? err.message : String(err),
+                    body: 'Couldn’t reach the backend for system stats. '
+                        + 'The strip will refresh once the next poll succeeds.',
                 });
             }
         });
@@ -206,8 +227,20 @@
         // a11y: state was previously conveyed only by background-color on
         // the ::before dot (WCAG 1.4.1 fail for colour-blind operators).
         // Keep the explicit aria-label that names the verdict.
+        //
+        // 0.5.107 audit Session 107 — use the visible label
+        // (t('system_status.cpu') → "cpu load" etc.) instead of the
+        // internal symbol. Pre-0.5.107 the aria-label assembled "mem"
+        // / "cpu" / "os" verbatim, so screen-reader users heard "mem
+        // ok: 48 % of 16 GB" while sighted users read "ram used 48 %
+        // of 16 GB". Fall back to the symbol if the i18n helper
+        // hasn't loaded yet (defensive — boot path always loads it
+        // before mount).
         var labelMap = { ok: 'ok', warning: 'warning', critical: 'critical', unknown: 'unknown' };
-        cell.setAttribute('aria-label', key + ' ' + (labelMap[health] || 'ok') + ': ' + combined);
+        var tLabel = (typeof root.enmTOrFallback === 'function')
+            ? root.enmTOrFallback('system_status.' + key)
+            : key;
+        cell.setAttribute('aria-label', tLabel + ' ' + (labelMap[health] || 'ok') + ': ' + combined);
         cell.dataset.health = health || 'ok';
     };
 
