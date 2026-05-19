@@ -82,7 +82,7 @@ function build(deps) {
             return res.json(successBody(info));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} GET /maintenance/check-update: ${err.message}`);
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Could not check for binary updates. Will retry on the next poll.'));
         }
     });
 
@@ -290,7 +290,14 @@ function build(deps) {
                 payload: { action: 'uninstall', code: err.code },
             });
             const status = err.code === 'BUSY' ? 409 : 500;
-            return res.status(status).json(errorBody(err.message));
+            // Same Sessions 64/67/79 pattern: BUSY message is operator-
+            // meaningful ("Another maintenance action is in progress");
+            // 500 fallback goes to the Activity tab for the audit-row
+            // err.message above (line 285-291).
+            const responseMessage = status === 500
+                ? 'Uninstall failed. Check the Activity tab for the underlying error.'
+                : err.message;
+            return res.status(status).json(errorBody(responseMessage));
         }
     });
 
@@ -347,7 +354,11 @@ function build(deps) {
                 payload: { action: 'nuke', code: err.code },
             });
             const status = err.code === 'BUSY' ? 409 : 500;
-            return res.status(status).json(errorBody(err.message));
+            // Same pattern as /uninstall above + Sessions 64/67/79.
+            const responseMessage = status === 500
+                ? 'Reset failed. Check the Activity tab for the underlying error.'
+                : err.message;
+            return res.status(status).json(errorBody(responseMessage));
         }
     });
 
