@@ -1288,7 +1288,11 @@
             head_title_register:        'BPoS supernode: not yet registered',
             head_sub_register:          'No on-chain producer record matches this node’s signing key.',
             chip_action_required:       'Action needed',
-            cta_help_register:          'To start producing blocks and earn rewards, register your validator from your Elastos Essentials wallet. ENM will detect the on-chain record once confirmed and start tracking state automatically.',
+            // 0.5.32 audit Session 32 — "validator" → "supernode" for
+            // consistency with the rest of bpos_card.* (Elastos uses
+            // "supernode" / "producer"; "validator" came from a stray
+            // beta.3.x rename that left one string behind).
+            cta_help_register:          'To start producing blocks and earn rewards, register your supernode from your Elastos Essentials wallet. ENM will detect the on-chain record once confirmed and start tracking state automatically.',
             view_guide_btn:             'View registration guide',
             copy_pubkey_btn:            'Copy node public key',
             copy_aria:                  'Copy node public key',
@@ -1296,7 +1300,13 @@
             copy_fail_title:            'Copy unavailable',
             copy_fail_body:             'Browser blocked clipboard access. The key is selected — press Ctrl-C (or ⌘-C on Mac) to copy.',
             signing_key_label:          'This node’s signing key',
-            note_after_confirm:         'Paste this into the Producer Registration form in Essentials.',
+            // 0.5.32 audit Session 32 — fixed stale Essentials UI label.
+            // Pre-0.5.32 said "Producer Registration form" — that label
+            // doesn't exist in Essentials. The actual Essentials form is
+            // "Register as new supernode" (verified against
+            // essentials_guide_body 10 lines below). Same class of
+            // stale-pointer bug as v0.5.27's Card 7 Producer Identity.
+            note_after_confirm:         'Paste this into the "Register as new supernode" form in Essentials.',
             open_essentials_btn:        'View registration guide',
 
             // Variant C (active).
@@ -1308,8 +1318,18 @@
             stat_votes:                 'Votes',
             stat_votes_meta:            'Current snapshot',
             stat_inactive_rounds:       'Inactive rounds',
-            stat_inactive_rounds_meta_safe: 'No slashing risk',
-            stat_inactive_rounds_meta_warn: 'Near slashing threshold',
+            // 0.5.32 audit Session 32 — "slashing" was inaccurate to
+            // Elastos. Verified against mainchain config.go:193
+            // (`InactivePenalty: 0, //there will be no penalty in this
+            // version`) and the [[feedback_enm_bpos_slashing_truth]]
+            // memory: going inactive does NOT deduct deposit on
+            // mainnet — the actual risk is LOST REWARDS while the
+            // producer is flipped to Inactive. The 200-ELA slash
+            // exists only for illegal-evidence (double-sign), which
+            // an inactive producer cannot trigger. Copy reflects the
+            // truthful risk.
+            stat_inactive_rounds_meta_safe: 'Producer earning normally',
+            stat_inactive_rounds_meta_warn: 'Approaching forced-inactive — rewards will pause',
             note_active:                'Rewards and voting are managed in Elastos Essentials. ENM tracks on-chain producer status; claim, stake, and update operations require a signed transaction from your wallet.',
 
             // Variant B (needs activation). The render path uses
