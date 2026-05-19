@@ -319,11 +319,15 @@
                 },
                 card_3: {
                     title:           '🔑 Master password',
-                    sub:             'This password unlocks every keystore on your node — save it ONCE.',
-                    sub_council:     'One password protects every keystore on your node: mainchain '
+                    // 0.5.26 audit Session 26 — dropped orphan `sub` key
+                    // (no consumers; the card only ever renders sub_council
+                    // or sub_bpos based on _goal). Display-name parity:
+                    // "Main chain" replaces lowercase "mainchain" raw id,
+                    // matching v0.5.18 / v0.5.24 / v0.5.25 conventions.
+                    sub_council:     'One password protects every keystore on your node: Main chain '
                                    + 'producer key, ESC + EID + PG EVM keystores, and the Arbiter '
                                    + 'wallet. Save it once and you\'re done.',
-                    sub_bpos:        'One password protects your mainchain producer keystore. Save it '
+                    sub_bpos:        'One password protects your Main chain producer keystore. Save it '
                                    + 'once — there\'s no recovery if it\'s lost.',
                     // 0.5.3 audit Session 3 — warning rewritten for accuracy.
                     // Pre-0.5.3 "shown ONCE" was misleading: localStorage stash

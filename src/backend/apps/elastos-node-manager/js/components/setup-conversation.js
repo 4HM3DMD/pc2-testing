@@ -774,20 +774,18 @@
                 + 'your browser is too old. Use a current Chrome / Firefox / Safari / Edge build.',
             );
         }
+        // 0.5.26 audit Session 26 — dropped the unreachable hex fallback
+        // (every browser ENM targets has btoa). The fallback would have
+        // produced 16 bytes of entropy after slicing to 32 hex chars vs
+        // the intended 192 bits from 24-byte base64 — a security-degraded
+        // path that contradicted the defensive throw at the top of this
+        // function. The defensive throw is the right answer for "no
+        // CSPRNG / no btoa"; falling back to a weaker password isn't.
         var bytes = new Uint8Array(24);  // 24 bytes → 32-char base64
         rng.getRandomValues(bytes);
-        var b64 = '';
-        if (typeof window.btoa === 'function') {
-            var str = '';
-            for (var i = 0; i < bytes.length; i++) { str += String.fromCharCode(bytes[i]); }
-            b64 = window.btoa(str);
-        } else {
-            // Defensive fallback — every browser ENM targets has btoa.
-            for (var j = 0; j < bytes.length; j++) {
-                b64 += ('0' + bytes[j].toString(16)).slice(-2);
-            }
-            b64 = b64.slice(0, 32);
-        }
+        var str = '';
+        for (var i = 0; i < bytes.length; i++) { str += String.fromCharCode(bytes[i]); }
+        var b64 = window.btoa(str);
         // URL-safe (no + / =)
         return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '').slice(0, 32);
     }
