@@ -890,16 +890,6 @@
 
             heading_danger:    'Danger zone',
             danger_intro:      'Permanently wipe this app and all its data from your PC2.',
-            danger_show_btn:   'Show wipe controls',
-            danger_hide_btn:   'Hide',
-            danger_kept_h:     'WHAT IS KEPT',
-            danger_kept_li1:   'keystore.dat — your BPoS supernode key. Auto-backed up to:',
-            danger_kept_path:  '/var/lib/pc2/data/backups/elastos-node-manager/keystore-<timestamp>.dat',
-            danger_kept_li2:   'Restore by copying it back into the new install’s keystore path after reinstall.',
-            danger_wiped_h:    'WHAT IS WIPED',
-            danger_wiped_li1:  'The Elastos Node Manager app itself (its files and code on disk).',
-            danger_wiped_li2:  'Chain blocks (resync will take 1–3 days after reinstall).',
-            danger_wiped_li3:  'Settings, RPC user/password, audit log, healing history.',
             danger_confirm_h:  'Type WIPE to confirm',
             danger_confirm_ph: 'WIPE',
             danger_wipe_btn:   'Wipe and uninstall',
@@ -1103,12 +1093,12 @@
 
             // App removal card (uninstall extension only).
             danger_remove_title:            'Remove app (keep chain data + keystore)',
-            danger_remove_help:             'Uninstall the ENM extension from PC2. Your chain data, keystore, and audit log stay on disk at /var/lib/pc2/data/extensions/elastos-node-manager so you can reinstall later and pick up where you left off.',
+            danger_remove_help:             'Uninstall the ENM extension from PC2. Your chain data, keystore, and audit log stay on disk so you can reinstall later and pick up where you left off.',
             danger_remove_confirm_label:    'Type "remove" to confirm:',
             danger_remove_btn:              'Remove app',
             danger_remove_confirm_dialog:   'Uninstall the ENM extension? Your chain data, keystore, and audit log stay on disk so reinstall can recover them.',
             danger_remove_in_progress:      'Uninstalling ENM in a few seconds…',
-            danger_remove_queued:           '✓ Uninstall queued. ENM will be removed shortly. Chain data + keystore stay on disk.',
+            danger_remove_queued:           '✓ Uninstall queued. ENM will be removed within ~10 seconds — this page will disconnect when it does. Chain data + keystore stay on disk.',
 
             // Nuclear card (uninstall AND wipe everything).
             danger_nuke_title:              'Nuclear — remove app AND wipe everything',
@@ -1118,7 +1108,7 @@
             danger_nuke_btn:                'Wipe everything',
             danger_nuke_confirm_dialog:     'This will DELETE your keystore. There is no undo. Continue?',
             danger_nuke_in_progress:        'Wiping everything in a few seconds…',
-            danger_nuke_queued:             '✓ Nuclear wipe queued. ENM and all its data will be removed shortly.',
+            danger_nuke_queued:             '✓ Nuclear wipe queued. ENM and all its data will be removed within ~10 seconds — this page will disconnect when it does.',
 
             // beta.3.43 — Identity tab. Five cards: current identity
             // view, unlock-and-cache, backup, import, reset.
