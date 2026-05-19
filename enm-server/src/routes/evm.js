@@ -35,11 +35,19 @@ function build(_extensionHandle) {
 
     // All HTTP verbs, all subpaths — single 501 response.
     router.use('*', limit('read'), (req, res) => {
+        // 0.5.68 audit Session 68 — dropped stale "ENM v0.3" + "scheduled
+        // for v0.5" version refs. ENM has been on v0.5.x for many releases
+        // and the EVM tab still isn't built; promising a release that
+        // already shipped was misleading. Same Session 33 pattern as the
+        // tools_update "alpha.11+ apply-in-place" stale roadmap promise.
+        // Also: ESC → Smart Chain (ESC) per Session 18-28 display-name
+        // canonicalization.
         return res.status(501).json(errorBody(
-            'EVM operations are not implemented in ENM v0.3. '
-            + 'Cross-chain features (ESC sidechain, contract calls, bridges) '
-            + 'are scheduled for v0.5. For now, use Essentials, MetaMask, or '
-            + 'your wallet provider directly for ESC operations.',
+            'EVM operations are not implemented in ENM yet. '
+            + 'Cross-chain features (Smart Chain sidechain, contract calls, '
+            + 'bridges) are reserved for a future release. For now, use '
+            + 'Essentials, MetaMask, or your wallet provider directly for '
+            + 'Smart Chain operations.',
         ));
     });
 
