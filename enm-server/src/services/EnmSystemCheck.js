@@ -194,23 +194,40 @@ function checkCpu(actualCores, requiredCores, pathName) {
     };
 }
 
-/** Check #3a — RAM minimum (blocks install when below). */
-function checkRam(totalGb, requiredGb, pathName) {
-    if (totalGb >= requiredGb) {
-        return { ok: true, message: `${totalGb} GB total` };
+/**
+ * Check #3 — RAM. Single merged row carrying min + recommended logic:
+ *   - below min:           severity=required, ok=false,
+ *                          message="31 GB total — Council needs ≥42 GB (64 GB recommended)"
+ *   - between min and rec: severity=recommended, ok=false,
+ *                          message="50 GB total — Council recommends 64 GB"
+ *   - at/above rec:        severity=required, ok=true,
+ *                          message="64 GB total"
+ *
+ * 0.5.141 audit Session 141 — replaced the previous two-row design
+ * (`RAM (minimum)` + `RAM (recommended)`) that emitted both rows for
+ * the same fact (operator's GB total) with different threshold
+ * comparisons on each row. On a borderline box the operator saw two
+ * adjacent ✗/⚠ rows both pointing at their 31 GB RAM, which read as
+ * "this is broken in two ways" when really it's the same fact
+ * surfaced twice. New shape: one row, one fact, severity drives the
+ * gate decision (required blocks, recommended warns).
+ */
+function checkRam(totalGb, minGb, recommendedGb, pathName) {
+    if (totalGb < minGb) {
+        let msg = `${totalGb} GB total — ${ucfirst(pathName)} needs >=${minGb} GB`;
+        if (recommendedGb > minGb) {
+            msg += ` (${recommendedGb} GB recommended)`;
+        }
+        return { ok: false, message: msg, severity: 'required' };
     }
-    return {
-        ok: false,
-        message: `${totalGb} GB total — ${ucfirst(pathName)} needs >=${requiredGb} GB`,
-    };
-}
-
-/** Check #3b — RAM recommended. Warning only; never blocks. */
-function checkRamRecommended(totalGb, recommendedGb) {
-    if (totalGb >= recommendedGb) {
-        return { ok: true, message: `${totalGb} GB — recommended >=${recommendedGb} GB` };
+    if (recommendedGb > minGb && totalGb < recommendedGb) {
+        return {
+            ok: false,
+            message: `${totalGb} GB total — ${ucfirst(pathName)} recommends ${recommendedGb} GB`,
+            severity: 'recommended',
+        };
     }
-    return { ok: false, message: `${totalGb} GB — recommended ${recommendedGb} GB` };
+    return { ok: true, message: `${totalGb} GB total`, severity: 'required' };
 }
 
 /**
@@ -414,26 +431,17 @@ async function runSystemCheck(input) {
 
     const osResult = checkOs(release);
     const cpuResult = checkCpu(cores, t.cpuCoresMin, pathName);
-    const ramResult = checkRam(totalGb, t.ramMinGb, pathName);
+    // 0.5.141 audit Session 141 — merged "RAM (minimum)" + "RAM
+    // (recommended)" into a single row. checkRam now returns
+    // { ok, message, severity } so this site doesn't need to
+    // hardcode severity per row.
+    const ramResult = checkRam(totalGb, t.ramMinGb, t.ramRecommendedGb, pathName);
 
     const checks = [
         { id: 'os', label: 'Operating system', ok: osResult.ok, message: osResult.message, severity: 'required' },
         { id: 'cpu', label: 'CPU cores', ok: cpuResult.ok, message: cpuResult.message, severity: 'required' },
-        { id: 'ram', label: 'RAM (minimum)', ok: ramResult.ok, message: ramResult.message, severity: 'required' },
+        { id: 'ram', label: 'RAM', ok: ramResult.ok, message: ramResult.message, severity: ramResult.severity },
     ];
-
-    // 'recommended' RAM row only when it differs from the min — on
-    // BPoS the two are equal (8/8) so the row would be redundant.
-    if (t.ramRecommendedGb > t.ramMinGb) {
-        const rec = checkRamRecommended(totalGb, t.ramRecommendedGb);
-        checks.push({
-            id: 'ram-recommended',
-            label: 'RAM (recommended)',
-            ok: rec.ok,
-            message: rec.message,
-            severity: 'recommended',
-        });
-    }
 
     checks.push({
         id: 'disk',
@@ -632,7 +640,6 @@ module.exports = {
     checkOs,
     checkCpu,
     checkRam,
-    checkRamRecommended,
     checkDisk,
     checkStorageType,
     resolveRootDevice,
