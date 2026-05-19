@@ -317,9 +317,22 @@
                                    + 'wallet. Save it once and you\'re done.',
                     sub_bpos:        'One password protects your mainchain producer keystore. Save it '
                                    + 'once — there\'s no recovery if it\'s lost.',
-                    warning:         'This password is shown ONCE. If you lose it, you can\'t recover '
-                                   + 'the keystore(s) — you\'d have to re-register from scratch. A '
-                                   + 'password manager is the safest place.',
+                    // 0.5.3 audit Session 3 — warning rewritten for accuracy.
+                    // Pre-0.5.3 "shown ONCE" was misleading: localStorage stash
+                    // re-displays it on refresh until install completes. The
+                    // real catastrophic states are (a) clearing localStorage
+                    // before install finishes, (b) generating on one origin
+                    // then accessing from a different URL (per-origin
+                    // localStorage means the password is missing on the new
+                    // origin → wizard regenerates → mismatch with the
+                    // existing keystore.dat). Copy now reflects both.
+                    warning:         'Save this NOW to your password manager. If you lose it before the '
+                                   + 'install completes, regenerating creates a different password that '
+                                   + 'won\'t match the keystore — full wipe + reinstall needed. Stick to '
+                                   + 'ONE access URL (IP or domain, not both) until install finishes; '
+                                   + 'browsers keep the password separately per URL.',
+                    show:            'Show',
+                    hide:            'Hide',
                     password_label:  'Master password',
                     cta_generate:    'Generate my master password',
                     cta_continue:    'Continue',

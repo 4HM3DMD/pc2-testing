@@ -733,8 +733,26 @@
      * @returns {string}
      */
     function generateMasterPassword() {
+        // 0.5.3 audit Session 3 HIGH fix — defensive throw if no CSPRNG.
+        // Pre-0.5.3 we deref `(window.crypto || window.msCrypto)
+        // .getRandomValues` without checking either exists; on very
+        // old browsers this throws an opaque TypeError mid-render with
+        // no operator-facing explanation. Master password is too
+        // catastrophic to silently weaken — fail loudly so the
+        // operator sees a clear error instead of a blank Card 3.
+        var rng = (window.crypto && window.crypto.getRandomValues)
+            ? window.crypto
+            : (window.msCrypto && window.msCrypto.getRandomValues)
+            ? window.msCrypto
+            : null;
+        if (!rng) {
+            throw new Error(
+                'Master password generation requires window.crypto.getRandomValues — '
+                + 'your browser is too old. Use a current Chrome / Firefox / Safari / Edge build.',
+            );
+        }
         var bytes = new Uint8Array(24);  // 24 bytes → 32-char base64
-        (window.crypto || window.msCrypto).getRandomValues(bytes);
+        rng.getRandomValues(bytes);
         var b64 = '';
         if (typeof window.btoa === 'function') {
             var str = '';
@@ -766,8 +784,17 @@
             +   '<div class="enm-password-label">'
             +     escapeHtml(t('friendly.setup.card_3.password_label'))
             +   '</div>'
-            +   '<code class="enm-password-value">' + escapeHtml(password) + '</code>'
+            // 0.5.3 audit Session 3 — Show/Hide toggle. Visible by default
+            // (operator needs to read + save it once); button lets them
+            // hide while filling a password manager / screen-share. The
+            // password value lives in `data-pw` so toggling doesn't lose
+            // it; visible state uses textContent=value, hidden uses dots.
+            +   '<code class="enm-password-value" data-pw="' + escapeHtml(password) + '" data-shown="true">'
+            +     escapeHtml(password) + '</code>'
             +   '<div class="enm-password-actions">'
+            +     '<button type="button" class="enm-btn enm-btn-secondary enm-master-pw-toggle" '
+            +       'data-action="toggle-visibility" aria-label="Hide master password">'
+            +       escapeHtml(t('friendly.setup.card_3.hide')) + '</button>'
             +     '<span class="enm-master-pw-copy-slot"></span>'
             +   '</div>'
             + '</div>'
@@ -816,6 +843,36 @@
         ack.addEventListener('change', function () {
             self._continueBtn.disabled = !ack.checked;
         });
+
+        // 0.5.3 audit Session 3 — Show/Hide toggle. Operator may want
+        // to hide the password while filling their password manager
+        // or screen-sharing setup. Toggle flips data-shown + textContent
+        // between the real value and a dot-mask (length-preserving so
+        // the layout doesn't jitter). data-pw retains the source value;
+        // no re-fetching needed.
+        var toggle = body.querySelector('[data-action="toggle-visibility"]');
+        if (toggle) {
+            toggle.addEventListener('click', function () {
+                var el = body.querySelector('.enm-password-value');
+                if (!el) return;
+                var shown = el.getAttribute('data-shown') === 'true';
+                var actualPw = el.getAttribute('data-pw') || '';
+                if (shown) {
+                    // Hide: replace text with a dot-mask of same length.
+                    var mask = '';
+                    for (var i = 0; i < actualPw.length; i++) { mask += '•'; }
+                    el.textContent = mask;
+                    el.setAttribute('data-shown', 'false');
+                    toggle.textContent = t('friendly.setup.card_3.show') || 'Show';
+                    toggle.setAttribute('aria-label', 'Show master password');
+                } else {
+                    el.textContent = actualPw;
+                    el.setAttribute('data-shown', 'true');
+                    toggle.textContent = t('friendly.setup.card_3.hide') || 'Hide';
+                    toggle.setAttribute('aria-label', 'Hide master password');
+                }
+            });
+        }
     };
 
     // ====================================================================
