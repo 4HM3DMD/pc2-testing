@@ -97,6 +97,22 @@
         catch (_) { /* swallow — private mode etc. */ }
     };
 
+    /**
+     * 0.5.8 audit Session 8 — public refresh entry point.
+     *
+     * Pre-0.5.8 `_refreshAvailability` only fired at mount time (app boot),
+     * so chains installed AFTER boot via the wizard's Council install never
+     * triggered the council-default 'all' switch. Selector stayed in
+     * 'bpos-only' mode showing just "Main chain"; operator had to click
+     * the selector dropdown manually to see the multi-chain options.
+     * app.js _showDashboard now calls this after Card 7 onComplete to
+     * re-detect mode + dispatch enm:chain-change → PaneRouter remounts
+     * the pane to multi-chain overview when council is freshly installed.
+     */
+    ChainSelector.prototype.refresh = function () {
+        this._refreshAvailability();
+    };
+
     /** @private — fetch current config, mark available chains */
     ChainSelector.prototype._refreshAvailability = function () {
         var self = this;

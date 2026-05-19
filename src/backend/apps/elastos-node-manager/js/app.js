@@ -995,6 +995,26 @@
             this._mountDashboardForActiveChain();
         }
 
+        // 0.5.8 audit Session 8 fix — re-detect council mode after install.
+        // Pre-0.5.8 the chain-selector's _refreshAvailability fired only at
+        // app init (boot), so chains installed during the wizard never
+        // triggered the v0.5.0 council-default 'all' switch. Operator
+        // landed on the mainchain pane with the selector still labeled
+        // "Main chain"; they had to click the dropdown manually to find
+        // the multi-chain overview. Calling refresh() here re-runs the
+        // /config GET; if the now-installed chain set is Council-shaped
+        // AND no stored selection exists, the selector flips to 'all' +
+        // dispatches enm:chain-change → PaneRouter (now in dashboard
+        // -mounted=true state) catches it via _handleChainChange →
+        // re-mounts the pane to the multi-chain overview. One brief
+        // flicker between initial pane mount and overview mount; way
+        // better than the stale "Main chain" label the operator hit
+        // in our session.
+        if (this._chainSelector && typeof this._chainSelector.refresh === 'function') {
+            try { this._chainSelector.refresh(); }
+            catch (_) { /* defensive: don't block dashboard render on selector refresh */ }
+        }
+
         // Notifications pipeline — keep CRITICAL proposal cards popping
         // on top of the dashboard.
         if (this.services.sse) {
