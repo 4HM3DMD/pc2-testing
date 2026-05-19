@@ -1103,11 +1103,102 @@
         runPreflight();
     };
 
+    /**
+     * 0.5.5 audit Session 5 CRITICAL fix — normalize BPoS preflight shape.
+     *
+     * `/setup/install-council/preflight` returns `{ checks:[], allRequiredOk }`.
+     * `/setup/preflight` (BPoS path, mainchain only) returns the OLDER shape
+     * `{ os, disk, wallet, clockSkew }`. Pre-0.5.5 Card 5 only knew the
+     * Council shape — on the BPoS path `result.checks` was empty, zero rows
+     * rendered, and `allRequiredOk` was undefined (fell back to canProceed=
+     * true) so the Continue button was ENABLED with no visible preflight.
+     * Operator could blow past a failing OS check or a critical disk-low
+     * warning with no UI signal at all.
+     *
+     * This transformer flattens both shapes into a `checks[]` array of the
+     * same per-row contract (id/label/ok/severity/message). Existing render
+     * loop below consumes the unified array; both paths now surface their
+     * actual hardware/network state.
+     */
+    function normalizePreflight(result) {
+        if (!result) return { checks: [], allRequiredOk: false };
+        if (Array.isArray(result.checks)) {
+            return result;  // Council shape, already normalized
+        }
+        // BPoS shape — flatten into checks[].
+        var checks = [];
+        if (result.os) {
+            checks.push({
+                id: 'os',
+                label: 'Operating system',
+                ok: !!result.os.ok,
+                severity: 'required',
+                message: result.os.ok
+                    ? (result.os.distroId ? 'Detected: ' + result.os.distroId
+                        + (result.os.version ? ' ' + result.os.version : '')
+                        : 'OK')
+                    : (result.os.reason || 'Unsupported OS'),
+            });
+        }
+        if (result.disk) {
+            var diskOk = result.disk.ok && result.disk.status !== 'critical';
+            var diskSev = result.disk.status === 'critical' ? 'required'
+                        : (result.disk.status === 'warning' ? 'recommended' : 'required');
+            var diskMsg = result.disk.reason
+                || ((result.disk.freeGb || 0).toFixed(1) + ' GB free of '
+                    + ((result.disk.totalGb || 0).toFixed(1) + ' GB'));
+            checks.push({
+                id: 'disk',
+                label: 'Disk space (mainchain)',
+                ok: diskOk,
+                severity: diskSev,
+                message: diskMsg,
+            });
+        }
+        if (result.wallet) {
+            checks.push({
+                id: 'wallet',
+                label: 'Owner wallet (authenticated)',
+                ok: !!result.wallet.ok,
+                severity: 'required',
+                message: result.wallet.walletAddress
+                    ? 'Signed in as ' + result.wallet.walletAddress.slice(0, 6)
+                      + '…' + result.wallet.walletAddress.slice(-4)
+                    : 'Owner identity verified',
+            });
+        }
+        if (result.clockSkew) {
+            var skew = result.clockSkew;
+            // Soft-skipped skew checks render as a warning row (not blocking).
+            var skewSev = skew.skipped ? 'recommended' : 'required';
+            var skewMsg = skew.skipped
+                ? ('Skipped: ' + (skew.reason || 'probe unreachable'))
+                : (typeof skew.absSkewMs === 'number'
+                    ? ('Clock drift ' + skew.absSkewMs + ' ms '
+                       + '(limit ' + (skew.maxSkewMs || '?') + ' ms)')
+                    : 'NTP probe complete');
+            checks.push({
+                id: 'clock-skew',
+                label: 'Clock skew (vs internet time)',
+                ok: !!skew.ok,
+                severity: skewSev,
+                message: skewMsg,
+            });
+        }
+        var allRequiredOk = checks
+            .filter(function (c) { return c.severity === 'required'; })
+            .every(function (c) { return c.ok; });
+        return { checks: checks, allRequiredOk: allRequiredOk };
+    }
+
     /** @private */
     SetupConversation.prototype._renderCard5Preflight = function (listEl, result) {
         var t = root.enmT;
+        // 0.5.5 audit Session 5 — flatten both Council and BPoS preflight
+        // shapes via normalizePreflight before render.
+        var normalized = normalizePreflight(result);
         listEl.innerHTML = '';
-        var checks = (result && result.checks) || [];
+        var checks = normalized.checks || [];
         checks.forEach(function (c) {
             var icon = c.ok ? '✓' : (c.severity === 'required' ? '✗' : '⚠');
             var stateAttr = c.ok ? 'ok'
@@ -1123,13 +1214,12 @@
                 + '</div>';
             listEl.appendChild(row);
         });
-        // For Council the preflight returns allRequiredOk; for the
-        // mainchain preflight (/setup/preflight) we treat any
-        // non-failing checks shape as ok. Default to true so the
-        // BPoS path proceeds.
-        var canProceed = (typeof result.allRequiredOk === 'boolean')
-            ? result.allRequiredOk
-            : true;
+        // 0.5.5 audit Session 5 — both shapes now flow through
+        // normalizePreflight which always sets allRequiredOk to a real
+        // boolean (true iff every required check is ok). Pre-0.5.5 the
+        // BPoS shape returned undefined which fell through to canProceed
+        // =true, silently bypassing every preflight failure on BPoS.
+        var canProceed = !!normalized.allRequiredOk;
         this._continueBtn.disabled = !canProceed;
         if (!canProceed) {
             var helpRow = document.createElement('li');
