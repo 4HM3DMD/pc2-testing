@@ -941,7 +941,18 @@
             if (el) { el.textContent = msg; el.hidden = !msg; }
         }
         function validateEth(s) {
-            if (typeof s !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(s)) {
+            if (typeof s !== 'string') {
+                return t('friendly.setup.card_4.err_format');
+            }
+            // 0.5.4 audit Session 4 — detect missing 0x prefix specifically.
+            // Operators paste from Essentials / MetaMask / etc. sometimes
+            // grab 40 hex chars without the 0x; pre-0.5.4 the generic
+            // "format" error confused them. Now we suggest the fix.
+            if (/^[0-9a-fA-F]{40}$/.test(s)) {
+                return t('friendly.setup.card_4.err_missing_0x',
+                    { suggested: '0x' + s });
+            }
+            if (!/^0x[0-9a-fA-F]{40}$/.test(s)) {
                 return t('friendly.setup.card_4.err_format');
             }
             return null;

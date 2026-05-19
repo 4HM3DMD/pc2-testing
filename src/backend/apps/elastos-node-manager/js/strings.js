@@ -367,6 +367,12 @@
                                    + 'forever. Retype the last 4 characters of the address above to '
                                    + 'confirm.',
                     err_format:      'Must start with 0x followed by 40 hex characters.',
+                    // 0.5.4 audit Session 4 — operators paste from Essentials /
+                    // MetaMask / explorer pages and sometimes capture the 40
+                    // hex chars without the 0x prefix. Pre-0.5.4 they hit the
+                    // generic format error and didn't know what was wrong;
+                    // suggesting the fix preempts the support question.
+                    err_missing_0x:  'Address is missing the "0x" prefix. Did you mean "{suggested}"?',
                     err_last4_empty: 'Retype the last 4 characters of the address above.',
                     err_last4_match: 'Mismatch — expected "{expected}".',
                     cta:             'Continue',
