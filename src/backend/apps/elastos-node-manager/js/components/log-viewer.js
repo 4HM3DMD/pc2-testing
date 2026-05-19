@@ -489,19 +489,15 @@
         metaSep.textContent = '·'; // ·
         meta.appendChild(metaSep);
 
+        // 0.5.17 audit Session 17 — operator-facing meta source rewrite.
+        // Pre-0.5.17 read "Tail seeded from /tail?n=200 · SSE
+        // chains:mainchain:logs" — leaked internal API paths and SSE
+        // channel names that operators don't curl or subscribe to. The
+        // new copy tells the operator the same thing in operator terms.
         var metaSource = document.createElement('span');
         metaSource.className = 'enm-log-meta-source';
-        // The mock spec calls for plain text + two <code> spans.
-        // textContent for the framing, appendChild for the codes —
-        // never innerHTML on user-visible chrome.
-        metaSource.appendChild(document.createTextNode('Tail seeded from '));
-        var tailCode = document.createElement('code');
-        tailCode.textContent = '/tail?n=' + INITIAL_TAIL_N;
-        metaSource.appendChild(tailCode);
-        metaSource.appendChild(document.createTextNode(' · SSE '));
-        var sseCode = document.createElement('code');
-        sseCode.textContent = 'chains:' + this.chainId + ':logs';
-        metaSource.appendChild(sseCode);
+        metaSource.textContent = 'Showing last '
+            + INITIAL_TAIL_N.toLocaleString() + ' lines · live updates';
         this._metaSource = metaSource;
         meta.appendChild(metaSource);
 
@@ -557,7 +553,14 @@
         var cap = document.createElement('div');
         cap.className = 'enm-log-cap-banner';
         cap.hidden = true;
-        cap.textContent = '5,000-line DOM cap reached. Older lines dropped from the top.';
+        // 0.5.17 audit Session 17 — drop "DOM cap" dev jargon. Pre-0.5.17
+        // said "5,000-line DOM cap reached. Older lines dropped from the
+        // top." — operators don't think in DOM terms and "dropped from
+        // the top" isn't actionable. New copy tells them what's shown +
+        // how to find older lines.
+        cap.textContent = 'Showing the most recent 5,000 lines. '
+            + 'Older lines have scrolled off — use Copy or the filter '
+            + 'to find what you need.';
         this._capBanner = cap;
         scroller.appendChild(cap);
 
