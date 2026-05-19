@@ -1278,9 +1278,9 @@
         });
         sec.body.appendChild(makeFormRow({
             label: 'Log level',
-            help: 'Mapped to ela.conf ',
+            help: 'Mapped to the ela.conf ',
             helpCodes: ['PrintLevel'],
-            helpSuffix: ' by ElaMainChainAdapter. Default (info) is right for almost everyone.',
+            helpSuffix: ' setting. Default (info) is right for almost everyone.',
             control: this._advanced.logLevel.el,
         }));
 
