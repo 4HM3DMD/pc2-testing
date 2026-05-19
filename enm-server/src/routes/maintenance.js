@@ -153,7 +153,15 @@ function build(deps) {
                 payload: { action: 'update', tag, code: err.code },
             });
             const status = err.code === 'BUSY' ? 409 : 500;
-            return res.status(status).json(errorBody(err.message));
+            // BUSY message ("Another maintenance action is in progress")
+            // is operator-meaningful; 500 fallbacks could leak ENOENT
+            // paths / script-exit-code internals, so use a static message
+            // and let the operator open the Activity tab where the audit
+            // row above (line 148-154) carries the full err.message.
+            const responseMessage = status === 500
+                ? 'Update failed. Check the Activity tab for the underlying error.'
+                : err.message;
+            return res.status(status).json(errorBody(responseMessage));
         }
     });
 
@@ -220,7 +228,14 @@ function build(deps) {
             });
             const status = err.code === 'BUSY' ? 409
                 : err.code === 'NO_CHAIN' ? 404 : 500;
-            return res.status(status).json(errorBody(err.message));
+            // Same pattern as /update above: BUSY message stays as-is
+            // (operator-meaningful), 404 carries the chain-name reference
+            // operators recognize, 500 fallbacks go to the Activity tab
+            // where the audit row above (line 214-220) preserves err.message.
+            const responseMessage = status === 500
+                ? 'Chain re-sync failed. Check the Activity tab for the underlying error.'
+                : err.message;
+            return res.status(status).json(errorBody(responseMessage));
         }
     });
 
