@@ -382,9 +382,21 @@ function streamDownload(url, destPath, onByteProgress) {
  */
 function extractTarball(tarballPath, targetDir) {
     return new Promise((resolve, reject) => {
+        // 0.5.146 audit Session 146 — --no-same-owner is required when
+        // enm-server runs as root (the default in pc2-node's systemd
+        // unit). tar's default behavior under root is to preserve the
+        // ARCHIVED uid/gid from the tarball, not the current process's
+        // identity. The upstream snapshots at node-data.elastos.io are
+        // packaged with uid 1001 (the publisher's user). Without
+        // --no-same-owner the extracted block dirs end up owned by
+        // uid 1001, leaving ela (running as root) with read-only access
+        // and unable to write new blocks into the snapshot dir as it
+        // syncs forward. Verified on the test server: post-extract
+        // chown -R root:root was needed to recover; --no-same-owner
+        // pre-empts that for fresh installs.
         const child = spawn(
             'tar',
-            ['-xzf', tarballPath, '-C', targetDir],
+            ['-xzf', tarballPath, '-C', targetDir, '--no-same-owner'],
             { stdio: ['ignore', 'pipe', 'pipe'] },
         );
         let stderr = '';

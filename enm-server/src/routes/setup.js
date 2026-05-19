@@ -2284,13 +2284,48 @@ async function runCouncilInstall(args) {
             const cfg2 = await ConfigStore.load();
             const { chainDir } = require('../services/DataDir');
             const targetDirsByChain = {};
+            // 0.5.146 audit Session 146 — per-chain snapshot extract targets.
+            // Pre-0.5.146 every chain extracted to `<chainDir>/data/`,
+            // which was wrong for mainchain. Verified live on the test
+            // server (S146):
+            //
+            //   - ela mainchain reads its block data from
+            //     `<chainDir>/elastos/data/...` (cwd=chainDir; ela main.go:50
+            //     joins cfg.DataDir+"data" and our NativeProcessService:316
+            //     mkdir's `<cwd>/elastos`; ela's actual writes land at
+            //     `<chainDir>/elastos/data/`).
+            //   - The upstream snapshot tarball at
+            //     https://node-data.elastos.io/ela/ela-data-latest.tgz has a
+            //     top-level `data/` entry containing the actual block dirs
+            //     (blocks/, chain/, checkpoints/, dpos/, peers.json).
+            //   - Pre-0.5.146 we passed target=`<chainDir>/data/` to `tar -xzf
+            //     -C <target>`, producing `<chainDir>/data/data/blocks/...`.
+            //     ela found `<chainDir>/elastos/data/` empty on first start
+            //     and synced from genesis (the operator's "main chain
+            //     didn't start from snapshot" symptom).
+            //
+            // Fix: extract mainchain to `<chainDir>/elastos/`. The tarball's
+            // `data/` wrapping prefix then lands the block data at exactly
+            // `<chainDir>/elastos/data/` where ela reads from. No
+            // --strip-components flag needed.
+            //
+            // EVM chains (ESC/EID/PG) use geth's `--datadir <chainDir>/data`
+            // per EvmSidechainAdapter:DATA_RELPATH; tarball structure for
+            // those upstream snapshots is NOT yet verified against the same
+            // recovery procedure mainchain went through (v0.5.146 backlog).
+            // For now they keep the legacy `<chainDir>/data/` target — if
+            // they exhibit the same symptom, operator should report and we
+            // do the same trace for each chain's upstream tarball.
+            const SNAPSHOT_TARGET_RELPATH = {
+                mainchain: 'elastos',  // tarball's `data/` → <chainDir>/elastos/data/
+                esc:       'data',     // legacy — verify against upstream tarball structure
+                eid:       'data',     // legacy — verify
+                pg:        'data',     // legacy — verify
+            };
             for (const cid of ['mainchain', 'esc', 'eid', 'pg']) {
                 if (cfg2.chains && cfg2.chains[cid]) {
-                    // Each chain adapter writes its on-disk state under
-                    // chainDir(cid)/data — match that exact path so the
-                    // tarball extraction lands where the binary will
-                    // later look for it.
-                    targetDirsByChain[cid] = path.join(chainDir(cid), 'data');
+                    const rel = SNAPSHOT_TARGET_RELPATH[cid] || 'data';
+                    targetDirsByChain[cid] = path.join(chainDir(cid), rel);
                 }
             }
             // beta.0.4.12 — operator feedback "snapshots flicker soooo
