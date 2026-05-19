@@ -2,7 +2,7 @@
  * Copyright (C) 2026-present Elacity
  * SPDX-License-Identifier: AGPL-3.0
  *
- * EnmSystemCheck — v0.4.7 — MANDATORY pre-install hardware gate.
+ * EnmSystemCheck — v0.5.108 — MANDATORY pre-install hardware gate.
  *
  * Why this exists:
  *   Prior to v0.4.7 the install wizard accepted any host that passed
@@ -23,7 +23,7 @@
  *   severity:'required' blocks; severity:'recommended' warns only.
  *   `remediation['add-swap']` only present for BPoS with RAM === 8 GB.
  *
- * v0.4.7
+ * v0.5.108
  */
 
 'use strict';
@@ -291,10 +291,18 @@ async function checkStorageType() {
     let rot;
     try {
         rot = fs.readFileSync(rotPath, 'utf8').trim();
-    } catch (err) {
+    } catch (_) {
+        // 0.5.109 audit Session 109 — replaced err.message interpolation
+        // with a static fallback. Pre-0.5.109 we surfaced Node fs error
+        // text verbatim (e.g. "EACCES: permission denied, open ...");
+        // the path is already in this message so the err.message was
+        // mostly tautological, but it propagated raw filesystem errno
+        // strings into operator-facing UI on a hard preflight gate.
+        // Matches the static-fallback pattern from Sessions 64/67/79/
+        // 81-84 for routes — a server-side preflight is the same shape.
         return {
             ok: false,
-            message: `Could not read ${rotPath}: ${err.message} — SSD/NVMe required`,
+            message: `Could not probe storage type at ${rotPath} — SSD/NVMe required`,
         };
     }
     if (rot === '0') {
@@ -488,6 +496,43 @@ function fstabAlreadyHasSwapfile() {
 }
 
 /**
+ * 0.5.109 audit Session 109 — kernel-side active-swap check, used by
+ * addSwap as a precondition. Reading /proc/swaps is the canonical way
+ * to ask Linux "is this path currently mapped as swap" — the file is
+ * always present on a running kernel and lists active swap targets,
+ * one per line, with the filename in column 1 (the header line is
+ * literally "Filename ..." which we skip).
+ *
+ * Why this matters: addSwap's dd step rewrites /swapfile with zeros.
+ * If the kernel currently holds page-table entries pointing into
+ * /swapfile (i.e. the file is active swap), dd-ing over it can corrupt
+ * swap data — the kernel reads from disk blocks the filesystem hasn't
+ * promised it'd preserve. Pre-0.5.109 we only checked /etc/fstab
+ * (persistence), not /proc/swaps (active state). Operator could click
+ * "Add 4 GB swap" twice and the second call would overwrite live swap.
+ */
+function swapfileAlreadyActive() {
+    let raw;
+    try {
+        raw = fs.readFileSync('/proc/swaps', 'utf8');
+    } catch (_) {
+        // /proc/swaps missing → not Linux or unusual environment. Treat
+        // as "not active" — addSwap's dd will either work or fail
+        // cleanly. Don't block on inability to detect.
+        return false;
+    }
+    for (const line of raw.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed) { continue; }
+        // Skip the header line that /proc/swaps emits first.
+        if (trimmed.startsWith('Filename')) { continue; }
+        const firstField = trimmed.split(/\s+/)[0];
+        if (firstField === SWAPFILE_PATH) { return true; }
+    }
+    return false;
+}
+
+/**
  * addSwap — create + enable + persist a 4 GB swapfile. Idempotent;
  * safe to call again (dd truncates, fstab append is gated).
  *
@@ -505,6 +550,23 @@ function fstabAlreadyHasSwapfile() {
  */
 async function addSwap() {
     try {
+        // 0.5.109 audit Session 109 — kernel-side precheck. If
+        // /swapfile is currently active swap, do NOT dd over it (would
+        // corrupt active swap pages, see swapfileAlreadyActive's
+        // header). The remediation chip on Card 2 keeps appearing for
+        // BPoS-with-8GB-RAM even after a successful add-swap because
+        // the threshold check still matches (totalmem unchanged), so
+        // operator could click it again — or curl the route directly.
+        // Persistence guard (fstabAlreadyHasSwapfile) is checked
+        // separately below for the fstab append.
+        if (swapfileAlreadyActive()) {
+            return {
+                ok: true,
+                freeGbAfter: bytesToGb(os.freemem()),
+                alreadyActive: true,
+            };
+        }
+
         const dd = await execCapture('dd', [
             'if=/dev/zero',
             `of=${SWAPFILE_PATH}`,
@@ -575,6 +637,7 @@ module.exports = {
     checkStorageType,
     resolveRootDevice,
     fstabAlreadyHasSwapfile,
+    swapfileAlreadyActive,
     bytesToGb,
 };
 
