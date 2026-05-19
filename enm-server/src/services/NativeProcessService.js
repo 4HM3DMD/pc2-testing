@@ -92,7 +92,16 @@ class NativeProcessService extends EventEmitter {
             raw = fs.readFileSync(pidPath, 'utf8');
         } catch (err) {
             // ENOENT or any read error — treat as not running.
-            this.extensionHandle.log.debug(`${ENM_LOG_PREFIX} statusSync(${chainId}) read pid: ${err.message}`);
+            // 0.5.154 — BUG-C7: ENOENT (no pid file) is the NORMAL "chain
+            // stopped" state. Logging it fired on every HealthChecker tick for
+            // every stopped chain (7 sidechains/oracles/arbiter on a council
+            // node) and flooded elastos-node-manager.log — noise that buried
+            // the real BUG-C6 start error during diagnosis. Stay silent on
+            // ENOENT; only log genuinely unexpected read errors (permissions,
+            // corrupt fs) the operator might care about.
+            if (err && err.code !== 'ENOENT') {
+                this.extensionHandle.log.debug(`${ENM_LOG_PREFIX} statusSync(${chainId}) read pid: ${err.message}`);
+            }
             return { alive: false, pid: null, attached: false };
         }
         const pid = parseInt(raw.trim(), 10);
@@ -301,9 +310,27 @@ class NativeProcessService extends EventEmitter {
         const cwd = chainDir(chainId);
         const binaryPath = chainConfig.binaryPath;
 
-        // Defence: confirm cwd has the things ela expects to read at startup.
+        // Defence: confirm cwd has the things the chain expects at startup.
+        //
+        // 0.5.154 — BUG-C6 fix. This config.json precondition is for
+        // FILE-configured chains only: ela mainchain reads config.json at
+        // startup (ElaMainChainAdapter writes it), and the arbiter likewise.
+        // EVM sidechains (esc/eid/pg) configure via geth CLI flags in
+        // chainConfig.spawnArgs and oracles (Class C) via chainConfig.spawnEnv
+        // — neither reads a config.json and their adapters intentionally never
+        // write one. Pre-0.5.154 this unconditional check threw "config.json
+        // missing" for EVERY EVM/oracle start, so the Council install's
+        // start-chains step failed each sidechain (caught as non-fatal warn)
+        // and the operator saw "sidechains don't work / nothing changed".
+        // Require config.json ONLY when the chain is neither arg- nor
+        // env-configured (i.e. a file-configured chain like mainchain).
+        const usesSpawnArgs = Array.isArray(chainConfig.spawnArgs)
+            && chainConfig.spawnArgs.length > 0;
+        const usesSpawnEnv = chainConfig.spawnEnv
+            && typeof chainConfig.spawnEnv === 'object'
+            && Object.keys(chainConfig.spawnEnv).length > 0;
         const configFile = path.join(cwd, 'config.json');
-        if (!fs.existsSync(configFile)) {
+        if (!usesSpawnArgs && !usesSpawnEnv && !fs.existsSync(configFile)) {
             throw new Error(
                 `NativeProcessService.start: ${configFile} missing — generate it before calling start()`,
             );

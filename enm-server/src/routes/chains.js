@@ -538,7 +538,29 @@ function build(extensionHandle) {
             // denied on data dir). The operator can override by passing
             // ?force=1, which the dashboard surfaces as a guarded checkbox.
             const force = req.query && req.query.force === '1';
-            const conflicts = await HostConflictScanner.scan({ logger: extensionHandle.log });
+            // 0.5.154 — BUG-C4 fix: pass ourPids so the scan EXCLUDES ports
+            // held by ENM's OWN running chains. Without this, starting a
+            // sidechain (esc/eid/pg/oracle/arbiter) while mainchain is running
+            // flagged mainchain's own ela (ports 20333-20339) as 6 CRITICAL
+            // PORT_BOUND conflicts → 409 refusal, so no sidechain could be
+            // started by hand while mainchain ran (and the Council install's
+            // mainchain-first start order guarantees mainchain IS running by
+            // the time the sidechains start). HostConflictScanner.js:419 only
+            // honours the own-pid exemption when ourPids is non-empty;
+            // HealthChecker + Diagnostics already build this set — the start
+            // route was the missing twin. statusSync throws ENOENT for stopped
+            // chains (no pid file) — caught + skipped.
+            const ps = ChainRegistry.getProcessService();
+            const ourPids = new Set();
+            for (const c of ChainRegistry.listChains()) {
+                try {
+                    const st = ps.statusSync(c.chainId);
+                    if (st && Number.isInteger(st.pid) && st.pid > 0 && st.alive) {
+                        ourPids.add(st.pid);
+                    }
+                } catch (_) { /* stopped chain / no pid file — safe to skip */ }
+            }
+            const conflicts = await HostConflictScanner.scan({ logger: extensionHandle.log, ourPids });
             const blockers = HostConflictScanner.blockers(conflicts);
             if (blockers.length > 0 && !force) {
                 extensionHandle.log.warn(
