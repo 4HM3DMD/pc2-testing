@@ -199,34 +199,25 @@
     };
 
     /**
-     * beta.3.93 (Wave M2.5) — Class B (EVM sidechains: ESC / EID / PG)
-     * settings mount.
+     * Class B (EVM sidechain: ESC / EID / PG) settings mount.
      *
-     * M2.5 ships a stub explaining the milestone path. M3.3 (beta.3.97)
-     * replaces this with the Class B layout per plan §6:
-     *   - Mining & Rewards (miner address, sync mode)
-     *   - PBFT keystore reference (read-only — points at mainchain
-     *     keystore.dat per node.sh:2144 / H23)
-     *   - Advanced (RPC creds, ports)
-     *   - Danger (per-chain wipe)
+     * Layout — Mining & Rewards · PBFT signing keystore reference · Sync
+     * mode · Restart. The signing keystore is shared with the Main chain
+     * (PBFT convention). Reads cfg.chains[chainId] via GET /config; saves
+     * changes via PUT /chains/<id>/class-b-config.
      *
      * @private
      * @param {string} chainId — esc | eid | pg
      */
     SettingsTab.prototype._mountEvmSidechainSettings = function (chainId) {
-        // beta.3.97 (Wave M3.3) — Real Class B settings layout (Mining &
-        // Rewards · PBFT keystore reference · Sync mode). Replaces the
-        // M2.5 stub. Reads cfg.chains[chainId] via GET /config, posts
-        // changes via PUT /chains/<id>/class-b-config (M3.3 route).
         var fallbackChainNames = { esc: 'Smart Chain (ESC)', eid: 'Identity Chain (EID)', pg: 'PG Chain' };
         var name = _tFb('chain_name.' + chainId, fallbackChainNames[chainId] || chainId);
         var self = this;
         this.root.innerHTML = ''
             + '<header class="enm-settings-class-head">'
             + '<h2>' + escapeHtml(name) + ' settings</h2>'
-            + '<p class="enm-settings-class-sub">Class B (EVM sidechain) — mining + sync controls. '
-            + 'The PBFT signing keystore is shared with mainchain (node.sh:2144). '
-            + 'Operator-supplied miner address; ENM never holds the private key.</p>'
+            + '<p class="enm-settings-class-sub">EVM sidechain — mining and sync controls. '
+            + 'Block signing reuses the Main chain keystore; ENM never holds the private key.</p>'
             + '</header>'
             + '<div class="enm-settings-class-body" data-state="loading">'
             + '<p class="enm-stub">Loading current configuration…</p>'
@@ -238,11 +229,15 @@
             var chainCfg = (cfg.chains && cfg.chains[chainId]) || null;
             if (!chainCfg) {
                 body.dataset.state = 'unconfigured';
+                // 0.5.13 audit Session 13 — strip M3.5 milestone ref from
+                // operator-facing copy. Pre-0.5.13 said "Use the setup
+                // wizard (lands in M3.5) to install this chain" — operator
+                // cannot decode the M3.5 tag.
                 body.innerHTML = ''
                     + '<div class="enm-settings-class-stub">'
                     + '<p><strong>' + escapeHtml(name) + ' is not yet installed.</strong></p>'
-                    + '<p>Use the setup wizard (lands in <code>M3.5</code>) to install this chain '
-                    + 'before configuring its mining + sync options.</p>'
+                    + '<p>Use the setup wizard to install this chain before '
+                    + 'configuring its mining and sync options.</p>'
                     + '</div>';
                 return;
             }
@@ -256,14 +251,11 @@
     };
 
     /**
-     * @private — paint the Class B editor form. Three subsections:
-     *   - Mining & Rewards: enabled toggle, rewardAddress, evmKeystoreAddr,
-     *     threads. evmKeystorePassword change is M3.5 wizard scope.
-     *   - PBFT keystore: read-only reference to mainchain keystore.dat.
-     *   - Sync mode: fast | full | archive.
-     * @param {HTMLElement} parent
-     * @param {string} chainId
-     * @param {object} chainCfg
+     * @private — paint the Class B editor form. Sections:
+     *   - Mining & Rewards: enabled toggle, rewardAddress, evmKeystoreAddr, threads
+     *   - PBFT signing keystore: read-only pointer to mainchain keystore
+     *   - Sync mode: fast | full | archive
+     *   - Restart: per-chain restart
      */
     SettingsTab.prototype._renderClassBForm = function (parent, chainId, chainCfg) {
         var self = this;
@@ -281,23 +273,29 @@
             + '<input type="text" data-key="miner.rewardAddress" '
             + 'placeholder="0x…40 hex chars" value="' + escapeHtml(miner.rewardAddress || '') + '" '
             + 'spellcheck="false" autocomplete="off">'
+            + '<small class="enm-field-hint" data-role="hint-reward">Ethereum-style address: <code>0x</code> + 40 hex chars.</small>'
             + '</label>'
             + '<label class="enm-field">EVM keystore address (which account to unlock for signing):'
             + '<input type="text" data-key="miner.evmKeystoreAddr" '
             + 'placeholder="0x…40 hex chars (often same as reward address)" '
             + 'value="' + escapeHtml(miner.evmKeystoreAddr || '') + '" '
             + 'spellcheck="false" autocomplete="off">'
+            + '<small class="enm-field-hint" data-role="hint-evm">Ethereum-style address: <code>0x</code> + 40 hex chars.</small>'
             + '</label>'
             + '<label class="enm-field">Mining threads:'
             + '<input type="number" data-key="miner.threads" min="1" max="16" '
             + 'value="' + (Number.isInteger(miner.threads) ? miner.threads : 1) + '">'
             + '</label>'
             + '</section>'
+            // 0.5.13 audit Session 13 — drop "(node.sh convention since v0.1)" and
+            // clarify the path: operator must switch the chain selector to
+            // Main chain first, then open Settings → Identity.
             + '<section class="enm-section enm-section-classb">'
-            + '<h3>PBFT signing keystore</h3>'
-            + '<p>This chain signs PBFT blocks with the <strong>mainchain</strong> '
-            + 'keystore (node.sh convention since v0.1). Manage password + import via '
-            + 'Settings → Identity on the Main chain pane.</p>'
+            + '<h3>Block-signing keystore</h3>'
+            + '<p>This chain signs blocks with the <strong>Main chain</strong> '
+            + 'keystore. To change its password, back it up, or import a different '
+            + 'one, switch the chain selector to <strong>Main chain</strong> and '
+            + 'open <strong>Settings → Identity</strong>.</p>'
             + '<p><code>chains/mainchain/keystore.dat</code></p>'
             + '</section>'
             + '<section class="enm-section enm-section-classb">'
@@ -313,11 +311,53 @@
             + '<div class="enm-section-actions">'
             + '<button type="button" class="enm-btn enm-btn-primary" data-action="save-class-b">Save changes</button>'
             + '<span class="enm-foot-status" role="status" aria-live="polite"></span>'
-            + '</div>';
-        var btn = parent.querySelector('[data-action="save-class-b"]');
-        var status = parent.querySelector('.enm-foot-status');
-        btn.addEventListener('click', function () {
-            self._saveClassB(parent, chainId, btn, status);
+            + '</div>'
+            // 0.5.13 audit Session 13 — Restart section parallel to Class C
+            // (Session 12 v0.5.12). Save copy used to say "Restart the chain
+            // to apply" but offered no in-pane way to do that; operator had
+            // to leave Settings and find the restart from the overview card.
+            + '<section class="enm-section enm-section-classb">'
+            + '<h3>Restart</h3>'
+            + '<p>After saving mining or sync changes, restart the chain to apply them. '
+            + 'Restart is also useful if the chain is stuck or stalls on sync.</p>'
+            + '<button type="button" class="enm-btn enm-btn-secondary" '
+            +   'data-action="restart-class-b">Restart ' + escapeHtml(name) + '</button>'
+            + '<p class="enm-section-status" data-role="restart-status" hidden></p>'
+            + '</section>';
+
+        // Wire address-format hints (soft validation — disables Save when invalid).
+        var rewardInput = parent.querySelector('[data-key="miner.rewardAddress"]');
+        var evmInput    = parent.querySelector('[data-key="miner.evmKeystoreAddr"]');
+        var hintReward  = parent.querySelector('[data-role="hint-reward"]');
+        var hintEvm     = parent.querySelector('[data-role="hint-evm"]');
+        var saveBtn     = parent.querySelector('[data-action="save-class-b"]');
+        var status      = parent.querySelector('.enm-foot-status');
+        var validateEth = function (v) {
+            v = (v || '').trim();
+            if (!v) { return 'empty'; }
+            if (!/^0x[0-9a-fA-F]{40}$/.test(v)) { return 'bad'; }
+            return 'ok';
+        };
+        var refreshValidity = function () {
+            var r  = validateEth(rewardInput.value);
+            var e  = validateEth(evmInput.value);
+            hintReward.dataset.state = r;
+            hintEvm.dataset.state    = e;
+            saveBtn.disabled = (r === 'bad') || (e === 'bad');
+        };
+        rewardInput.addEventListener('input', refreshValidity);
+        evmInput.addEventListener('input', refreshValidity);
+        refreshValidity();
+
+        saveBtn.addEventListener('click', function () {
+            self._saveClassB(parent, chainId, saveBtn, status);
+        });
+
+        // Wire the Restart button.
+        var restartBtn = parent.querySelector('[data-action="restart-class-b"]');
+        var restartStatus = parent.querySelector('[data-role="restart-status"]');
+        restartBtn.addEventListener('click', function () {
+            self._restartClassB(chainId, name, restartBtn, restartStatus);
         });
     };
 
@@ -340,13 +380,45 @@
         status.textContent = 'Saving…';
         this.api.put('/chains/' + chainId + '/class-b-config', body).then(function () {
             if (self._destroyed) { return; }
-            status.textContent = 'Saved. Restart the chain to apply.';
+            // 0.5.13 audit Session 13 — point operator at the in-pane
+            // Restart button (added below) instead of leaving them to
+            // find restart on the overview card.
+            status.textContent = 'Saved. Use Restart below to apply.';
         }).catch(function (err) {
             if (self._destroyed) { return; }
             status.textContent = 'Save failed: ' + ((err && err.message) || String(err));
         }).finally(function () {
             btn.disabled = false;
         });
+    };
+
+    /**
+     * @private — 0.5.13 audit Session 13. Restart a Class B chain
+     * via POST /chains/<id>/restart, matching the Class C oracle
+     * pattern shipped in Session 12.
+     */
+    SettingsTab.prototype._restartClassB = function (chainId, name, btn, statusEl) {
+        var self = this;
+        var labelDefault = 'Restart ' + name;
+        btn.disabled = true;
+        btn.textContent = 'Restarting…';
+        statusEl.hidden = true;
+        this.api.post('/chains/' + chainId + '/restart', {})
+            .then(function () {
+                if (self._destroyed) { return; }
+                btn.disabled = false;
+                btn.textContent = labelDefault;
+                statusEl.hidden = false;
+                statusEl.textContent = 'Restart requested. Watch the chain card for status.';
+            })
+            .catch(function (err) {
+                if (self._destroyed) { return; }
+                btn.disabled = false;
+                btn.textContent = labelDefault;
+                statusEl.hidden = false;
+                statusEl.textContent = 'Restart failed: '
+                    + ((err && err.message) || String(err));
+            });
     };
 
     /**

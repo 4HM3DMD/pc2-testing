@@ -772,6 +772,25 @@ body[data-app-size="compact"] .enm-online-banner,
     border-color: transparent;
 }
 .enm-btn-secondary { /* inherits .enm-btn base */ }
+
+/* 0.5.13 Session 13 — soft-validation hint for Class B address fields.
+   `data-state="bad"` is set by _renderClassBForm's refreshValidity when
+   the input doesn't match 0x + 40 hex chars; matched hints fade to
+   tertiary. Keep the rule generic so Class D arbiter audits can reuse
+   it without another CSS round. */
+.enm-field-hint {
+    display: block;
+    margin-top: 4px;
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--text-tertiary);
+}
+.enm-field-hint[data-state="bad"] {
+    color: var(--error);
+}
+.enm-field-hint[data-state="ok"] {
+    color: var(--success);
+}
 .enm-btn-danger {
     background: transparent;
     color: var(--error);
