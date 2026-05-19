@@ -608,11 +608,22 @@
         // beta.3.16 — dynamic aria-label per state. Tap-able states
         // (stopped / error / unconfigured / disabled) announce the
         // action they trigger; alive states announce status only.
+        //
+        // 0.5.123 audit Session 123 — branch order fix. Pre-0.5.123 the
+        // "configure" branch was unreachable: the `stopped || error`
+        // catch fired first, so a card whose visual state is 'stopped'
+        // AND whose underlying coarse state is 'unconfigured' got the
+        // generic "tap to start" aria. Screen-reader users tapping an
+        // unconfigured chain's hero never heard "Configure {chainName}"
+        // (strings.js:828 key existed but was never resolved). Putting
+        // the more-specific check first restores the intended a11y
+        // behavior. Harmless if the unconfigured-while-stopped state
+        // never materializes in practice; defensive otherwise.
         var aria;
-        if (state === 'stopped' || state === 'error') {
-            aria = t('chain_card.tap_circle_aria_start', { chainName: this.chainId });
-        } else if (state === 'stopped' && this._lastCoarseState === 'unconfigured') {
+        if (state === 'stopped' && this._lastCoarseState === 'unconfigured') {
             aria = t('chain_card.tap_circle_aria_configure', { chainName: this.chainId });
+        } else if (state === 'stopped' || state === 'error') {
+            aria = t('chain_card.tap_circle_aria_start', { chainName: this.chainId });
         } else if (state === 'running') {
             aria = t('chain_card.tap_circle_aria_running', { chainName: this.chainId });
         } else {
