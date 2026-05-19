@@ -736,39 +736,25 @@
             overview_body:        'The multi-chain overview pane couldn\'t load. This is unexpected — try refreshing the page. If it keeps happening, switch the chain selector back to <b>Main chain</b> and continue from there.',
         },
 
-        // beta.3.94 (Wave M2.6) — Class B/C/D/E settings stubs (M2.5).
-        // Each stub explains the milestone path so operators selecting
-        // a non-mainchain chain see the right "coming in MX.Y" copy
-        // rather than an empty pane.
+        // 0.5.136 audit Session 136 — Class B/C/D stub keys dropped.
+        // The original beta.3.94 (M2.5) plan was for per-class settings
+        // panes to render a "coming in MX.Y" stub before the real layout
+        // shipped. By v0.5.x (post-S132), every class's mount handler
+        // (_mountEvmSidechainSettings / _mountOracleSettings /
+        // _mountArbiterSettings in settings-tab.js) renders a real
+        // settings form built from hardcoded English copy, NOT from
+        // this namespace. The 7 stub keys (evm_title / evm_body /
+        // evm_fallback / oracle_title / oracle_body / arbiter_title /
+        // arbiter_body) were reserved for the still-unbuilt "chain-card
+        // configure target" pane (S121 comment), but the audit-chain
+        // rule (don't design for hypothetical future requirements)
+        // says delete now and re-introduce when the pane lands.
+        // Class E (SPV) keys are RETAINED — settings-tab.js line 753-762
+        // (_mountSpvSettings) DOES wire spv_title / spv_lead / spv_note
+        // via _tFb. SPV's design is "nothing to configure", which is a
+        // stable operator-honest stub, not a placeholder for future
+        // work.
         settings_class_stub: {
-            // 0.5.121 audit Session 121 — dropped stale milestone tags
-            // (M3.3 / M4.2 / M6.4) from the operator-facing bodies.
-            // Chain *orchestration* for Class B (ESC/EID/PG) shipped
-            // through Waves M3-M5 and Class D (Arbiter) shipped in
-            // Wave M6.1 — the operator can already install + run these
-            // chains via the setup wizard. What hasn't shipped yet is
-            // the dedicated per-class *settings UI pane* (the chain-
-            // card configure target). This stub stays correct in
-            // pointing operators at the chain selector + Main chain as
-            // a fallback, but the milestone numbers were misleading
-            // since features under those milestone tags actually
-            // shipped under a different scope. Mirrors Session 29's
-            // pane_stub cleanup.
-            // Class B (ESC/EID/PG)
-            evm_title:      '{chainName} settings',
-            evm_body:       'A dedicated settings pane for EVM sidechains is still being built. The layout will include Mining & Rewards (miner address, sync mode), the PBFT keystore reference (read-only — points at the mainchain keystore), and per-chain Danger Zone actions. Until then, install + start/stop work from the chain card.',
-            evm_fallback:   'For now use the chain selector above to return to Main chain.',
-            // Class C (Oracles)
-            oracle_title:   '{chainName} settings',
-            oracle_body:    'A dedicated settings pane for Oracles is still being built. Oracles are normally surfaced inside their parent chain’s pane as a sub-status panel rather than a top-level row (plan §3). The Class C layout will include the Node.js runtime version pin, oracle script path, and per-oracle restart controls.',
-            // Class D (Arbiter)
-            arbiter_title:  'Arbiter settings',
-            arbiter_body:   'A dedicated settings pane for the Arbiter is still being built. The layout will include Wallet & Mining (wallet password, mining address, ELA balance), the Cross-chain Status reachability matrix, and a Danger Zone with reset controls. Until then, the Arbiter installs + runs via the setup wizard like the other chains.',
-            // Class E (SPV) — 0.5.15 audit Session 15. SPV is a
-            // wallet/client protocol, not a node mode (mainchain serves
-            // SPV clients via Bloom-filter relaying in elanet/server.go).
-            // The stub is operator-honest: explains what SPV is, then
-            // tells the operator there's nothing to configure.
             spv_title:      'SPV (light client)',
             spv_lead:       'SPV (Simple Payment Verification) is a wallet/client protocol, not a node mode. Lightweight wallets — like the Elastos Essentials mobile wallet — connect to your Main chain node and use SPV to verify transactions without downloading the full chain.',
             spv_note:       'Your Main chain node already serves SPV clients automatically. There is nothing to configure here, and you can safely ignore this option.',
