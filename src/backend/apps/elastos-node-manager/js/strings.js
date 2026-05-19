@@ -741,16 +741,29 @@
         // a non-mainchain chain see the right "coming in MX.Y" copy
         // rather than an empty pane.
         settings_class_stub: {
+            // 0.5.121 audit Session 121 — dropped stale milestone tags
+            // (M3.3 / M4.2 / M6.4) from the operator-facing bodies.
+            // Chain *orchestration* for Class B (ESC/EID/PG) shipped
+            // through Waves M3-M5 and Class D (Arbiter) shipped in
+            // Wave M6.1 — the operator can already install + run these
+            // chains via the setup wizard. What hasn't shipped yet is
+            // the dedicated per-class *settings UI pane* (the chain-
+            // card configure target). This stub stays correct in
+            // pointing operators at the chain selector + Main chain as
+            // a fallback, but the milestone numbers were misleading
+            // since features under those milestone tags actually
+            // shipped under a different scope. Mirrors Session 29's
+            // pane_stub cleanup.
             // Class B (ESC/EID/PG)
             evm_title:      '{chainName} settings',
-            evm_body:       'Class B (EVM sidechain) settings land in M3.3 (beta.3.97). The layout will include Mining & Rewards (miner address, sync mode), the PBFT keystore reference (read-only — points at the mainchain keystore), and per-chain Danger Zone actions.',
+            evm_body:       'A dedicated settings pane for EVM sidechains is still being built. The layout will include Mining & Rewards (miner address, sync mode), the PBFT keystore reference (read-only — points at the mainchain keystore), and per-chain Danger Zone actions. Until then, install + start/stop work from the chain card.',
             evm_fallback:   'For now use the chain selector above to return to Main chain.',
             // Class C (Oracles)
             oracle_title:   '{chainName} settings',
-            oracle_body:    'Class C (Oracle) settings land in M4.2. Oracles are normally surfaced inside their parent chain’s pane as a sub-status panel rather than a top-level row (plan §3). The Class C layout will include the Node.js runtime version pin, oracle script path, and per-oracle restart controls.',
+            oracle_body:    'A dedicated settings pane for Oracles is still being built. Oracles are normally surfaced inside their parent chain’s pane as a sub-status panel rather than a top-level row (plan §3). The Class C layout will include the Node.js runtime version pin, oracle script path, and per-oracle restart controls.',
             // Class D (Arbiter)
             arbiter_title:  'Arbiter settings',
-            arbiter_body:   'Class D (Arbiter cross-chain signer) settings land in M6.4. The layout will include Wallet & Mining (wallet password, mining address, ELA balance), the Cross-chain Status reachability matrix, and a Danger Zone with reset controls.',
+            arbiter_body:   'A dedicated settings pane for the Arbiter is still being built. The layout will include Wallet & Mining (wallet password, mining address, ELA balance), the Cross-chain Status reachability matrix, and a Danger Zone with reset controls. Until then, the Arbiter installs + runs via the setup wizard like the other chains.',
             // Class E (SPV) — 0.5.15 audit Session 15. SPV is a
             // wallet/client protocol, not a node mode (mainchain serves
             // SPV clients via Bloom-filter relaying in elanet/server.go).
