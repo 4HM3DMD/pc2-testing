@@ -15,7 +15,7 @@
  *   the chain has outbound peers but zero inbound, accumulates missed
  *   votes if registered as BPoS, and the operator has no idea why.
  *
- *   Diagnosed on srv832310 (Hostinger) 2026-05-15: UFW active with
+ *   Diagnosed on a Hostinger Ubuntu VPS 2026-05-15: UFW active with
  *   only 22/4100/4180/4202 allowed. Manual `ufw allow 20338/tcp +
  *   20339/tcp` restored inbound peers within ~10 min.
  *
@@ -75,7 +75,23 @@ function execCapture(cmd, args, timeoutMs) {
         let settled = false;
         const child = spawn(cmd, args || [], {
             stdio: ['ignore', 'pipe', 'pipe'],
-            env: { PATH: process.env.PATH || '/usr/sbin:/usr/bin:/sbin:/bin' },
+            // 0.5.108 audit Session 108 — LC_ALL=C forces UFW's
+            // gettext output to fall back to English. UFW localizes
+            // its status lines via gettext; on a host with
+            // LC_ALL=de_DE.UTF-8 (or similar) it emits "Status: aktiv"
+            // / "ZULASSEN" / etc, which our /Status:\s*active/i +
+            // /ALLOW IN/ regexes don't match. Pre-0.5.108 a localized
+            // host silently reported active=false → ensureAllowed was
+            // a no-op → no firewall holes opened → BPoS supernode
+            // accumulated vote-misses with no inbound peers. Most
+            // cloud deploys use C.UTF-8 or en_US.UTF-8 so the bug is
+            // rare, but the fix is defensive: setting LC_ALL=C
+            // guarantees the regex parses regardless of operator
+            // locale settings.
+            env: {
+                PATH: process.env.PATH || '/usr/sbin:/usr/bin:/sbin:/bin',
+                LC_ALL: 'C',
+            },
         });
         const t = setTimeout(() => {
             if (settled) { return; }
@@ -146,6 +162,13 @@ async function detect() {
 /**
  * Ensure the given TCP ports are allowed inbound. Only acts when UFW
  * is active. No-op otherwise.
+ *
+ * Requires root: `ufw allow` writes to /etc/ufw and reloads the kernel
+ * netfilter chain — both kernel + write operations need CAP_NET_ADMIN.
+ * pc2-node runs as root by design, so this isn't normally a concern.
+ * If the host runs pc2-node non-root the spawn fails with exit 1 /
+ * "ERROR: You need to be root", and the call returns with errors[]
+ * populated rather than silently no-opping.
  *
  * @param {number[]} ports     TCP ports to ensure are allowed
  * @param {object} [opts]
@@ -235,6 +258,8 @@ async function ensureAllowed(ports, opts) {
  * remove the simple allow-all-source form. That's the safer
  * default: we won't surprise an operator by deleting an ACL they
  * built by hand.
+ *
+ * Requires root, same as ensureAllowed.
  *
  * @param {number} port
  * @param {object} [opts]
