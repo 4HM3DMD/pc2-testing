@@ -324,12 +324,30 @@ async function runSystemCheck(input) {
         throw new Error(`EnmSystemCheck.runSystemCheck: unknown path "${pathName}"`);
     }
     // beta.0.5.0 — synthetic pass when setup is already completed.
+    // 0.5.2 audit Session 2 — also short-circuit when install is
+    // IN PROGRESS (cfg.chains.mainchain present + binaryPath set,
+    // setup.completed still false). Pre-0.5.2 a Card 2 back-nav during
+    // the snapshot-extraction window measured live disk-free which is
+    // depleting by ~50 GB — disk check failed → blocked Continue →
+    // operator thought install died. Synthetic "install in progress"
+    // pass tells Card 2 to not re-gate during the install.
     // Lazy-require ConfigStore so test harnesses that import THRESHOLDS
     // without a configured data dir don't trip the load() side effect.
     try {
         const ConfigStore = require('./ConfigStore');
         const cfg = await ConfigStore.load();
         if (cfg && cfg.setup && cfg.setup.completed === true) {
+            const completedAt = cfg.setup.completedAt || 0;
+            // 0.5.2 audit Session 2 — humanise the timestamp. Pre-0.5.2
+            // we surfaced toISOString() (e.g. "2026-05-19T03:30:00.000Z")
+            // straight to operator-facing copy — hostile and unanchored
+            // to local time. toLocaleString() produces e.g.
+            // "5/19/2026, 3:30:00 AM" which is human-readable + reflects
+            // the host's timezone configuration (good enough; the wizard
+            // is operator-only UX so privacy isn't a concern).
+            const friendly = completedAt
+                ? new Date(completedAt).toLocaleString()
+                : 'previously';
             return {
                 ts: Date.now(),
                 path: pathName,
@@ -338,7 +356,36 @@ async function runSystemCheck(input) {
                     id: 'setup-completed',
                     label: 'System check previously passed',
                     ok: true,
-                    message: `Setup completed ${new Date(cfg.setup.completedAt || 0).toISOString()}`,
+                    message: `Setup completed ${friendly}`,
+                    severity: 'required',
+                }],
+                canProceed: true,
+            };
+        }
+        // Install-in-progress short-circuit. We detect this by:
+        //   (a) cfg.chains.mainchain exists with a binaryPath written
+        //       (install-mainchain-cfg step completed), OR
+        //   (b) cfg.global.council.masterPasswordEncrypted is set
+        //       (council-strategy step ran but install-mainchain-cfg
+        //       may not have completed yet — early window).
+        // Either signal means hardware was already validated when the
+        // operator hit the real Card 2 earlier in this install session.
+        const installStarted = (cfg && cfg.chains && cfg.chains.mainchain
+            && cfg.chains.mainchain.binaryPath) || (cfg && cfg.global
+            && cfg.global.council
+            && cfg.global.council.masterPasswordEncrypted);
+        if (installStarted) {
+            return {
+                ts: Date.now(),
+                path: pathName,
+                installInProgress: true,
+                checks: [{
+                    id: 'install-in-progress',
+                    label: 'Install in progress — system check already passed',
+                    ok: true,
+                    message: 'Disk free is depleting as snapshots extract; '
+                           + 're-checking now would surface a false failure. '
+                           + 'Hardware was validated when you first reached Card 2.',
                     severity: 'required',
                 }],
                 canProceed: true,

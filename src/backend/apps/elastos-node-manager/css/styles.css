@@ -7107,6 +7107,23 @@ body[data-app-size="compact"] .enm-app .enm-overview-row .enm-overview-spark {
 .enm-app .enm-syscheck-row[data-state="error"] .enm-syscheck-icon {
     color: var(--state-error, #ef5350);
 }
+/* 0.5.2 audit Session 2 — banner variant used when the backend returns
+   previouslyVerified=true (setup already done) or installInProgress=true.
+   Renders as a single chunky row that's visually distinct from the
+   6-row check list — operators see at a glance that this step was
+   already passed and isn't being re-run. */
+.enm-app .enm-syscheck-row.enm-syscheck-banner {
+    background: var(--ok-bg, rgba(76, 175, 80, 0.08));
+    border: 1px solid var(--state-healthy, rgba(76, 175, 80, 0.35));
+    padding: var(--sp-3, 12px) var(--sp-4, 16px);
+}
+.enm-app .enm-syscheck-row.enm-syscheck-banner .enm-syscheck-icon {
+    color: var(--state-healthy, #4caf50);
+    font-size: 20px;
+}
+.enm-app .enm-syscheck-row.enm-syscheck-banner .enm-syscheck-label {
+    font-weight: 600;
+}
 .enm-app .enm-syscheck-text {
     display: flex;
     flex-direction: column;

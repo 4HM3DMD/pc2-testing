@@ -219,6 +219,17 @@
 
     /** @private */
     SetupConversation.prototype._goto = function (card) {
+        // 0.5.2 audit Session 2 HIGH fix — hydrate `_goal` from
+        // localStorage before any card renders. Pre-0.5.2 fix: only
+        // Card 2 read the fallback; Cards 3/4/5/6/7 also branch on
+        // `_goal` and would silently see undefined (treated as bpos)
+        // on a fresh SetupConversation instance (refresh, back-nav).
+        // Single recovery point in _goto means every card downstream
+        // sees a hydrated goal without per-card duplication.
+        if (!this._goal) {
+            try { this._goal = window.localStorage.getItem('enm:setup-intent'); }
+            catch (_) { /* private mode — _goal stays null */ }
+        }
         // beta.0.4.7 — Card 6 owns the install-job SSE + poll
         // subscriptions. Tear them down on every navigation away
         // (operator hit Back, refresh, role-card re-click) so a
@@ -443,6 +454,11 @@
     /** @private */
     SetupConversation.prototype._renderCard2 = function (seq) {
         var t = root.enmT;
+        // 0.5.2 audit Session 2 — `_goal` is now hydrated centrally in
+        // `_goto` from localStorage 'enm:setup-intent' so every card
+        // including this one sees the right intent on refresh. Pre-0.5.2
+        // the fallback was hardcoded to 'bpos' here, silently flipping
+        // Council operators to BPoS thresholds (mode-confusion bug).
         var pathName = (this._goal === 'council') ? 'council' : 'bpos';
         var heading = t('friendly.setup.card_2.title');
         var sub = t('friendly.setup.card_2.sub', { path: pathName });
@@ -521,6 +537,38 @@
         var t = root.enmT;
         var self = this;
         listEl.innerHTML = '';
+
+        // 0.5.2 audit Session 2 — when backend signals previouslyVerified
+        // OR installInProgress, render a clear banner instead of just one
+        // synthetic check row. Operators were confused that a 6-row check
+        // collapsed to 1 row — looked like the check was skipped without
+        // explanation. Now: explicit banner explains WHY this step is
+        // pre-passed. The Re-run button is also hidden in these states
+        // (re-running would just yield the same synthetic pass).
+        var rerunBtn = self._body && self._body.querySelector('[data-action="rerun"]');
+        if (report && (report.previouslyVerified || report.installInProgress)) {
+            var bannerKind = report.previouslyVerified ? 'completed' : 'in-progress';
+            var bannerTitle = report.previouslyVerified
+                ? 'System check previously passed'
+                : 'Install in progress — system check passed earlier';
+            var bannerBody = (report.checks && report.checks[0] && report.checks[0].message) || '';
+            var li = document.createElement('li');
+            li.className = 'enm-syscheck-row enm-syscheck-banner';
+            li.setAttribute('data-state', 'ok');
+            li.setAttribute('data-kind', bannerKind);
+            li.innerHTML = ''
+                + '<span class="enm-syscheck-icon" aria-hidden="true">✓</span>'
+                + '<div class="enm-syscheck-text">'
+                +   '<div class="enm-syscheck-label">' + escapeHtml(bannerTitle) + '</div>'
+                +   '<div class="enm-syscheck-message">' + escapeHtml(bannerBody) + '</div>'
+                + '</div>';
+            listEl.appendChild(li);
+            if (rerunBtn) { rerunBtn.hidden = true; }
+            this._continueBtn.disabled = !report.canProceed;
+            return;
+        }
+        // Real path — render every check + remediation as before.
+        if (rerunBtn) { rerunBtn.hidden = false; }
         var checks = (report && report.checks) || [];
         checks.forEach(function (c) {
             // ok=true → ✓ (green); required failure → ✗ (red);
