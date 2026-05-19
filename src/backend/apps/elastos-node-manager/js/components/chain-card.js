@@ -387,10 +387,26 @@
             this._meta.appendChild(heightBlock);
         } else {
             // Oracle (Class C): no height block. _chainHeight stays
-            // undefined; any updater that pokes it must null-check.
-            // The state pill alone communicates running/stopped — which
-            // is the only meaningful runtime state for an oracle.
+            // null; any updater that pokes it must null-check.
             this._chainHeight = null;
+            // 0.5.11 audit Session 11 — surface parent-chain context
+            // so the card isn't functionally a state-pill-only row.
+            // Oracle's only useful identity info is "I relay for X";
+            // the rest (port, last-seen) belongs in the Settings tab.
+            // Single row in the meta column; populated by _applyState
+            // when a snapshot lands with parentChainId.
+            this._oracleParentBlock = document.createElement('div');
+            this._oracleParentBlock.className = 'enm-chain-oracle-parent';
+            var oracleParentLabel = document.createElement('div');
+            oracleParentLabel.className = 'enm-chain-height-label';
+            oracleParentLabel.textContent = t('chain_card.oracle_parent_label')
+                || 'Relays for';
+            this._oracleParentBlock.appendChild(oracleParentLabel);
+            this._oracleParentValue = document.createElement('div');
+            this._oracleParentValue.className = 'enm-chain-oracle-parent-value';
+            this._oracleParentValue.textContent = '—';
+            this._oracleParentBlock.appendChild(this._oracleParentValue);
+            this._meta.appendChild(this._oracleParentBlock);
         }
 
         // subline — fully-synced ✓ tick OR sync info "Receiving 12 blocks/min"
@@ -828,7 +844,21 @@
         // it swapped to "connecting to peers" while we waited for the
         // first peer handshake. Preserve that behaviour but write into
         // the new heightLabel node (proxied via _primaryLabel).
-        this._primaryLabel.textContent = formatPrimaryLabel(t, coarse, height, null);
+        // Same Class-C guard as _chainHeight — Class C card omits the
+        // _primaryLabel along with the height block.
+        if (this._primaryLabel) {
+            this._primaryLabel.textContent = formatPrimaryLabel(t, coarse, height, null);
+        }
+        // 0.5.11 audit Session 11 — Class C oracle: populate the
+        // "Relays for" row from state.parentChainId (per CouncilOverview
+        // Service snapshot shape at line 317). Falls back to '—' when
+        // the snapshot hasn't arrived yet; once it does, this fires
+        // and renders e.g. "Smart Chain (ESC)" for esc-oracle.
+        if (this._oracleParentValue && state && state.parentChainId) {
+            var parentDisplay = CHAIN_DISPLAY_FALLBACK[state.parentChainId]
+                || state.parentChainId;
+            this._oracleParentValue.textContent = parentDisplay;
+        }
 
         // Subline — at-tip "Fully synced" check when healthy, or sync
         // info during sync (lands from _refreshSync). Cleared otherwise.

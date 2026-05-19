@@ -1299,6 +1299,17 @@ body[data-app-size="compact"] .enm-app .enm-main { padding: var(--sp-2); }
     line-height: 1;
     color: var(--text-primary);
 }
+/* 0.5.11 audit Session 11 — Class C oracle "Relays for" row replaces
+   the height block in the meta column. Sized slightly smaller than the
+   44px height font since the parent-chain name is a string label not a
+   metric. Same `.enm-chain-height-label` is reused for the small caption
+   above it. */
+.enm-chain-oracle-parent-value {
+    font-size: 22px;
+    font-weight: var(--fw-medium);
+    color: var(--text-primary);
+    line-height: 1.2;
+}
 
 /* Subline — fully-synced tick OR sync info */
 .enm-chain-subline {
