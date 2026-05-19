@@ -1181,7 +1181,15 @@ function build(extensionHandle) {
             }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} POST /chains/${req.params.chainId}/update: ${err.message}`);
-            return res.status(500).json(errorBody('Could not start the binary update. Try again.'));
+            // 0.5.88 — surface EnmBinaryDownloader's operator-meaningful
+            // err.codes verbatim (Sessions 64/67/79 sanitization was too
+            // aggressive — see Session 87 backlog flag). For unknown
+            // errors keep the static fallback.
+            const BINARY_CODES = new Set(['UNSUPPORTED_ARCH', 'BINARY_MISSING', 'SMOKE_TEST_FAILED']);
+            const responseMessage = BINARY_CODES.has(err && err.code)
+                ? err.message
+                : 'Could not start the binary update. Try again.';
+            return res.status(500).json(errorBody(responseMessage));
         }
     });
 

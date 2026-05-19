@@ -364,7 +364,16 @@ function build(extensionHandle) {
             }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} /setup/install/${chainId}: ${err.message}`);
-            return res.status(500).json(errorBody('Could not install the chain. Try again.'));
+            // 0.5.88 — mirror chains.js /update fix. Surface
+            // EnmBinaryDownloader's operator-meaningful err.codes
+            // verbatim so operators on unsupported hardware (or hitting
+            // a malformed upstream release) see what's actually wrong
+            // instead of looping on 'Try again'.
+            const BINARY_CODES = new Set(['UNSUPPORTED_ARCH', 'BINARY_MISSING', 'SMOKE_TEST_FAILED']);
+            const responseMessage = BINARY_CODES.has(err && err.code)
+                ? err.message
+                : 'Could not install the chain. Try again.';
+            return res.status(500).json(errorBody(responseMessage));
         }
     });
 

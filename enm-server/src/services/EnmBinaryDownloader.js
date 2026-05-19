@@ -356,7 +356,14 @@ class EnmBinaryDownloader {
         // Find the binary inside, regardless of nesting.
         const binaryPath = await EnmBinaryDownloader._locateInTree(targetDir, info.binary);
         if (!binaryPath) {
-            throw new Error(`Binary "${info.binary}" not found inside extracted tarball.`);
+            // 0.5.88 — tag with err.code so chains.js + setup.js route
+            // layers can surface this specific message to operators
+            // instead of the static 'Try again' fallback. Operator-
+            // meaningful: tells them the upstream release tarball is
+            // malformed → file a bug rather than retry.
+            const e = new Error(`Binary "${info.binary}" not found inside extracted tarball.`);
+            e.code = 'BINARY_MISSING';
+            throw e;
         }
         await fsp.chmod(binaryPath, 0o755);
         s.binaryPath = binaryPath;
@@ -374,7 +381,13 @@ class EnmBinaryDownloader {
         this._emit(chainId, PHASES.VERIFYING, 'Verifying binary...');
         const versionOut = await EnmBinaryDownloader._smokeTest(binaryPath);
         if (!versionOut.ok) {
-            throw new Error(`Binary smoke test failed: ${versionOut.error}`);
+            // 0.5.88 — see BINARY_MISSING above. SMOKE_TEST_FAILED means
+            // the binary downloaded but won't run on this host (libc
+            // mismatch / corrupt extraction / wrong OS in tarball). The
+            // operator needs the underlying error to debug.
+            const e = new Error(`Binary smoke test failed: ${versionOut.error}`);
+            e.code = 'SMOKE_TEST_FAILED';
+            throw e;
         }
 
         s.phase = PHASES.DONE;
@@ -505,7 +518,13 @@ class EnmBinaryDownloader {
         const a = os.arch();
         if (a === 'x64')   return 'x86_64';
         if (a === 'arm64') return 'arm64';
-        throw new Error(`Unsupported architecture: ${a}. download.elastos.io publishes x86_64 + arm64 only.`);
+        // 0.5.88 — see BINARY_MISSING above. UNSUPPORTED_ARCH is the
+        // primary motivating case for the err.code branching: operator
+        // running on i386/aarch64-be/riscv needs to know their host
+        // isn't supported, not see a generic 'Try again' loop.
+        const e = new Error(`Unsupported architecture: ${a}. download.elastos.io publishes x86_64 + arm64 only.`);
+        e.code = 'UNSUPPORTED_ARCH';
+        throw e;
     }
 
     static _extractTar(tarball, targetDir) {
