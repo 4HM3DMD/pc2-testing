@@ -159,7 +159,7 @@ function build(extensionHandle) {
             }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} /setup/preflight error: ${err.message}`);
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Preflight checks failed. Try again.'));
         }
     });
 
@@ -194,7 +194,7 @@ function build(extensionHandle) {
             extensionHandle.log.error(
                 `${ENM_LOG_PREFIX} /setup/system-check: ${err.message}`,
             );
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('System check failed. Try again.'));
         }
     });
 
@@ -227,7 +227,7 @@ function build(extensionHandle) {
             extensionHandle.log.error(
                 `${ENM_LOG_PREFIX} /setup/system/add-swap: ${err.message}`,
             );
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Could not add swap space. Try again.'));
         }
     });
 
@@ -247,7 +247,7 @@ function build(extensionHandle) {
                 .getStatusWithDisk(req.params.chainId);
             return res.json(successBody(status));
         } catch (err) {
-            return res.status(400).json(errorBody(err.message));
+            return res.status(400).json(errorBody('Failed to read install status.'));
         }
     });
 
@@ -271,7 +271,7 @@ function build(extensionHandle) {
                 .filter((c) => wired.has(c.chainId));
             return res.json(successBody({ chains }));
         } catch (err) {
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Failed to list installable chains.'));
         }
     });
 
@@ -364,7 +364,7 @@ function build(extensionHandle) {
             }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} /setup/install/${chainId}: ${err.message}`);
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Could not install the chain. Try again.'));
         }
     });
 
@@ -585,7 +585,7 @@ function build(extensionHandle) {
             }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} /setup/keystore error: ${err.message}`);
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Could not save the keystore. Try again.'));
         }
     });
 
@@ -629,7 +629,7 @@ function build(extensionHandle) {
                 address,
             }));
         } catch (err) {
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Failed to read keystore status.'));
         }
     });
 
@@ -668,7 +668,7 @@ function build(extensionHandle) {
             return res.json(successBody({ mode, manualValue: mode === 'manual' ? manualValue : null }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} /setup/network error: ${err.message}`);
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Could not save network settings. Try again.'));
         }
     });
 
@@ -795,7 +795,7 @@ function build(extensionHandle) {
             }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} /setup/complete error: ${err.message}`);
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Could not complete setup. Try again.'));
         }
     });
 
@@ -835,7 +835,7 @@ function build(extensionHandle) {
             extensionHandle.log.error(
                 `${ENM_LOG_PREFIX} GET /setup/council-strategy: ${err.message}`,
             );
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Failed to read Council strategy.'));
         }
     });
 
@@ -928,7 +928,7 @@ function build(extensionHandle) {
             extensionHandle.log.error(
                 `${ENM_LOG_PREFIX} POST /setup/council-strategy: ${err.message}`,
             );
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Could not save Council strategy. Try again.'));
         }
     });
 
@@ -1137,7 +1137,7 @@ function build(extensionHandle) {
             extensionHandle.log.error(
                 `${ENM_LOG_PREFIX} POST /setup/install-class-b: ${err.message}`,
             );
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Could not install the EVM sidechain. Try again.'));
         }
     });
 
@@ -1166,7 +1166,7 @@ function build(extensionHandle) {
             extensionHandle.log.error(
                 `${ENM_LOG_PREFIX} GET /setup/node-runtime: ${err.message}`,
             );
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Failed to read node-runtime status.'));
         }
     });
 
@@ -1274,7 +1274,7 @@ function build(extensionHandle) {
             extensionHandle.log.error(
                 `${ENM_LOG_PREFIX} POST /setup/install-class-c: ${err.message}`,
             );
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Could not install the Oracle. Try again.'));
         }
     });
 
@@ -1381,7 +1381,7 @@ function build(extensionHandle) {
             extensionHandle.log.error(
                 `${ENM_LOG_PREFIX} POST /setup/install-class-d: ${err.message}`,
             );
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Could not install the Arbiter. Try again.'));
         }
     });
 
@@ -1413,7 +1413,7 @@ function build(extensionHandle) {
             extensionHandle.log.error(
                 `${ENM_LOG_PREFIX} install-council/preflight: ${err.message}`,
             );
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Council install preflight failed. Try again.'));
         }
     });
 
@@ -1582,7 +1582,7 @@ function build(extensionHandle) {
             extensionHandle.log.error(
                 `${ENM_LOG_PREFIX} POST /setup/install-node-runtime: ${err.message}`,
             );
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Could not install the Node.js runtime. Try again.'));
         }
     });
 
