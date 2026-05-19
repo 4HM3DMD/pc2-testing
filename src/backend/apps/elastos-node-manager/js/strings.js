@@ -947,10 +947,6 @@
             healing_what_body:      'When ENM detects a known-safe issue (process crashed, log file too big, RPC unresponsive), it can fix it without asking. Off = every action waits for your explicit OK.',
             critical_ack_what:      'What this controls',
             critical_ack_what_body: 'Slashing-risk alerts (sync drift, peer drop, BPoS state change) stay visible until you click to dismiss. Off = critical events auto-clear after 5 seconds like normal toasts.',
-            // Save-button labels per new section. "Save General" is gone.
-            save_access:     'Save Access',
-            save_security:   'Save Security',
-            save_storage:    'Save Storage',
             // Restart modal — fired after a save when the section requires
             // a chain restart for the change to take effect. Operator option
             // (3): don’t put lifecycle controls in Settings, but surface a
@@ -962,13 +958,11 @@
             restart_modal_restarting: 'Restarting…',
             restart_modal_done:       'Mainchain restarted.',
             restart_modal_failed:     'Restart failed: {error}',
-            restart_modal_close_aria: 'Close restart prompt',
             restart_modal_chain_stopped: 'The chain isn’t currently running, so there’s nothing to restart. Your settings will apply on next start.',
             // Migration of hardcoded English strings flagged by the
             // settings inventory audit. Same wording, just routed through
             // the i18n layer.
             nav_label_config:               'Configuration',
-            ip_manual_placeholder:          'e.g. 203.0.113.14',
             rpc_user_tooltip:               'Letters and numbers only (no spaces or symbols).',
             rpc_password_placeholder_set:   '(leave blank to keep current)',
             rpc_white_add_placeholder:      'add IP or CIDR…',
@@ -988,7 +982,6 @@
             // up on its next _loadConfigSafe tick (≤5 s).
             heading_alerts:           'Alerts',
             alerts_intro:             'When the dashboard should warn you. These thresholds drive the health detectors that decide what counts as a problem worth surfacing.',
-            save_alerts:              'Save Alerts',
             // Disk-space pair (warn comes before critical so the operator
             // reads it in increasing-severity order).
             alerts_disk_warn_label:   'Disk space — warn at',
