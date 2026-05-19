@@ -1489,8 +1489,20 @@
                 + (data.ourIndex + 1) + ' of ' + rl;
         } else {
             strip.dataset.state = 'nextslate';
+            // 0.5.125 audit Session 125 — defensive '—' fallback for
+            // missing/empty nextArbiters. Pre-0.5.125 the expression
+            // `(data.nextArbiters || []).length` collapsed to 0 when
+            // the array was missing, rendering "Queued for next round
+            // · 5 of 0" — confusing since ourNextIndex=4 implies a
+            // 5th position in a slate that supposedly has 0 entries.
+            // Mirrors the rotationLength fallback already applied to
+            // the in-slate branch above (alpha.28.1 batch 68 pattern).
+            // Reaches the operator on RPC drift where ourNextIndex is
+            // emitted but nextArbiters isn't.
+            var nl = (data.nextArbiters && data.nextArbiters.length > 0)
+                ? data.nextArbiters.length : '—';
             text.textContent = 'Queued for next round · '
-                + (data.ourNextIndex + 1) + ' of ' + (data.nextArbiters || []).length;
+                + (data.ourNextIndex + 1) + ' of ' + nl;
         }
     };
 
