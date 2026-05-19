@@ -57,7 +57,9 @@
     // enmT('chain_name.<id>') / ('chain_class_label.<X>') /
     // ('overview_state.<state>'); these are last-resort fallbacks.
     var CLASS_LABEL = {
-        A: 'Mainchain',
+        // 0.5.70 audit Session 70 — fallback canonicalization (matches
+        // strings.js chain_class_label.A fix in same release).
+        A: 'Main chain',
         B: 'EVM sidechains',
         C: 'Oracles',
         D: 'Cross-chain',
@@ -299,7 +301,7 @@
             html.push('<div class="enm-overview-empty">');
             html.push('<p><strong>' + escapeHtml(tFb('overview_pane.empty_title', 'No chains configured yet.')) + '</strong></p>');
             html.push('<p>' + escapeHtml(tFb('overview_pane.empty_body',
-                'Use the setup wizard to install your first chain. Once Mainchain '
+                'Use the setup wizard to install your first chain. Once Main chain '
                 + 'is running you can add EVM sidechains, Oracles, and Arbiter from '
                 + 'the same wizard.')) + '</p>');
             html.push('</div>');
@@ -337,7 +339,7 @@
         var chainIdAttr = escapeAttr(c.chainId);
         var displayHtml = escapeHtml(displayName);
         var stateLabelHtml = escapeHtml(stateLabel);
-        var uptimeHtml = uptime ? '<span class="enm-overview-uptime" title="Process uptime">' + escapeHtml(uptime) + '</span>' : '';
+        var uptimeHtml = uptime ? '<span class="enm-overview-uptime" title="Uptime since last start">' + escapeHtml(uptime) + '</span>' : '';
         return '<li class="enm-overview-row" data-chain-id="' + chainIdAttr
             + '" data-state="' + escapeAttr(c.state || 'unknown') + '"'
             + ' tabindex="0" role="button"'

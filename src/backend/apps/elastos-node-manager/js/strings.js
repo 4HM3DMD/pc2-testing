@@ -605,7 +605,13 @@
         // safety net for unknown/legacy chain ids — used to live in
         // CLASS_LABEL['?'] = 'Other' inside multi-chain-overview.js.
         chain_class_label: {
-            A: 'Mainchain',
+            // 0.5.70 audit Session 70 — Mainchain → Main chain. Was the
+            // last remaining 'Mainchain' spelling in operator-facing
+            // strings.js (chain_name.mainchain already used 'Main chain'
+            // since Wave M2.6). Operators saw the inconsistency in the
+            // Multi-chain overview pane: class section header
+            // 'Mainchain' over a row labeled 'Main chain'.
+            A: 'Main chain',
             B: 'EVM sidechains',
             C: 'Oracles',
             D: 'Cross-chain',
