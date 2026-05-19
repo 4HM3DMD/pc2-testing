@@ -571,33 +571,23 @@
     };
 
     /**
-     * beta.3.93 (Wave M2.5) — Class D (Arbiter cross-chain signer)
-     * settings mount.
+     * Class D (Arbiter cross-chain signer) settings mount.
      *
-     * M6.4 (beta.3.13) will deliver the real layout per plan §6:
-     *   - Wallet &amp; Mining (wallet password, mining address, ELA balance)
-     *   - Cross-chain Status reachability matrix (4/4 chains green)
-     *   - Danger Zone (wallet reset — most security-critical key per
-     *     plan §11 risk #1)
+     * Layout — Wallet & Mining · Configured chains · Restart. The arbiter
+     * is the most security-sensitive component: it signs cross-chain
+     * messages between mainchain and the EVM sidechains, and it reuses
+     * the Main chain keystore.
      *
      * @private
      */
     SettingsTab.prototype._mountArbiterSettings = function () {
-        // beta.0.3.13 (Wave M6.4) — Real Class D layout. Replaces M2.5
-        // stub. Two read-only info DLs:
-        //   - Wallet & Mining: confirms the mainchain keystore is the
-        //     signing identity (H8/H23); shows the operator-supplied
-        //     ELA mining address.
-        //   - Cross-chain Status: 4-row matrix showing reachability of
-        //     mainchain + esc + eid + pg. Refreshed live via /chains/
-        //     arbiter endpoint snap (which carries crossChainReach).
         var self = this;
         this.root.innerHTML = ''
             + '<header class="enm-settings-class-head">'
             + '<h2>Arbiter settings</h2>'
-            + '<p class="enm-settings-class-sub">Class D (cross-chain signer) — '
-            + 'the most security-critical component (plan §11 risk #1). '
-            + 'Reuses the mainchain producer keystore; password is the same.</p>'
+            + '<p class="enm-settings-class-sub">Cross-chain signer — the most '
+            + 'security-sensitive component. It signs cross-chain messages between '
+            + 'Main chain and the EVM sidechains, using the Main chain keystore.</p>'
             + '</header>'
             + '<div class="enm-settings-class-body" data-state="loading">'
             + '<p class="enm-stub">Loading current configuration…</p>'
@@ -609,12 +599,16 @@
             var arb = (cfg.chains && cfg.chains.arbiter) || null;
             if (!arb) {
                 body.dataset.state = 'unconfigured';
+                // 0.5.14 audit Session 14 — drop curl-bait copy. Pre-0.5.14
+                // told operator to "Install via POST /api/enm/setup/install-
+                // class-d" which exposed a backend endpoint as if the
+                // operator were going to fire it manually.
                 body.innerHTML = ''
                     + '<div class="enm-settings-class-stub">'
                     + '<p><strong>Arbiter is not yet installed.</strong></p>'
-                    + '<p>Install via <code>POST /api/enm/setup/install-class-d</code> '
-                    + 'with mining address. All 4 chains (mainchain, ESC, EID, PG) '
-                    + 'must be configured first.</p>'
+                    + '<p>Install via the setup wizard. The arbiter requires '
+                    + 'all four chains (Main chain, ESC, EID, PG) to be configured '
+                    + 'first — the wizard will surface the option once they are.</p>'
                     + '</div>';
                 return;
             }
@@ -628,30 +622,41 @@
     };
 
     /**
-     * @private — Class D info panes. Wallet & Mining + Cross-chain
-     * Status reachability matrix (live data from /chains/arbiter would
-     * carry snap.crossChainReach but for static settings we just show
-     * which chains are configured + their RPC ports).
+     * @private — Class D info panes. Wallet & Mining read-only DL +
+     * Configured-chains DL (config-presence, not live reach) + Restart.
      */
     SettingsTab.prototype._renderClassDInfo = function (parent, arbCfg, allChains) {
         parent.dataset.state = 'ready';
+        var self = this;
         var addr = (arbCfg.mining && arbCfg.mining.miningAddress) || '—';
         var fee  = (arbCfg.mining && arbCfg.mining.sideChainPowFeeEla) || '—';
+        // 0.5.14 audit Session 14 — strip "plan H8 invariant" + "via
+        // EnmEncryption" dev tags from operator-facing copy.
         var html = '<section class="enm-section enm-section-classd">'
             + '<h3>Wallet &amp; Mining</h3>'
             + '<dl class="enm-info-dl">'
             +   '<dt>Signing keystore</dt>'
-            +   '<dd>Mainchain (<code>chains/mainchain/keystore.dat</code>) — '
-            +     'plan H8 invariant</dd>'
-            +   '<dt>Wallet password source</dt>'
-            +   '<dd>Same as mainchain (encrypted at rest via EnmEncryption)</dd>'
+            +   '<dd>Reuses the Main chain keystore '
+            +     '(<code>chains/mainchain/keystore.dat</code>).</dd>'
+            +   '<dt>Wallet password</dt>'
+            +   '<dd>Same as the Main chain wallet password (encrypted at rest). '
+            +     'To change it, switch the chain selector to '
+            +     '<strong>Main chain</strong> and open '
+            +     '<strong>Settings → Identity</strong>.</dd>'
             +   '<dt>Mining address (ELA mainchain)</dt>'
             +   '<dd><code>' + escapeHtml(addr) + '</code></dd>'
             +   '<dt>SideChainPow fee (ELA)</dt>'
             +   '<dd>' + escapeHtml(String(fee)) + '</dd>'
             + '</dl></section>';
+        // 0.5.14 audit Session 14 — rename "Cross-chain reachability" to
+        // "Configured chains". The matrix shows config presence (not live
+        // reach) — pre-0.5.14 label invited operator to misread "✓
+        // Configured" as "✓ Reachable". Live reachability lives on the
+        // Arbiter chain card. Drop the "F23 healing rule" dev tag.
         html += '<section class="enm-section enm-section-classd">'
-            + '<h3>Cross-chain reachability</h3>'
+            + '<h3>Configured chains</h3>'
+            + '<p>The arbiter signs messages between these four chains. All four '
+            + 'must be configured before the arbiter can run.</p>'
             + '<dl class="enm-info-dl">';
         ['mainchain', 'esc', 'eid', 'pg'].forEach(function (cid) {
             var configured = !!allChains[cid];
@@ -663,10 +668,51 @@
                   + '</dd>';
         });
         html += '</dl>'
-            + '<p>Live reachability is rendered on the Arbiter chain card '
-            + '(F23 healing rule monitors all 4 RPCs every 30s).</p>'
+            + '<p>Live reachability for each chain is shown on the arbiter\'s '
+            + 'chain card on the dashboard. ENM retests reachability '
+            + 'automatically every 30 seconds.</p>'
             + '</section>';
+        // 0.5.14 audit Session 14 — Restart section parallel to Class B
+        // (Session 13) and Class C (Session 12). Arbiter restart is
+        // useful when one of the four target chains was restarted or
+        // when cross-chain reach degraded.
+        html += '<section class="enm-section enm-section-classd">'
+              + '<h3>Restart</h3>'
+              + '<p>Restart the arbiter if one of the four chains it monitors '
+              + 'was just restarted, or if cross-chain reach has degraded.</p>'
+              + '<button type="button" class="enm-btn enm-btn-secondary" '
+              +   'data-action="restart-arbiter">Restart arbiter</button>'
+              + '<p class="enm-section-status" data-role="restart-status" hidden></p>'
+              + '</section>';
         parent.innerHTML = html;
+
+        // Wire the Restart button.
+        var restartBtn = parent.querySelector('[data-action="restart-arbiter"]');
+        var statusEl   = parent.querySelector('[data-role="restart-status"]');
+        if (restartBtn) {
+            restartBtn.addEventListener('click', function () {
+                if (self._destroyed) { return; }
+                restartBtn.disabled = true;
+                restartBtn.textContent = 'Restarting…';
+                statusEl.hidden = true;
+                self.api.post('/chains/arbiter/restart', {})
+                    .then(function () {
+                        if (self._destroyed) { return; }
+                        restartBtn.disabled = false;
+                        restartBtn.textContent = 'Restart arbiter';
+                        statusEl.hidden = false;
+                        statusEl.textContent = 'Restart requested. Watch the arbiter card for status.';
+                    })
+                    .catch(function (err) {
+                        if (self._destroyed) { return; }
+                        restartBtn.disabled = false;
+                        restartBtn.textContent = 'Restart arbiter';
+                        statusEl.hidden = false;
+                        statusEl.textContent = 'Restart failed: '
+                            + ((err && err.message) || String(err));
+                    });
+            });
+        }
     };
 
     /**
