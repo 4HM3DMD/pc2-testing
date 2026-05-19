@@ -2,11 +2,15 @@
  * Copyright (C) 2026-present Elacity
  * SPDX-License-Identifier: AGPL-3.0
  *
- * ProcessLogStreamer — bridge ela's stdout/stderr to SSE topic chains:<id>:logs.
+ * ProcessLogStreamer — bridge a chain's stdout/stderr to SSE topic
+ * chains:<id>:logs. Shared across every chain class (Main chain, ESC,
+ * EID, PG, Arbiter) — the implementation is process-output-agnostic.
  *
  * Per Rev 6/8 audits:
- *   - ela writes to BOTH stdout AND files via io.MultiWriter (common/log/log.go).
- *     We capture stdout/stderr directly from the child process — no demux
+ *   - Each chain binary writes to BOTH stdout AND on-disk log files
+ *     (ela uses io.MultiWriter at common/log/log.go; geth-derived
+ *     chains have their own MultiWriter equivalents). We capture
+ *     stdout/stderr directly from the child process — no demux
  *     needed because Node's child_process gives us already-separated pipes.
  *   - Per-line buffering: split on '\n', keep trailing partial in a buffer
  *     until the next chunk completes it.
@@ -193,4 +197,11 @@ module.exports = {
     FLUSH_INTERVAL_MS,
     FLUSH_LINE_THRESHOLD,
     MAX_LINE_BYTES,
+    // 0.5.110 audit Session 110 — added QUEUE_HARD_CAP to the exports
+    // for symmetry with the other thresholds. Tests + introspection
+    // tooling can now read the hard cap value without parsing the
+    // source. Previously the constant was unexported despite serving
+    // the same role (a tunable threshold) as the three already-exported
+    // ones — pure consistency cleanup.
+    QUEUE_HARD_CAP,
 };

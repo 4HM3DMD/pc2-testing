@@ -97,8 +97,15 @@ function limit(scope) {
         if (bucket.count > cfg.max) {
             const retryAfter = Math.max(Math.ceil((bucket.resetAt - now) / 1000), 1);
             res.setHeader('Retry-After', String(retryAfter));
+            // 0.5.110 audit Session 110 — operator-friendly copy. Pre-
+            // 0.5.110 the body leaked the internal scope name verbatim
+            // ("Rate limit exceeded for read scope") which is jargon —
+            // operators don't know what a "scope" is. The rewritten copy
+            // names the request shape ("requests"), the limit ("100/min"),
+            // and the next-try window in plain seconds, matching the
+            // Retry-After header for callers that prefer structured data.
             return res.status(429).json(errorBody(
-                `Rate limit exceeded for ${scope} scope (max ${cfg.max}/min). Retry in ${retryAfter}s.`,
+                `Too many requests (limit: ${cfg.max} per minute). Try again in ${retryAfter} second${retryAfter === 1 ? '' : 's'}.`,
             ));
         }
 

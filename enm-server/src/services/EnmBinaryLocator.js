@@ -61,7 +61,16 @@ function validatePath(binaryPath) {
         if (err.code === 'ENOENT') {
             return { ok: false, reason: `No file at ${normalized}. Did you run "make all" in the Elastos.ELA repo?` };
         }
-        return { ok: false, reason: `Could not stat ${normalized}: ${err.message}` };
+        // 0.5.110 audit Session 110 — replaced err.message interpolation
+        // with a static fallback. Pre-0.5.110 we surfaced Node fs errno
+        // strings verbatim into operator-facing UI; the path is already
+        // in the message so the err.message was mostly redundant on top
+        // of leaky. Common shape was EACCES/EPERM — operator-fixable.
+        // Matches Sessions 64/67/79/81-84 static-fallback pattern.
+        if (err.code === 'EACCES' || err.code === 'EPERM') {
+            return { ok: false, reason: `Permission denied reading ${normalized}. Fix with: chmod +r "${normalized}" (or check the parent directory's permissions).` };
+        }
+        return { ok: false, reason: `Could not read ${normalized}. Check the path is correct and the file is accessible.` };
     }
 
     if (!stat.isFile()) {
@@ -113,8 +122,15 @@ function smokeTest(binaryPath, opts) {
                 stdio: ['ignore', 'pipe', 'pipe'],
                 timeout: timeoutMs, // node ≥ 16: kills the process if it overruns
             });
-        } catch (err) {
-            return resolve({ ok: false, reason: `Could not spawn ${binaryPath}: ${err.message}` });
+        } catch (_) {
+            // 0.5.110 audit Session 110 — static fallback (audit chain
+            // err.message leak sweep). The binary path is already in the
+            // message; the spawn errno (ENOENT/EACCES/EPERM/E2BIG) is
+            // covered by the same recovery action.
+            return resolve({
+                ok: false,
+                reason: `Could not start ${binaryPath}. The file may have been moved or its execute permission removed since validation. Re-check the path and "chmod +x" status.`,
+            });
         }
 
         let stdout = '';
@@ -132,8 +148,15 @@ function smokeTest(binaryPath, opts) {
         if (child.stderr) {
             child.stderr.on('data', (d) => { stderr += d.toString('utf8'); });
         }
-        child.on('error', (err) => {
-            finish({ ok: false, reason: `Spawn failed: ${err.message}` });
+        child.on('error', (_err) => {
+            // 0.5.110 audit Session 110 — static fallback (audit chain
+            // err.message leak sweep). The child-process 'error' event
+            // fires for spawn failures Node could not raise synchronously
+            // — same recovery action as the try/catch above.
+            finish({
+                ok: false,
+                reason: `Could not start ${binaryPath}. The file may have been moved or its execute permission removed since validation.`,
+            });
         });
         child.on('exit', (code, signal) => {
             const output = (stdout + stderr).trim();
