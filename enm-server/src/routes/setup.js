@@ -1439,22 +1439,24 @@ function build(extensionHandle) {
         const body = req.body || {};
         const EnmCrypto = require('../services/EnmCrypto');
 
-        // beta.0.4.5 — operator directive: collapse the 3-input form
-        // (password + EVM reward addr + ELA mining addr) down to ONE
-        // input (rewardAddress). Mainchain keystore password is
-        // already on file from Card C and shared via the H23 invariant
-        // so we read it from cfg.chains.mainchain instead of asking
-        // again. Arbiter mining address = same as reward (the schema
-        // accepts either format; one wallet's EVM-format works fine).
+        // beta.0.4.10 — body shape (v0.4.7+ redesigned wizard):
+        //   { masterPassword, rewardAddress, sharedRewardAddress?,
+        //     useSnapshots?, activeNet? }
         //
-        // Body shape (v0.4.5):
-        //   { rewardAddress: '0x<40 hex>', activeNet?: 'mainnet'|'testnet' }
+        // Card 3 generates masterPassword client-side; Card 4 validates
+        // rewardAddress; Card 5 toggles useSnapshots. The orchestrator's
+        // first runStep (council-strategy) writes the encrypted master
+        // password to cfg.global.council.masterPasswordEncrypted and the
+        // install-mainchain-keystore step decrypts it to create
+        // keystore.dat. No mainchain pre-existence required.
         //
-        // Pre-v0.4.5 body had sharedPassword + sharedRewardAddress +
-        // arbiterMiningAddress; the orchestrator was rebuilt to derive
-        // password from mainchain.dpos.keystorePasswordEncrypted and to
-        // use rewardAddress for both EVM rewards AND Arbiter mining.
-        const rewardCheck = EnmCrypto.validateEthAddress(body.rewardAddress || '');
+        // Back-compat: pre-0.4.7 callers passed `sharedPassword` instead
+        // of `masterPassword` — orchestrator (council-strategy step)
+        // already falls back to that. If neither is set, we derive from
+        // the existing mainchain envelope when one is present (a
+        // resume-from-failure path).
+        const rewardAddress = body.rewardAddress || body.sharedRewardAddress || '';
+        const rewardCheck = EnmCrypto.validateEthAddress(rewardAddress);
         if (!rewardCheck.valid) {
             return res.status(400).json(errorBody(
                 `install-council: rewardAddress: ${rewardCheck.warning}`,
@@ -1462,40 +1464,37 @@ function build(extensionHandle) {
         }
         const activeNet = body.activeNet === 'testnet' ? 'testnet' : 'mainnet';
 
-        // Pre-req: mainchain must exist + have a keystore password.
-        // The Council install reuses mainchain.dpos.keystorePasswordEncrypted
-        // as the shared password for all sidechain EVM keystores +
-        // Arbiter wallet (H23 invariant).
+        // Resolve the master password from one of three sources, in
+        // priority order:
+        //   1. body.masterPassword          — Card 3 (current wizard)
+        //   2. body.sharedPassword          — pre-0.4.7 callers
+        //   3. cfg.chains.mainchain.dpos.keystorePasswordEncrypted
+        //                                   — resume path on a host where
+        //                                     mainchain was installed by
+        //                                     a previous wizard run
+        // If none of the above yield a password, 412 — the wizard has
+        // a bug we want surfaced loudly.
         const cfg = await ConfigStore.load();
-        if (!cfg.chains || !cfg.chains.mainchain) {
+        let masterPassword = body.masterPassword || body.sharedPassword || '';
+        if (!masterPassword
+            && cfg.chains && cfg.chains.mainchain
+            && cfg.chains.mainchain.dpos
+            && cfg.chains.mainchain.dpos.keystorePasswordEncrypted) {
+            try {
+                masterPassword = EnmCrypto.decrypt(
+                    cfg.chains.mainchain.dpos.keystorePasswordEncrypted,
+                );
+            } catch (_) { /* leave masterPassword empty — handled below */ }
+        }
+        if (!masterPassword) {
             return res.status(412).json(errorBody(
-                'install-council: mainchain not yet configured. Finish '
-                + 'the mainchain setup wizard (Cards B-D) before running '
-                + 'the Council expansion.',
+                'install-council: masterPassword missing. The wizard\'s '
+                + 'Card 3 must POST the operator-generated password in '
+                + 'the request body. If you reached this directly, send '
+                + '{ masterPassword: \'<32-char string>\', rewardAddress }.',
             ));
         }
-        const mainEnvelope = cfg.chains.mainchain.dpos
-            && cfg.chains.mainchain.dpos.keystorePasswordEncrypted;
-        if (!mainEnvelope) {
-            return res.status(412).json(errorBody(
-                'install-council: mainchain keystore password is not on '
-                + 'file. Finish the mainchain keystore step (Card C) '
-                + 'before running the Council expansion.',
-            ));
-        }
-        // Verify the envelope decrypts (catches a corrupted state early
-        // so the operator sees an actionable error instead of an opaque
-        // install-step failure later).
-        let sharedPassword;
-        try {
-            sharedPassword = EnmCrypto.decrypt(mainEnvelope);
-        } catch (err) {
-            return res.status(412).json(errorBody(
-                'install-council: cannot decrypt the mainchain keystore '
-                + 'password (' + err.message + '). Re-enter it via '
-                + 'Settings → Identity, then retry.',
-            ));
-        }
+        const sharedPassword = masterPassword;  // legacy alias for the orchestrator
 
         // Return 202 immediately + run the orchestrator in the background.
         res.status(202).json(successBody({
@@ -1515,14 +1514,8 @@ function build(extensionHandle) {
         // PG opt-in is gone. Operator can choose to skip snapshot
         // downloads via useSnapshots=false (default: true).
         const useSnapshots = body.useSnapshots !== false;
-        // Accept either `masterPassword` (v0.4.7 wording) or
-        // `sharedPassword` (pre-0.4.7) in the body, with the existing
-        // mainchain-derived password as the final fallback. The
-        // orchestrator's council-strategy step prefers masterPassword
-        // and falls back to sharedPassword on the inputs object.
-        const masterPassword = (typeof body.masterPassword === 'string' && body.masterPassword)
-            || (typeof body.sharedPassword === 'string' && body.sharedPassword)
-            || sharedPassword;
+        // masterPassword + sharedPassword are already resolved at the
+        // top of this handler (body → cfg-fallback). Reuse them here.
 
         runCouncilInstall({
             extensionHandle,
