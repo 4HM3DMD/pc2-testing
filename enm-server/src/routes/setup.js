@@ -2012,18 +2012,19 @@ async function runCouncilInstall(args) {
         //      shared-password strategy), not from the per-wallet
         //      .setup-keystore-<wallet>.json stash the BPoS flow uses.
         //
-        // Idempotency: if cfg.chains.mainchain.binaryPath is set AND
-        // cfg.chains.mainchain.dpos.keystorePresent === true we treat
-        // the block as already-written. Re-running the step otherwise
-        // is safe — we always overwrite from disk state (which is
-        // canonical for both the binary path and the identity).
+        // Idempotency: skip if cfg.chains.mainchain.binaryPath is set AND
+        // the binary + keystore.dat are both on disk. dposSchema (see
+        // EnmConfigSchema.js:49-62) does NOT permit a `keystorePresent`
+        // flag — Joi rejects unknown keys — so we check the actual file
+        // existence instead. Disk state is canonical anyway.
         await runStep('install-mainchain-cfg', async () => {
             const cfg2 = await ConfigStore.load();
             cfg2.chains = cfg2.chains || {};
             cfg2.chains.mainchain = cfg2.chains.mainchain || {};
             const m = cfg2.chains.mainchain;
-            if (m.binaryPath && m.dpos && m.dpos.keystorePresent === true
-                && fs.existsSync(m.binaryPath)) {
+            const keystoreOnDisk = fs.existsSync(path.join(chainDir('mainchain'), 'keystore.dat'));
+            if (m.binaryPath && fs.existsSync(m.binaryPath) && keystoreOnDisk
+                && m.dpos && m.dpos.keystorePasswordEncrypted) {
                 return { skipped: true, message: 'mainchain cfg already written' };
             }
 
@@ -2083,13 +2084,6 @@ async function runCouncilInstall(args) {
                     ownerPublicKey: (m.dpos && m.dpos.ownerPublicKey) || '',
                     nodePublicKey: nodePublicKey || (m.dpos && m.dpos.nodePublicKey) || '',
                     keystorePasswordEncrypted: keystoreEnvelope,
-                    // v0.4.7.1 — non-schema hint for the orchestrator's
-                    // idempotency check on re-runs. Schemas validated
-                    // by Joi ignore unknown keys when stripUnknown is
-                    // off; if it strips, the next pass will recreate
-                    // the keystore which is harmless (Step B's exists
-                    // check still wins).
-                    keystorePresent: true,
                 },
                 memoryLimitMb: m.memoryLimitMb || 4096,
                 archiveMode: m.archiveMode === true,
