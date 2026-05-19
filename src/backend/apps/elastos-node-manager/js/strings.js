@@ -818,9 +818,14 @@
             // inline English. Both placeholder + aria-label use the
             // same string for visible/AT parity.
             anti_snipe_label:  'Anti-snipe password',
-            expired:           'Expired',
-            executed:          'Executed',
-            rejected:          'Rejected',
+            // 0.5.59 audit Session 59 — dropped 3 orphan i18n keys
+            // (expired / executed / rejected). Full-tree grep across
+            // components/, services/, app.js, utils.js, api.js found
+            // zero consumers, including dynamic key lookups of the
+            // form t('proposal.' + status). The proposal modal only
+            // renders pending proposals; settled-state UI lives in
+            // audit-tab.js (Session 16) which has its own decision-
+            // column labels and never reads these.
             // alpha.28.1 batch 69 — fallback when both summary_action
             // and summaryAction are absent on the proposal payload.
             // Prevents the ack-checkbox ceremony from silently
