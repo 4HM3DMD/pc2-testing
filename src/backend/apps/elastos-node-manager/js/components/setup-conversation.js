@@ -963,6 +963,23 @@
                 '.enm-council-form-error[data-for="' + field + '"]');
             if (el) { el.textContent = msg; el.hidden = !msg; }
         }
+        // 0.5.23 audit Session 23 — handle the two most common paste
+        // mishaps that pre-0.5.23 fell through to a generic format error:
+        //   (a) internal whitespace (newlines from PDF copy, spaces from
+        //       screenshots / wallet-app exports);
+        //   (b) capital-X prefix (some explorers / editors capitalize
+        //       the leading "0X").
+        // s.trim() only handles leading/trailing whitespace; internal
+        // whitespace inside a hex string is by definition not part of
+        // the address, so silent strip is safe.
+        function normalizeEthInput(s) {
+            if (typeof s !== 'string') { return ''; }
+            var stripped = s.replace(/\s+/g, '');
+            if (/^0X/.test(stripped)) {
+                stripped = '0x' + stripped.slice(2);
+            }
+            return stripped;
+        }
         function validateEth(s) {
             if (typeof s !== 'string') {
                 return t('friendly.setup.card_4.err_format');
@@ -984,7 +1001,10 @@
         rewardEl.addEventListener('input', function () {
             showError('reward', '');
             showError('last4', '');
-            if (validateEth(rewardEl.value.trim()) === null) {
+            // 0.5.23 audit Session 23 — normalize before validating so
+            // a paste with stray whitespace shows the last-4 gate as
+            // soon as the underlying address is otherwise valid.
+            if (validateEth(normalizeEthInput(rewardEl.value)) === null) {
                 last4Row.hidden = false;
             } else {
                 last4Row.hidden = true;
@@ -1005,7 +1025,14 @@
             if (self._destroyed || !self._stillRendering(seq)) { return; }
             showError('reward', '');
             showError('last4', '');
-            var reward = rewardEl.value.trim();
+            // 0.5.23 audit Session 23 — normalize on click. If the
+            // normalization changed the value, write it back to the
+            // input so the operator can see exactly what was accepted
+            // and so the last-4 gate compares against the cleaned-up
+            // form.
+            var raw = rewardEl.value;
+            var reward = normalizeEthInput(raw);
+            if (reward !== raw) { rewardEl.value = reward; }
             var err = validateEth(reward);
             if (err) { showError('reward', err); return; }
             var last4 = (last4El.value || '').trim().toLowerCase();
