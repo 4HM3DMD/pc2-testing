@@ -231,8 +231,8 @@ function detectF5(snap) {
             ruleId: 'F5',
             tier: HEALING_TIERS.OWNER_CONFIRMS,
             severity: 'CRITICAL',
-            summaryAction: `Free disk space on ${snap.chainId} data dir`,
-            summaryReason: `Only ${free.toFixed(1)} GB free — chain may halt below ~1 GB. Action: enable archive prune or move dataDir to a larger volume.`,
+            summaryAction: `Free disk space on the ${snap.chainId} data folder`,
+            summaryReason: `Only ${free.toFixed(1)} GB free — chain may halt below ~1 GB. Action: enable archive prune or move the data folder to a larger volume.`,
             payload: { action: 'prune-suggestion', chainId: snap.chainId, freeGb: free },
         };
     }
@@ -244,7 +244,7 @@ function detectF5(snap) {
         ruleId: 'F5',
         tier: HEALING_TIERS.OWNER_CONFIRMS,
         severity: 'WARNING',
-        summaryAction: `Disk space getting low (${free.toFixed(1)} GB free)`,
+        summaryAction: `${snap.chainId}: disk space getting low (${free.toFixed(1)} GB free)`,
         summaryReason: `Below the ${DISK_WARN_GB} GB warn threshold. Plan a prune or volume migration before it crosses ${DISK_CRITICAL_GB} GB.`,
         payload: { action: 'prune-suggestion', chainId: snap.chainId, freeGb: free },
     };
@@ -268,7 +268,7 @@ function detectF6(snap) {
         ruleId: 'F6',
         tier: HEALING_TIERS.OWNER_CONFIRMS,
         summaryAction: `Investigate OOM-kill on ${snap.chainId}`,
-        summaryReason: 'Process was SIGKILLed — most likely the Linux OOM-killer. Increase memoryLimitMB or free RAM on the host.',
+        summaryReason: 'The chain was killed by the Linux out-of-memory killer (SIGKILL). Raise the Memory limit in Settings → Mainchain Advanced, or free RAM on the host.',
         payload: { action: 'oom-suggestion', chainId: snap.chainId },
     };
 }
@@ -741,7 +741,7 @@ function detectF24(snap) {
         summaryAction: `${snap.chainId}: parent chain "${snap.parentChainId}" is offline`,
         summaryReason:
             `${snap.chainId} is an Oracle that relays from ${snap.parentChainId} `
-            + 'to mainchain. With the parent chain offline there is nothing to '
+            + 'to the Main chain. With the parent chain offline there is nothing to '
             + 'relay; the oracle is consuming resources without producing work. '
             + `Start ${snap.parentChainId} via its chain card or stop ${snap.chainId} `
             + 'if you intended to take it down.',
@@ -789,8 +789,8 @@ function detectF25(snap) {
         tier: HEALING_TIERS.CRITICAL_NOTIFY,
         summaryAction: `${snap.chainId}: mining is enabled but no reward address is set`,
         summaryReason:
-            `cfg.chains.${snap.chainId}.miner.enabled=true but miner.rewardAddress is empty. `
-            + 'Without a reward address geth either refuses to start or mines to '
+            `Mining is enabled on ${snap.chainId} but no reward address is set. `
+            + 'Without one, the chain either refuses to start or mines to '
             + '0x0 (rewards are lost). Open Settings → Mining & Rewards on the '
             + `${snap.chainId} pane and paste an Ethereum address you control.`,
         payload: {
@@ -876,7 +876,7 @@ const RULE_METADATA = Object.freeze({
     // parent EVM sidechain is offline. Auto-clears once parent
     // restarts (ChainRegistry exit-hook handles the restart side).
     F24: { tier: 'CRITICAL_NOTIFY', title: 'Oracle parent chain offline',
-           description: 'An Oracle (ESC/EID/PG) relays from its parent EVM sidechain to mainchain. If the parent is stopped while the oracle is running, surface a critical alert so the operator can bring the parent back online (or stop the orphaned oracle intentionally).' },
+           description: 'An Oracle (ESC/EID/PG) relays from its parent EVM sidechain to the Main chain. If the parent is stopped while the oracle is running, surface a critical alert so the operator can bring the parent back online (or stop the orphaned oracle intentionally).' },
     // beta.0.3.14 (Wave M6.5) — Class D-only. Arbiter cross-chain
     // RPC unreachable (any of mainchain/esc/eid/pg).
     F23: { tier: 'CRITICAL_NOTIFY', title: 'Arbiter cross-chain unreachable',
