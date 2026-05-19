@@ -76,6 +76,21 @@ const ChainRegistry = require('./ChainRegistry');
 
 const KEYSTORE_FILENAME = 'keystore.dat';
 
+// 0.5.118 audit Session 118 — read the User-Agent's version segment
+// from package.json instead of hardcoding "0.2.0". Pre-0.5.118 the
+// GitHub API hit at line ~653 used "ENM-MaintenanceManager/0.2.0" —
+// stale since beta. Mirrors the Session 111 fix (EnmUpdateScanner)
+// and Session 113 fix (EnmBootstrapDownloader); third User-Agent
+// drift caught by the audit chain.
+function _readPackageVersion() {
+    try {
+        const pkg = require('../../package.json');
+        if (pkg && typeof pkg.version === 'string') { return pkg.version; }
+    } catch (_) { /* fall through */ }
+    return '0.0.0';
+}
+const USER_AGENT = 'ENM-MaintenanceManager/' + _readPackageVersion();
+
 const GITHUB_OWNER = '4HM3DMD';
 const GITHUB_REPO = 'pc2-testing';
 const DEPLOY_SCRIPT = '/root/deploy-enm.sh';
@@ -650,7 +665,7 @@ function _httpsGetJson(url, depth) {
             path: u.pathname + u.search,
             port: u.port || 443,
             headers: {
-                'User-Agent': 'ENM-MaintenanceManager/0.2.0',
+                'User-Agent': USER_AGENT,
                 'Accept': 'application/vnd.github+json',
                 'X-GitHub-Api-Version': '2022-11-28',
             },
