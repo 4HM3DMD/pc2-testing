@@ -154,6 +154,14 @@ function normalizeRoutePath(rawUrl) {
 
 // HTTP status texts we surface in the Outcome column. Minimal set —
 // any status we don't recognise falls back to the bare numeric code.
+//
+// 0.5.117 audit Session 117 — corrected 412 text. RFC 7231 §6.5.10
+// defines 412 as "Precondition Failed"; "Precondition Required" is
+// 428 (RFC 6585 §3 — added later specifically for the required
+// semantic). Pre-0.5.117 setup.js 412 responses (masterPassword
+// missing) and maintenance.js 412 responses (chain busy) showed the
+// wrong RFC text in the audit log's Outcome column. Added 428 too in
+// case a future route uses the newer code.
 const STATUS_TEXTS = Object.freeze({
     200: 'OK',
     201: 'Created',
@@ -164,7 +172,8 @@ const STATUS_TEXTS = Object.freeze({
     403: 'Forbidden',
     404: 'Not Found',
     409: 'Conflict',
-    412: 'Precondition Required',
+    412: 'Precondition Failed',
+    428: 'Precondition Required',
     429: 'Too Many Requests',
     500: 'Internal Server Error',
     501: 'Not Implemented',
