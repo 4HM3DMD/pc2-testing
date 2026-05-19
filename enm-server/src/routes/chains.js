@@ -546,7 +546,7 @@ function build(extensionHandle) {
                 );
                 return res.status(409).json({
                     success: false,
-                    error: 'Host has unresolved conflicts; refusing to start. Resolve them or pass ?force=1.',
+                    error: 'Host has unresolved conflicts; refusing to start. Resolve them, or use the Force start option to override.',
                     conflicts,
                 });
             }
@@ -1157,7 +1157,7 @@ function build(extensionHandle) {
             const status = ChainRegistry.getProcessService().statusSync(adapter.chainId);
             if (status && status.alive) {
                 return res.status(409).json(errorBody(
-                    'Stop the chain before updating the binary. Click Stop on the Mainchain card, wait for the badge to change to "Stopped", then run Update again.',
+                    'Stop the chain before updating the binary. Click Stop on the chain card, wait for the badge to change to "Stopped", then run Update again.',
                 ));
             }
             const downloader = ChainRegistry.getBinaryDownloader();
@@ -1274,7 +1274,7 @@ function build(extensionHandle) {
             }
             if (!snapshot.keystorePresent) {
                 return res.status(400).json(errorBody(
-                    'No keystore on disk — generate one via the setup conversation first.',
+                    'No keystore on disk — generate one via the setup wizard first.',
                 ));
             }
             // Gate: chain must be alive AND fully synced before submitting
