@@ -216,7 +216,7 @@
                 // panels.
                 var ct = (res.headers && res.headers.get) ? (res.headers.get('content-type') || '') : '';
                 if (text && ct && ct.indexOf('application/json') === -1) {
-                    var htmlErr = new Error('Non-JSON response from ' + path + ' (likely proxy/auth page)');
+                    var htmlErr = new Error('Non-JSON response from ' + path + ' (likely session expired)');
                     htmlErr.status = res.status;
                     htmlErr.code = 'NON_JSON';
                     htmlErr.body = text.slice(0, 200);
