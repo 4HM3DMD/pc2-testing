@@ -834,10 +834,14 @@ const RULE_METADATA = Object.freeze({
            description: 'Surface a notice when free disk drops below the warn / critical thresholds in the Alerts section. Action stays operator-driven (ENM never deletes operator data).' },
     F6:  { tier: 'OWNER_CONFIRMS',  title: 'Process killed by OOM',
            description: 'If ela was SIGKILL’d (Linux OOM), suggest raising the memory limit instead of just restarting blindly.' },
-    F7:  { tier: 'OWNER_CONFIRMS',  title: 'Binary version drift',
-           description: 'Notice when the binary on disk differs from the last-known-good version recorded at install.' },
-    F8:  { tier: 'OWNER_CONFIRMS',  title: 'Height regression',
-           description: 'If the chain rolls back blocks (rare; reorg or DB corruption), surface a notice for owner attention.' },
+    // 0.5.20 audit Session 20 — F7/F8 metadata realigned to detect-
+    // function reality. Pre-0.5.20 these titles described an early
+    // spec that was never built (no height-regression detector exists
+    // anywhere in this file). Behavior unchanged; pure label fix.
+    F7:  { tier: 'OWNER_CONFIRMS',  title: 'Port conflict on start',
+           description: 'A port the chain needs (e.g. 20338 / 20339 / 20336) is already bound by another process. Open Settings → Advanced and pick free ports, or stop the conflicting service.' },
+    F8:  { tier: 'OWNER_CONFIRMS',  title: 'Binary version drift',
+           description: 'The ela binary on disk reports a different version than ENM recorded at install. Suppressed for 1 hour after a fresh install (Geth-fork sidechains report their internal geth version on the `version` subcommand, not the elastos-fork tag). After the grace window, surfaces an OWNER_CONFIRMS proposal to update the recorded version.' },
     F9:  { tier: 'OWNER_CONFIRMS',  title: 'Config drift on disk',
            description: 'Notice when ela.conf on disk has been edited outside of ENM (manual operator change).' },
     F10: { tier: 'OWNER_CONFIRMS',  title: 'RPC password rotation reminder',
@@ -890,8 +894,8 @@ const DEFAULT_ENABLED = Object.freeze({
     F4: true,   // sync stalled (10-min grace, operator-tunable)
     F5: true,   // disk space (operator-tunable thresholds)
     F6: true,   // OOM killed
-    F7: true,   // binary version drift
-    F8: true,   // height regression
+    F7: true,   // port conflict on start (0.5.20 — comment realigned to detectF7's actual implementation)
+    F8: true,   // binary version drift (with 1h binaryInstalledAt grace from v0.5.0)
     F9: true,   // config drift on disk
     F10: true,  // RPC password rotation reminder
     F11: true,  // BPoS deposit drift

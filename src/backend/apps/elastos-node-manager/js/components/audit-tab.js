@@ -1176,8 +1176,14 @@
         'F4':  'Restart proposed (sync stalled)',
         'F5':  'Disk space low',
         'F6':  'OOM-killed (memory pressure)',
-        'F7':  'Binary version differs from install',
-        'F8':  'Height regressed',
+        // 0.5.20 audit Session 20 — F7/F8 swapped to match HealthRules
+        // detect-function reality. detectF7 implements port conflict on
+        // start; detectF8 implements binary version drift (with the
+        // 1-hour binaryInstalledAt grace from v0.5.0). Pre-0.5.20 these
+        // friendly labels were inherited from outdated RULE_METADATA
+        // and gave operators wrong audit-row explanations.
+        'F7':  'Port conflict on start',
+        'F8':  'Binary version differs from install',
         'F9':  'Config file changed on disk',
         'F10': 'RPC password rotation reminder',
         'F11': 'BPoS deposit changed on-chain',
