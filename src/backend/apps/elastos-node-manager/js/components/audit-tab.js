@@ -314,10 +314,14 @@
         title.id = 'enm-audit-title';
         title.textContent = t('audit.heading');
         toolbar.appendChild(title);
-        // Scope note — phrased neutrally because the retention window
-        // is operator-configured (general_audit_retention).
+        // 0.5.16 audit Session 16 — scope note rewrite. Pre-0.5.16 said
+        // "All chains · audit retention as configured" — the "as
+        // configured" hedge didn't tell the operator where to find the
+        // setting, and most operators don't think in retention terms
+        // anyway. "Newest events first" describes the only thing the
+        // operator needs to know to read the table.
         var scope = el('div', 'enm-audit-scope-note');
-        scope.textContent = 'All chains · audit retention as configured';
+        scope.textContent = 'All chains · newest events first';
         toolbar.appendChild(scope);
 
         var actions = el('div', 'enm-audit-actions');
@@ -1180,7 +1184,13 @@
         'F12': 'Producer missing rounds (Inactive risk)',
         'F13': 'Clock skew detected',
         'F16': 'Recovered from peer-zero',
-        'F18': 'No inbound peers (BPoS)',
+        // 0.5.16 audit Session 16 — dropped "(BPoS)" parenthetical.
+        // F18 fires on non-BPoS nodes too (OWNER-CONFIRMS / INFO severity
+        // per the beta.3.27 fix in HealthRules.detectF18) — the marker was
+        // misleading Council and follower operators who saw the row and
+        // assumed it didn't apply to them. Severity is signalled by the
+        // tier badge; the friendly label stays neutral.
+        'F18': 'No inbound peers',
         'F19': 'Host port conflict',
         'F22': 'Auto-healed DPoS state desync',
         // beta.3.66 — missing label. AUTOSTART is the AUTOMATED-SAFE rule
