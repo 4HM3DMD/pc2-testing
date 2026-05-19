@@ -194,10 +194,16 @@ async function _checkBinary(baseline, key, label) {
     }
     const current = await _fileFingerprint(expected.path);
     if (!current) {
+        // 0.5.92 audit Session 92 — drop the ${expected.path} leak from
+        // the operator-visible detail string. The row's label already
+        // names WHICH binary is missing ("Main chain binary",
+        // "Smart Chain binary", etc.). The structured `baseline` field
+        // below retains the path for dev forensics + Identity panel
+        // detail-view if it ever wants to surface the full path.
         return {
             id: 'binary-' + key, label: label + ' binary',
             status: 'fail',
-            detail: `Binary expected at ${expected.path} is missing.`,
+            detail: 'Binary file is missing. It may have been moved or removed since install — run the deploy script to restore it.',
             baseline: expected,
         };
     }
