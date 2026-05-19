@@ -66,7 +66,7 @@
             this.root.innerHTML =
                 '<div class="enm-wiz-body">'
                   + '<h2 class="enm-wiz-heading">Setup component not loaded</h2>'
-                  + '<p class="enm-wiz-para">Hard-refresh the page (Ctrl-Shift-R) to retry.</p>'
+                  + '<p class="enm-wiz-para">Hard-refresh the page (Ctrl-Shift-R, or ⌘-Shift-R on Mac) to retry.</p>'
                 + '</div>';
             parent.appendChild(this.root);
             return this;

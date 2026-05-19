@@ -530,7 +530,7 @@
         if (!root.EnmSettingsTab) {
             this.els.paneSettings.innerHTML =
                 '<p class="enm-stub">Settings component not loaded. '
-                + 'Hard-refresh the page (Ctrl-Shift-R).</p>';
+                + 'Hard-refresh the page (Ctrl-Shift-R, or ⌘-Shift-R on Mac).</p>';
             return;
         }
         // beta.3.93 (M2.5) — pass chainId + chainClass so the settings
@@ -596,7 +596,7 @@
             if (!root.EnmAuditTab) {
                 self.els.paneAudit.innerHTML =
                     '<p class="enm-stub">Audit component failed to load. '
-                    + 'Hard-refresh the page (Ctrl-Shift-R).</p>';
+                    + 'Hard-refresh the page (Ctrl-Shift-R, or ⌘-Shift-R on Mac).</p>';
                 return;
             }
             self._auditTab = new root.EnmAuditTab({
@@ -885,7 +885,7 @@
             // pane instead of silently rendering the older flow.
             this.els.paneDashboard.innerHTML =
                 '<p class="enm-stub">Setup conversation component not loaded. '
-                + 'Hard-refresh the page (Ctrl-Shift-R).</p>';
+                + 'Hard-refresh the page (Ctrl-Shift-R, or ⌘-Shift-R on Mac).</p>';
             return;
         }
         // alpha.28.1 batch 92 (Round-30 audit, MED) — store the
