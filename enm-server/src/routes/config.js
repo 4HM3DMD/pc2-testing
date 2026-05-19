@@ -112,7 +112,7 @@ function build(extensionHandle) {
             }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} GET /config/rpc/credentials: ${err.message}`);
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Failed to read RPC credentials.'));
         }
     });
 
@@ -163,7 +163,7 @@ function build(extensionHandle) {
             return res.json(successBody({ dpos: chain.dpos }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} PUT /config/network: ${err.message}`);
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Could not save Network settings. Try again.'));
         }
     });
 
@@ -307,7 +307,7 @@ function build(extensionHandle) {
             return res.json(successBody({ ok: true }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} PUT /config/mainchain: ${err.message}`);
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Could not save Main chain settings. Try again.'));
         }
     });
 
@@ -368,7 +368,7 @@ function build(extensionHandle) {
             return res.json(successBody({ global: cfg.global }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} PUT /config/general: ${err.message}`);
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Could not save general settings. Try again.'));
         }
     });
 
@@ -419,7 +419,7 @@ function build(extensionHandle) {
             }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} PUT /config/storage: ${err.message}`);
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Could not save Storage settings. Try again.'));
         }
     });
 
@@ -474,7 +474,7 @@ function build(extensionHandle) {
             return res.json(successBody({ thresholds: slot }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} PUT /config/notifications: ${err.message}`);
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Could not save Alerts thresholds. Try again.'));
         }
     });
 
@@ -530,7 +530,7 @@ function build(extensionHandle) {
             return res.json(successBody({ enabledRules: slot }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} PUT /config/healing: ${err.message}`);
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Could not save healing-rule toggles. Try again.'));
         }
     });
 
@@ -614,7 +614,7 @@ function build(extensionHandle) {
             extensionHandle.log.error(
                 `${ENM_LOG_PREFIX} POST /config/anti-snipe-password: ${err.message}`,
             );
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Could not save the anti-snipe password. Try again.'));
         }
     });
 
@@ -628,7 +628,7 @@ function build(extensionHandle) {
             return res.json(successBody({ config: redactSecrets(restored) }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} POST /config/rollback: ${err.message}`);
-            return res.status(500).json(errorBody(err.message));
+            return res.status(500).json(errorBody('Config rollback failed. Try again.'));
         }
     });
 
