@@ -361,12 +361,22 @@
                     // MUST mention ESC, EID, PG mining rewards AND the
                     // Arbiter's cross-chain signing role. One wallet for
                     // everything; no separate inputs.
+                    //
+                    // 0.5.28 audit Session 28:
+                    //  - "on the mainchain" → "on Main chain" display-name
+                    //    parity (v0.5.18 / 24 / 25 / 26 / 27 convention).
+                    //  - "PG (private chain)" → "PG" — verified against
+                    //    enm-server/src/services/PgAdapter.js (Wave M5.1):
+                    //    PG is a PUBLIC EVM PBFT sidechain. The binary is
+                    //    closed-source (operator-supplied SHA256 manifest
+                    //    gate), but the CHAIN ITSELF isn't private in the
+                    //    permissioned-access sense the label implied.
                     sub:             'ENM uses this one address for everything: block-mining rewards '
-                                   + 'on ESC (Smart Chain), EID (Identity Chain), PG (private chain) '
-                                   + 'AND the Arbiter\'s cross-chain signing on the mainchain. One '
+                                   + 'on ESC (Smart Chain), EID (Identity Chain), PG '
+                                   + 'AND the Arbiter\'s cross-chain signing on Main chain. One '
                                    + 'wallet from Essentials — one input.',
                     sub_bpos:        'ENM uses this address as your producer\'s reward destination '
-                                   + 'on the mainchain. Paste the same Essentials owner-address you '
+                                   + 'on Main chain. Paste the same Essentials owner-address you '
                                    + 'will register with later.',
                     reward_label:    'Wallet address (Ethereum-style, from Essentials)',
                     reward_hint:     'Paste your Ethereum-style address from Essentials. '
