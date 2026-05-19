@@ -212,27 +212,49 @@
         // /api/v1/asset/balances/:addr. Showing "0 ELA" or "Balance
         // unavailable" added noise without information.
 
+        // 0.5.106 audit Session 106 — flip the registration-prompt
+        // copy off once the producer is registered on-chain. Pre-0.5.106
+        // the header subtitle + pubkey pill + pubkey hint always told
+        // the operator to "Paste this into Essentials when registering
+        // your supernode" — useless prompt for someone whose producer
+        // entry already exists. The post-registration view should
+        // reframe the pubkey as a value to KEEP (for node migration)
+        // rather than to SHARE (for first-time registration).
+        var isRegistered = !!(producer && producer.state);
+
         var html = '';
 
         // ----- Header ------------------------------------------------
         html += '<header class="enm-identity-head">'
             + '<h3 id="' + this._titleId + '">Node identity</h3>'
             + '<p class="enm-identity-subtitle">'
-            + 'The consensus-signing identity this node uses on-chain. '
-            + 'Paste the public key below into <strong>Elastos Essentials</strong> '
-            + 'when registering as a BPoS supernode — the Essentials wallet that '
-            + 'signs the registration becomes the producer owner and is where '
-            + 'all block rewards are credited.'
+            + (isRegistered
+                ? 'The consensus-signing identity this node uses on-chain. '
+                  + 'Block rewards are credited to the <strong>Essentials wallet</strong> that '
+                  + 'registered the supernode, not to anything shown on this card.'
+                : 'The consensus-signing identity this node uses on-chain. '
+                  + 'Paste the public key below into <strong>Elastos Essentials</strong> '
+                  + 'when registering as a BPoS supernode — the Essentials wallet that '
+                  + 'signs the registration becomes the producer owner and is where '
+                  + 'all block rewards are credited.')
             + '</p>'
             + '</header>';
 
         // ----- Node public key (only meaningful when keystore exists) -----
         if (ks.exists && pubkey) {
+            var pubkeyPill = isRegistered
+                ? '<span class="enm-identity-row-pill">Registered</span>'
+                : '<span class="enm-identity-row-pill enm-identity-row-pill-action">Share with Essentials</span>';
+            var pubkeyHint = isRegistered
+                ? 'Save this if you need to migrate the node to a different server — '
+                  + 'restoring keystore.dat preserves this identity, so you keep the '
+                  + 'existing producer registration without re-registering.'
+                : 'Paste this into Essentials when registering your supernode. The Essentials wallet signing the registration becomes the producer owner.';
             html += '<div class="enm-identity-row enm-identity-pubkey-row enm-identity-row-actionable">'
                 + '<div class="enm-identity-row-head">'
                 +   '<span class="enm-identity-row-label">Node public key</span>'
-                +   '<span class="enm-identity-row-pill enm-identity-row-pill-action">Share with Essentials</span>'
-                +   '<span class="enm-identity-row-hint">Paste this into Essentials when registering your supernode. The Essentials wallet signing the registration becomes the producer owner.</span>'
+                +   pubkeyPill
+                +   '<span class="enm-identity-row-hint">' + pubkeyHint + '</span>'
                 + '</div>'
                 + '<div class="enm-identity-value-stack">'
                 +   '<code class="enm-identity-value enm-identity-pubkey" data-fill="pubkey"></code>'
@@ -279,10 +301,21 @@
         // was "not needed").
 
         // ----- Keystore-missing helper -----------------------------
+        // 0.5.106 audit Session 106 — pre-0.5.106 the copy was
+        // "Keystore not generated yet. Finish the setup wizard to
+        // create the producer keystore" — but the dashboard only
+        // renders AFTER setup completes, so this branch always means
+        // the keystore was lost AFTER setup (manual delete, disk
+        // failure, restore-from-backup that skipped keystore.dat). The
+        // recovery actions are different (restore vs re-setup), so the
+        // copy now reflects the actual root cause + offers both paths.
         if (!ks.exists) {
             html += '<div class="enm-identity-empty">'
-                + '<strong>Keystore not generated yet.</strong> Finish the setup wizard to create the producer keystore '
-                + '&mdash; the node public key and signing address will appear here once it exists.'
+                + '<strong>Keystore not detected on disk.</strong> The keystore file may have '
+                + 'been moved or deleted since setup completed. Restore it from a backup '
+                + 'via <strong>Settings &rsaquo; Security</strong>, or — if you no longer have '
+                + 'a backup and accept losing your existing on-chain producer registration — '
+                + 'reset and regenerate a fresh keystore from the same Settings tab.'
                 + '</div>';
         }
 
