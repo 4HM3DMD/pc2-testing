@@ -328,6 +328,19 @@ const classBSchema = Joi.object({
     // since their binaries build reproducibly from public source.
     // 64-char hex string, case-insensitive comparison at verify time.
     binarySha256Expected: Joi.string().regex(/^[0-9a-fA-F]{64}$/).allow('').default(''),
+    // 0.5.149 audit Session 149 — accept-and-strip transient spawn params.
+    // EvmSidechainAdapter.buildSpawnArgs() (line ~210) computes spawnArgs
+    // FRESH at every start from cfg.ports/miner/pbft/sync; it never reads
+    // a persisted value. But the computed array leaked into config.json
+    // via the chainConfig object handed to NativeProcessService, so a
+    // later validation of the on-disk config saw an unknown `spawnArgs`
+    // key and FAILED — firing a bogus "Rollback config to previous
+    // version" healing proposal at the operator (the config was actually
+    // fine; the chains run off it). Joi.strip() makes validation accept
+    // the key AND removes it from the validated output, so the next save
+    // writes a clean config. The adapter is unaffected (it recomputes).
+    spawnArgs: Joi.any().strip(),
+    spawnEnv: Joi.any().strip(),
 });
 
 // beta.0.3.2 (Wave M4.2) — Class C (Sidekick Oracle) schema. Replaces
@@ -365,6 +378,14 @@ const classCSchema = Joi.object({
     ports: classCPortsSchema.required(),
     parent: classCParentSchema,
     healing: perChainHealingSchema,
+    // 0.5.149 audit Session 149 — accept-and-strip transient spawn params.
+    // Oracle adapters (Class C) compute spawnArgs AND spawnEnv at start
+    // (env carries ENM_PARENT_RPC / ENM_MAINCHAIN_RPC etc.) and the
+    // computed values leaked into config.json the same way the EVM
+    // sidechains' did, failing validation + firing the bogus "rollback
+    // config" proposal. See classBSchema for the full rationale.
+    spawnArgs: Joi.any().strip(),
+    spawnEnv: Joi.any().strip(),
 });
 // beta.0.3.10 (Wave M6.1) — Class D (Arbiter cross-chain signer)
 // schema. Replaces the M1.2 placeholder. Arbiter is singleton (only
