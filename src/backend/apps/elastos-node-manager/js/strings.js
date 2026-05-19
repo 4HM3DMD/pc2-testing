@@ -634,9 +634,10 @@
             // Operator-facing "section is loading" copy.
             loading:              'Loading Council overview…',
             empty_title:          'No chains configured yet.',
-            empty_body:           'Use the setup wizard to install your first chain. Once Mainchain is running you can add EVM sidechains, Oracles, and Arbiter from the same wizard.',
+            empty_body:           'Use the setup wizard to install your first chain. Once Main chain is running you can add EVM sidechains, Oracles, and Arbiter from the same wizard.',
             error_title:          'Overview unavailable',
             error_malformed:      'Overview snapshot is malformed.',
+            retry:                'Retry',
             // Per-row aria-label "Open <chainName> dashboard".
             row_aria_open:        'Open {chainName} dashboard',
             // SR announcer message after row click.

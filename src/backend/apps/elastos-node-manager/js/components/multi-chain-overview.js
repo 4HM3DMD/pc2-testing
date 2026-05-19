@@ -364,7 +364,7 @@
         bits.push(totals.running + ' running');
         if (totals.stopped > 0) { bits.push(totals.stopped + ' stopped'); }
         if (totals.disabled > 0) { bits.push(totals.disabled + ' disabled'); }
-        bits.push('of ' + totals.total + ' total');
+        bits.push(totals.total + ' total');
         return bits.join(' · ');
     };
 
