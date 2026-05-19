@@ -216,9 +216,16 @@
                 // panels.
                 var ct = (res.headers && res.headers.get) ? (res.headers.get('content-type') || '') : '';
                 if (text && ct && ct.indexOf('application/json') === -1) {
-                    var htmlErr = new Error('Non-JSON response from ' + path + ' (likely session expired)');
+                    // 0.5.76 audit Session 76 — operator-visible .message
+                    // is now session-action language; the path lives on
+                    // err.path for dev forensics. Pre-0.5.76 the message
+                    // said "Non-JSON response from /chains/mainchain
+                    // (likely session expired)" — dev jargon + path leak
+                    // in operator toasts.
+                    var htmlErr = new Error('Session expired. Please refresh the page and sign in again.');
                     htmlErr.status = res.status;
                     htmlErr.code = 'NON_JSON';
+                    htmlErr.path = path;
                     htmlErr.body = text.slice(0, 200);
                     throw htmlErr;
                 }
@@ -227,9 +234,16 @@
                     try { parsed = JSON.parse(text); } catch (_) { /* fall through */ }
                 }
                 if (!res.ok) {
-                    var msg = (parsed && parsed.error) || ('HTTP ' + res.status + ' on ' + path);
+                    // 0.5.76 audit Session 76 — drop path from operator-
+                    // visible .message. Pre-0.5.76 fallback was "HTTP 500
+                    // on /chains/mainchain/start" when the backend
+                    // didn't supply parsed.error. Status stays in the
+                    // message (operators search for "500" in support);
+                    // path moves to err.path for dev forensics.
+                    var msg = (parsed && parsed.error) || ('Request failed (HTTP ' + res.status + ')');
                     var err = new Error(msg);
                     err.status = res.status;
+                    err.path = path;
                     err.body = parsed;
                     throw err;
                 }
@@ -251,9 +265,18 @@
                 // a4bcd049 finding #4 — preserve abort semantics so
                 // callers can `err.code === 'TIMEOUT'` instead of
                 // string-matching the message.
-                var timeoutErr = new Error('Request timeout (' + method + ' ' + path + ')');
+                //
+                // 0.5.76 audit Session 76 — drop method + path from the
+                // operator-visible .message. Pre-0.5.76 said "Request
+                // timeout (POST /chains/mainchain/start)" — operator
+                // toasts surfaced HTTP method + path jargon. Now both
+                // live on structured err.method + err.path fields for
+                // dev forensics; .message reads as operator language.
+                var timeoutErr = new Error('Request timed out. Please try again.');
                 timeoutErr.code = 'TIMEOUT';
                 timeoutErr.name = 'AbortError';
+                timeoutErr.method = method;
+                timeoutErr.path = path;
                 throw timeoutErr;
             }
             throw err;
