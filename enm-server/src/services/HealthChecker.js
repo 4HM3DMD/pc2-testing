@@ -978,8 +978,8 @@ class HealthChecker {
                                         severity: 'INFO',
                                         summary: 'Healing rules moved to per-chain Settings',
                                         detail: 'Your existing rule toggles now live under '
-                                            + 'Settings → Mainchain → Healing. Future per-chain toggles '
-                                            + '(ESC/EID/PG) will be independent.',
+                                            + 'Settings → Main chain → Security. Future per-chain toggles '
+                                            + '(Smart Chain / Identity Chain / PG Chain) will be independent.',
                                         timestamp: Date.now(),
                                     });
                                 } catch (_) { /* swallow */ }
@@ -1233,7 +1233,7 @@ function describeAutoResolveReason(proposal, status, rpcSummary) {
 
     // Per-rule semantics:
     if (ruleId === 'F1') {
-        return 'Chain process is alive again — restart no longer needed.';
+        return 'Chain is running again — restart no longer needed.';
     }
     if (ruleId === 'F2') {
         return 'RPC is reachable again — restart no longer needed.';
