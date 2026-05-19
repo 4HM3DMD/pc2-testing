@@ -1865,11 +1865,20 @@
                 self._continueBtn.disabled = false;
                 self._continueBtn.textContent = t('friendly.setup.card_6.cta_retry');
             } else if (s.running) {
-                var label = s.currentStep
-                    ? (COUNCIL_STEP_LABELS[s.currentStep] || s.currentStep) + '…'
-                    : 'Running…';
-                setSummary('running', label, pct);
+                // 0.5.144 audit Session 144 — summary text shows "Step N
+                // of M" instead of duplicating the active step label
+                // (the step row above the summary already shows the same
+                // label with full visual treatment — repeating it in the
+                // summary was operator-confusing "downloading snapshots
+                // again when it was just finished").
+                setSummary('running', buildSummaryText(s.currentStep), pct);
             }
+        }
+        function buildSummaryText(currentStep) {
+            if (!currentStep) { return 'Working…'; }
+            var idx = COUNCIL_STEP_ORDER.indexOf(currentStep);
+            if (idx < 0) { return 'Working…'; }
+            return 'Step ' + (idx + 1) + ' of ' + COUNCIL_STEP_ORDER.length;
         }
         function pollOnce() {
             if (self._destroyed || !self._stillRendering(seq)) { return; }
@@ -1909,10 +1918,13 @@
                         return;
                     }
                     setStep(payload.step, payload.status, payload.message);
-                    var label = payload.message
-                        ? (COUNCIL_STEP_LABELS[payload.step] + ' — ' + payload.message)
-                        : (COUNCIL_STEP_LABELS[payload.step] || payload.step);
-                    setSummary('running', label, payload.percent || 0);
+                    // 0.5.144 audit Session 144 — summary text shows
+                    // "Step N of M" instead of repeating the active step
+                    // label (the step row already shows the label +
+                    // per-step message; mirroring it in the summary
+                    // produced the "downloading snapshots again" double
+                    // operator reported on Card 6).
+                    setSummary('running', buildSummaryText(payload.step), payload.percent || 0);
                 },
             );
         }

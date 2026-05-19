@@ -6674,26 +6674,59 @@ body[data-enm-overview="1"] .enm-app .enm-tabs {
 }
 
 /* Card F — stepper */
+/* 0.5.144 audit Session 144 — install stepper visual redesign.
+ * Operator-flagged the previous 16-row uniform list as "a mess" and
+ * "not small-screen friendly". New treatment establishes visual
+ * hierarchy by data-status so the eye lands on the active step
+ * instead of being equally drawn to every row:
+ *   - done:    faded (45% opacity) + smaller text, borderless
+ *   - pending: very faded (35% opacity), borderless
+ *   - start:   tinted background + slight pad bump, makes the active
+ *              row the obvious focal point
+ *   - error:   error-tinted background to call out failure
+ * Small-screen breakpoint (<=480px) drops the right-aligned
+ * message column for non-active rows so labels don't get truncated
+ * to ellipsis on narrow viewports; the active row's message wraps
+ * below its label instead.
+ */
 .enm-app .enm-council-stepper {
     list-style: none;
     padding: 0;
-    margin: 0 0 var(--sp-4, 16px) 0;
-    max-width: 640px;
-    margin-left: auto;
-    margin-right: auto;
+    margin: 0 auto var(--sp-3, 12px);
+    max-width: 560px;
 }
 .enm-app .enm-council-step {
     display: grid;
-    grid-template-columns: 24px 1fr auto;
-    gap: var(--sp-3, 12px);
+    grid-template-columns: 20px 1fr auto;
+    gap: var(--sp-2, 8px);
     align-items: center;
-    padding: var(--sp-2, 8px) var(--sp-3, 12px);
-    border-bottom: 1px solid var(--border-color, var(--border-subtle));
+    padding: var(--sp-1, 4px) var(--sp-2, 8px);
     font-size: 13px;
     color: var(--text-primary);
+    border-radius: 6px;
+    transition: opacity 200ms ease, background 200ms ease;
 }
-.enm-app .enm-council-step:last-child {
-    border-bottom: none;
+.enm-app .enm-council-step[data-status="done"] {
+    opacity: 0.45;
+    font-size: 12px;
+}
+.enm-app .enm-council-step[data-status="pending"] {
+    opacity: 0.35;
+}
+.enm-app .enm-council-step[data-status="skip"] {
+    opacity: 0.5;
+}
+.enm-app .enm-council-step[data-status="start"] {
+    background: color-mix(in srgb, var(--state-syncing, #ffb74d) 10%, var(--bg-elevated));
+    padding: var(--sp-2, 8px) var(--sp-3, 12px);
+    margin: var(--sp-1, 4px) 0;
+    font-size: 14px;
+    font-weight: 500;
+}
+.enm-app .enm-council-step[data-status="error"] {
+    background: color-mix(in srgb, var(--state-error, #ef5350) 12%, var(--bg-elevated));
+    padding: var(--sp-2, 8px) var(--sp-3, 12px);
+    margin: var(--sp-1, 4px) 0;
 }
 .enm-app .enm-council-step-icon {
     font-size: 14px;
@@ -6709,13 +6742,15 @@ body[data-enm-overview="1"] .enm-app .enm-tabs {
 }
 .enm-app .enm-council-step[data-status="skip"] .enm-council-step-icon {
     color: var(--text-muted, var(--text-primary));
-    opacity: 0.7;
 }
 .enm-app .enm-council-step[data-status="error"] .enm-council-step-icon {
     color: var(--state-error, #ef5350);
 }
 .enm-app .enm-council-step-label {
     font-weight: 500;
+}
+.enm-app .enm-council-step[data-status="done"] .enm-council-step-label {
+    font-weight: 400;
 }
 .enm-app .enm-council-step-message {
     font-size: 12px;
@@ -6725,6 +6760,25 @@ body[data-enm-overview="1"] .enm-app .enm-tabs {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+@media (max-width: 480px) {
+    /* Drop the right-aligned message column on narrow viewports —
+     * it always ellipsizes anyway. Active step's message reflows
+     * below the label so the operator can still read it. */
+    .enm-app .enm-council-step {
+        grid-template-columns: 18px 1fr;
+    }
+    .enm-app .enm-council-step-message {
+        display: none;
+    }
+    .enm-app .enm-council-step[data-status="start"] .enm-council-step-message {
+        display: block;
+        grid-column: 2 / -1;
+        text-align: left;
+        white-space: normal;
+        max-width: none;
+        margin-top: var(--sp-1, 4px);
+    }
 }
 
 /* Card F — summary box (overall progress bar + message) */
