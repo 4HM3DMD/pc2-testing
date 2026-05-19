@@ -24,21 +24,35 @@
 
     EvmTab.prototype.mount = function (parent) {
         parent.appendChild(this.root);
+        // 0.5.119 audit Session 119 — refreshed stale copy. Pre-0.5.119
+        // the card claimed "ENM v0.3 manages your native ELA mainchain
+        // only" and rendered a "v0.5" version chip — both written when
+        // ENM was BPoS-mainchain-only and never refreshed as Council
+        // mode shipped through Waves M3-M6 (ESC + EID + PG + Arbiter
+        // chain management is live since v0.5.x). The card stayed as a
+        // placeholder because the *browser-wallet* features (wallet
+        // connect, contract reads/writes, bridges, NFT views) are
+        // genuinely distinct from chain-process management and haven't
+        // landed yet. Dropped the version chip (avoids "we're at v0.5
+        // and v0.5 is coming soon" contradiction) and reframed the
+        // body around what ENM does today vs. what THIS tab will add.
         this.root.innerHTML =
             '<header class="enm-evm-head">' +
-                '<span class="enm-evm-version">v0.5</span>' +
-                '<h2>EVM operations are coming</h2>' +
+                '<h2>Wallet-side EVM tools are coming</h2>' +
             '</header>' +
             '<p>' +
-                'ENM v0.3 manages your native ELA mainchain only. Cross-chain ' +
-                'operations (ESC sidechain, ELA→ETH bridges, smart-contract ' +
-                'interactions, on-chain producer registration) will live here ' +
-                'once the integration lands.' +
+                'ENM already runs your Main chain producer and, in Council mode, ' +
+                'the EVM sidechains (Smart Chain, Identity Chain, PG) plus the ' +
+                'Arbiter — those are chain-process management. This tab is for ' +
+                'something different: an in-app browser wallet so you can sign ' +
+                'transactions, read EVM contracts, move assets across the bridge, ' +
+                'and inspect tokens / NFTs without leaving ENM. It will land in ' +
+                'a future release.' +
             '</p>' +
             '<p>' +
                 'For now: use Essentials, MetaMask, or your wallet provider ' +
-                'directly for ESC operations. BPoS supernode and CR Council ' +
-                'registration are <em>mainchain</em> operations — those happen ' +
+                'directly for any on-chain action. BPoS supernode and CR Council ' +
+                'registration are <em>Main chain</em> operations — those happen ' +
                 'in Essentials on your phone, not here. See ' +
                 '<strong>Dashboard → Identity</strong> for the step-by-step ' +
                 'registration instructions and your node\'s public key.' +

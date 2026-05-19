@@ -33,7 +33,13 @@
         notifyMilestones: true,
         notifyWeekly:    false,
         autoRestart:     true,    // mirrors backend F1 (already on by default)
-        autoHeal:        false,   // F2-F19 opt-in
+        // 0.5.119 audit Session 119 — refreshed stale range comment.
+        // Pre-0.5.119 said "F2-F19 opt-in" but the F-rules grew through
+        // F22+ across Sessions 51-100 (per project_enm_audit_chain_v05_
+        // retrospective). The opt-in still applies to every non-F1
+        // healing rule; today's range is F2..F22 with the AUTOSTART
+        // pseudo-rule alongside.
+        autoHeal:        false,   // F2..F22 (+ AUTOSTART) opt-in
     };
 
     function loadPrefs() {
@@ -259,7 +265,18 @@
         }));
 
         // ---- Section 2: How my ElastOS behaves --------------------------
-        body.appendChild(makeSection('How my ElastOS behaves', [
+        // 0.5.119 audit Session 119 — Pre-0.5.119 the operator saw two
+        // toggles ("Restart automatically if it crashes" / "Try to fix
+        // problems without asking me") that suggested they could
+        // disable F1 auto-restart or opt in to F2..F22 auto-healing,
+        // but flipping them only wrote to localStorage. Backend kept
+        // running with F1 always on, F2..F22 off-by-default — silently
+        // ignoring the toggle state. The acknowledgment lived in the
+        // code comment below (and still does, accurately), but not in
+        // operator-visible UX. Now the section carries a small note so
+        // operators understand the toggles save a preference for when
+        // backend wiring lands, but don't change today's behavior.
+        var behaviorSection = makeSection('How my ElastOS behaves', [
             makeToggle('autoRestart', 'Restart automatically if it crashes'),
             makeToggleWithHelp('autoHeal',
                 'Try to fix problems without asking me',
@@ -270,7 +287,15 @@
             // Eventually wire to /api/enm/healing/rules/:id/enable for autoHeal.
             // Today: localStorage only (UI surfaces the choice; backend still
             // F1-only-default per Wave 1 invariant).
-        }));
+        });
+        var behaviorNote = document.createElement('p');
+        behaviorNote.className = 'enm-drawer-section-note';
+        behaviorNote.textContent = 'Preferences saved on this device — your node keeps using the '
+            + 'safe defaults today (auto-restart on crash; ask before anything else). '
+            + 'Live wiring lands in a future release.';
+        var behaviorRows = behaviorSection.querySelector('.enm-drawer-rows');
+        behaviorSection.insertBefore(behaviorNote, behaviorRows);
+        body.appendChild(behaviorSection);
 
         // Section 3 (Appearance) removed in alpha.29 v2 brand reset
         // Phase 1c — ENM is dark-only now. The theme toggle + "Follow
