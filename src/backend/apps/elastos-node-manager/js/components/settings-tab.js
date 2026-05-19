@@ -1600,6 +1600,11 @@
                 })
                 .catch(function (err) {
                     if (self._destroyed) { return; }
+                    // 0.5.130 audit Session 130 — silence on 401 so a
+                    // mid-update session expiry doesn't paint a stuck red
+                    // "Update failed.: Unauthorized" while the login overlay
+                    // is taking over. Matches _refreshUpdateInfo line 1578.
+                    if (err && err.status === 401) { return; }
                     u.status.textContent = (err && err.message) || 'Update failed.';
                     u.status.classList.add('err');
                 });
@@ -1630,6 +1635,8 @@
                 })
                 .catch(function (err) {
                     if (self._destroyed) { return; }
+                    // 0.5.130 audit Session 130 — silence on 401, see _doUpdate.
+                    if (err && err.status === 401) { return; }
                     s.status.textContent = (err && err.message) || 'Resync failed.';
                     s.status.classList.add('err');
                 });
@@ -1655,6 +1662,8 @@
                 })
                 .catch(function (err) {
                     if (self._destroyed) { return; }
+                    // 0.5.130 audit Session 130 — silence on 401, see _doUpdate.
+                    if (err && err.status === 401) { return; }
                     s.status.textContent = (err && err.message) || 'Uninstall failed.';
                     s.status.classList.add('err');
                 });
@@ -1680,6 +1689,8 @@
                 })
                 .catch(function (err) {
                     if (self._destroyed) { return; }
+                    // 0.5.130 audit Session 130 — silence on 401, see _doUpdate.
+                    if (err && err.status === 401) { return; }
                     s.status.textContent = (err && err.message) || 'Nuke failed.';
                     s.status.classList.add('err');
                 });
