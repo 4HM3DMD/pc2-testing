@@ -1026,8 +1026,20 @@
         btn.textContent = t('chain_actions.' + kind + 'ing');
         btn.disabled = true;
         var self = this;
+        // 0.5.18 audit Session 18 — operator-friendly toast strings.
+        // Pre-0.5.18 used raw self.chainId ('mainchain' / 'esc' /
+        // 'arbiter') and bare verb ('start' / 'stop' / 'restart') so
+        // the success toast read "mainchain start". Use the display
+        // name from i18n + past tense for the success path; keep the
+        // imperative verb for error paths (they describe what the
+        // operator's failed action was).
+        var displayName = t('chain_name.' + this.chainId);
+        if (!displayName || displayName === 'chain_name.' + this.chainId) {
+            displayName = this.chainId;
+        }
+        var pastVerb = ({ start: 'started', stop: 'stopped', restart: 'restarted' })[kind] || kind;
         this.api.post(path).then(function () {
-            self.notifications.info(self.chainId + ' ' + kind, '');
+            self.notifications.info(displayName + ' ' + pastVerb, '');
             return self.refresh();
         }).catch(function (err) {
             // alpha.28.1 batch 52 — 401 suppressed; boot path owns
@@ -1057,12 +1069,12 @@
                     return '• ' + descStr + (stepStr ? ('\n   ' + stepStr) : '');
                 }).join('\n');
                 self.notifications.critical(
-                    'Cannot ' + kind + ' ' + self.chainId + ' — host conflicts',
+                    'Cannot ' + kind + ' ' + displayName + ' — host conflicts',
                     summary,
                 );
             } else {
                 self.notifications.warning(
-                    'Failed to ' + kind + ' ' + self.chainId,
+                    'Failed to ' + kind + ' ' + displayName,
                     err && err.message ? err.message : String(err),
                 );
             }
