@@ -1160,6 +1160,17 @@
      */
     ENMApp.prototype._handleChainChange = function (key) {
         if (key === 'all') {
+            // 0.5.29 audit Session 29 — no-op guard if already on the
+            // overview pane. Pre-0.5.29 clicking "Multi-chain overview"
+            // while already on it would call _enterOverviewMode() which
+            // destroys + re-mounts the overview pane, disconnecting +
+            // reconnecting per-chain sparkline SSE subscriptions and
+            // resetting buffers for no reason. Asymmetric with the
+            // specific-chain branch below which already has a prev!==key
+            // guard.
+            if (this._overviewMode && this._activeChainId === 'all') {
+                return;
+            }
             this._activeChainId = 'all';
             this._enterOverviewMode();
             return;
@@ -1322,11 +1333,14 @@
             }
             var displayName = _fb('chain_name.' + chainId, labelMap[chainId] || chainId);
             var titleText = _fb('pane_stub.dashboard_title', '{chainName} dashboard', { chainName: displayName });
+            // 0.5.29 audit Session 29 — operator-facing fallback matches
+            // the updated pane_stub.dashboard_body in strings.js. Pre-
+            // 0.5.29 the inline fallback leaked M3/M4/M6 milestone tags.
             var bodyText = _fb('pane_stub.dashboard_body',
-                'This chain is not yet wired in the operator UI. Per-class '
-                + 'dashboards land in upcoming milestones (M3 — EVM sidechains, '
-                + 'M4 — Oracles, M6 — Arbiter). For now, use the chain selector '
-                + 'above to return to Main chain.');
+                'A detailed dashboard for this chain isn\'t ready yet. '
+                + 'To check its current state use the Settings tab, or '
+                + 'switch the chain selector to "Multi-chain overview" '
+                + 'to see status for every installed chain in one place.');
             // escape minimal — these come from our own strings, but
             // defense in depth in case a future translation adds
             // markup-looking chars.
@@ -1430,11 +1444,15 @@
         }
         function _esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
         var stubTitle = _fb('pane_stub.overview_title', 'Multi-chain overview');
+        // 0.5.29 audit Session 29 — operator-facing fallback matches the
+        // updated pane_stub.overview_body in strings.js. Pre-0.5.29 the
+        // inline fallback leaked M2.1 / M2.3 milestone tags + an
+        // internal component name (MultiChainOverviewPane).
         var stubBody = _fb('pane_stub.overview_body',
-            'Aggregate status for every configured chain lands in M2.3 '
-            + '(MultiChainOverviewPane). Until then this pane is a placeholder '
-            + 'so the chain-selector wiring (M2.1) is reachable. Use the '
-            + 'selector above to switch back to Main chain.');
+            'The multi-chain overview pane couldn\'t load. This is '
+            + 'unexpected — try refreshing the page. If it keeps '
+            + 'happening, switch the chain selector back to Main chain '
+            + 'and continue from there.');
         pane.innerHTML =
             '<div class="enm-pane-stub" role="status" aria-live="polite">'
             + '<h2>' + _esc(stubTitle) + '</h2>'

@@ -650,11 +650,17 @@
         pane_stub: {
             // Dashboard stub title is "{chainName} dashboard".
             dashboard_title:      '{chainName} dashboard',
-            dashboard_body:       'This chain is not yet wired in the operator UI. Per-class dashboards land in upcoming milestones (M3 — EVM sidechains, M4 — Oracles, M6 — Arbiter). For now, use the chain selector above to return to Main chain.',
+            // 0.5.29 audit Session 29 — operator-facing copy, drop M3/M4/M6
+            // milestone tags. The detailed per-chain dashboard for EVM
+            // sidechains / Oracles / Arbiter isn't shipped yet; the
+            // existing Settings tab and chain-selector still work for
+            // those chains, just no rich Dashboard view.
+            dashboard_body:       'A detailed dashboard for this chain isn\'t ready yet. To check its current state use the Settings tab, or switch the chain selector to <b>Multi-chain overview</b> to see status for every installed chain in one place.',
             // Multi-chain overview stub (shown only when the real
             // EnmMultiChainOverviewPane component fails to load).
+            // 0.5.29 audit Session 29 — drop M2.1/M2.3 milestone tags.
             overview_title:       'Multi-chain overview',
-            overview_body:        'Aggregate status for every configured chain lands in M2.3 (MultiChainOverviewPane). Until then this pane is a placeholder so the chain-selector wiring (M2.1) is reachable. Use the selector above to switch back to Main chain.',
+            overview_body:        'The multi-chain overview pane couldn\'t load. This is unexpected — try refreshing the page. If it keeps happening, switch the chain selector back to <b>Main chain</b> and continue from there.',
         },
 
         // beta.3.94 (Wave M2.6) — Class B/C/D/E settings stubs (M2.5).
