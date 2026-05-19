@@ -1782,8 +1782,18 @@ async function runCouncilInstall(args) {
     // via `install-binaries-parallel` (one step covering all 4). Cuts
     // wall time from ~4 min serial to ~1 min. Per-binary progress is
     // multiplexed into the same step message.
+    // v0.4.7.1 — three mainchain steps inserted ahead of the sidechain
+    // cfg writes. The old flow assumed mainchain was ALREADY installed
+    // (Cards B/C/D of pre-0.4.7 did that work), but the redesigned 7-card
+    // wizard generates the master password on Card 3 and then the Card 6
+    // orchestrator owns everything — including the mainchain binary,
+    // keystore, and cfg. Each new step is idempotent so re-running the
+    // orchestrator after a partial run skips work already on disk.
     const PLAN = [
         'council-strategy',
+        'install-mainchain-binary',     // v0.4.7.1
+        'install-mainchain-keystore',   // v0.4.7.1
+        'install-mainchain-cfg',        // v0.4.7.1
         'install-esc-cfg',
         'install-eid-cfg',
         'install-pg-cfg',
@@ -1874,6 +1884,230 @@ async function runCouncilInstall(args) {
             c.setupCompletedAt = Date.now();
             await ConfigStore.save(cfg2);
             return { message: 'shared strategy saved' };
+        });
+
+        // ---- v0.4.7.1 STEP A — Mainchain binary (ela + ela-cli) ----
+        // Pre-0.4.7.1 the orchestrator assumed mainchain was already on
+        // disk because Cards B/C/D ran first. The 7-card wizard removed
+        // those intermediate cards, so the orchestrator must download
+        // the mainchain binary itself. EnmBinaryDownloader is the same
+        // single-flight component the parallel-binaries step uses for
+        // ESC/EID/PG/Arbiter — we just kick off one chainId instead of
+        // four. Idempotency: if cfg.chains.mainchain.binaryPath already
+        // points to an extant file we skip; otherwise we start (or
+        // adopt an already-running download) and block on the existing
+        // waitForBinaryInstall poller. Failures bubble with the
+        // downloader's error string so the operator sees a real cause
+        // in the stepper.
+        await runStep('install-mainchain-binary', async () => {
+            const cfgInit = await ConfigStore.load();
+            if (cfgInit.chains && cfgInit.chains.mainchain
+                && cfgInit.chains.mainchain.binaryPath
+                && fs.existsSync(cfgInit.chains.mainchain.binaryPath)) {
+                return { skipped: true, message: 'mainchain binary already installed' };
+            }
+            const dl = ChainRegistry.getBinaryDownloader();
+            // dl.start returns { alreadyRunning, status } and never
+            // throws on single-flight reentry — the only failure path
+            // here is a synchronous "unknown chain" which can't happen
+            // for mainchain. Defensive try/catch matches the parallel
+            // step's style for symmetry.
+            try { await dl.start('mainchain'); }
+            catch (err) {
+                if (!/already.*running/i.test(err && err.message || '')) { throw err; }
+            }
+            const status = await waitForBinaryInstall(dl, 'mainchain', log);
+            return {
+                message: `ela${status && status.cliPath ? ' + ela-cli' : ''} installed`
+                    + (status && status.version ? ` (${status.version})` : ''),
+            };
+        });
+
+        // ---- v0.4.7.1 STEP B — Mainchain keystore.dat ----
+        // Mirrors POST /setup/keystore: resolves ela-cli via
+        // EnmBinaryDownloader.getStatusWithDisk (in-memory first, disk
+        // fallback for after a container restart), then invokes
+        // EnmKeystoreService.create which shells ela-cli with the
+        // master password the operator picked on Card 3. We caches the
+        // public identity (publicKey + address) to keystore-account.json
+        // so the dashboard's node-identity tile can read it without a
+        // password — same file /setup/keystore writes.
+        //
+        // NOTE: we do NOT stash the password to .setup-keystore-<wallet>.json.
+        // That stash is the BPoS flow's mechanism for /setup/complete to
+        // pick up the password later. The Council flow already has the
+        // master password ciphertext sitting in
+        // cfg.global.council.masterPasswordEncrypted (written by the
+        // council-strategy step earlier in this PLAN), so we can pass
+        // it directly to the cfg writer in Step C.
+        await runStep('install-mainchain-keystore', async () => {
+            const EnmEncryption = require('../services/EnmEncryption');
+            const cfgInit = await ConfigStore.load();
+            const council = cfgInit.global && cfgInit.global.council;
+            if (!council || !council.masterPasswordEncrypted) {
+                throw new Error(
+                    'master password not yet stored — council-strategy step should have written '
+                    + 'cfg.global.council.masterPasswordEncrypted before this step ran',
+                );
+            }
+            let plaintext;
+            try { plaintext = EnmEncryption.decrypt(council.masterPasswordEncrypted); }
+            catch (err) {
+                throw new Error('cannot decrypt master password envelope: ' + err.message);
+            }
+
+            // Idempotency: if keystore.dat is already on disk we
+            // assume it was created by an earlier orchestrator run with
+            // the same master password (the only way it can have gotten
+            // there during a Council install). Re-creating would
+            // either fail (force=false) or replace + lose the existing
+            // producer key.
+            const KEYSTORE_FILENAME = 'keystore.dat';
+            const existingKeystore = path.join(chainDir('mainchain'), KEYSTORE_FILENAME);
+            if (fs.existsSync(existingKeystore)) {
+                return { skipped: true, message: 'keystore already on disk' };
+            }
+
+            // Resolve ela-cli — in-memory state from Step A first, disk
+            // fallback if the in-memory cache got cleared (container
+            // restart between steps). Either way we need a real path.
+            const dl = ChainRegistry.getBinaryDownloader();
+            const onDisk = await dl.getStatusWithDisk('mainchain');
+            const cliPath = onDisk && onDisk.cliPath;
+            if (!cliPath) {
+                throw new Error(
+                    'ela-cli not resolvable on disk after install-mainchain-binary — '
+                    + 'downloader status=' + (onDisk && onDisk.phase) + '. Re-run the install plan.',
+                );
+            }
+
+            const ks = ChainRegistry.getKeystoreService();
+            let result;
+            try {
+                result = await ks.create({ cliPath, password: plaintext, force: false });
+            } catch (err) {
+                throw new Error(
+                    `keystore creation via ${cliPath} failed: ${err && err.message ? err.message : String(err)}`,
+                );
+            }
+
+            // Cache the public identity (NOT the password) to a file the
+            // dashboard tile can read without prompting for the password.
+            // mode 0o600 matches /setup/keystore for consistency even
+            // though the contents are non-secret.
+            const identityPath = path.join(chainDir('mainchain'), 'keystore-account.json');
+            await atomicWrite(identityPath, JSON.stringify({
+                publicKey: result.publicKey,
+                address: result.address,
+                generatedAt: Date.now(),
+            }), { mode: 0o600 });
+
+            return {
+                message: 'keystore.dat created, publicKey='
+                    + (result.publicKey ? result.publicKey.slice(0, 16) + '...' : '<unknown>'),
+            };
+        });
+
+        // ---- v0.4.7.1 STEP C — Mainchain config block ----
+        // Writes cfg.chains.mainchain so the ELA adapter knows where
+        // the binary + keystore live. Mirrors the shape /setup/complete
+        // composes for the BPoS flow, with two intentional differences:
+        //   1. enableArbiter defaults to TRUE — Council operators
+        //      always run as Arbiter for sidechain PBFT signing.
+        //   2. keystorePasswordEncrypted is read from
+        //      cfg.global.council.masterPasswordEncrypted (Council
+        //      shared-password strategy), not from the per-wallet
+        //      .setup-keystore-<wallet>.json stash the BPoS flow uses.
+        //
+        // Idempotency: if cfg.chains.mainchain.binaryPath is set AND
+        // cfg.chains.mainchain.dpos.keystorePresent === true we treat
+        // the block as already-written. Re-running the step otherwise
+        // is safe — we always overwrite from disk state (which is
+        // canonical for both the binary path and the identity).
+        await runStep('install-mainchain-cfg', async () => {
+            const cfg2 = await ConfigStore.load();
+            cfg2.chains = cfg2.chains || {};
+            cfg2.chains.mainchain = cfg2.chains.mainchain || {};
+            const m = cfg2.chains.mainchain;
+            if (m.binaryPath && m.dpos && m.dpos.keystorePresent === true
+                && fs.existsSync(m.binaryPath)) {
+                return { skipped: true, message: 'mainchain cfg already written' };
+            }
+
+            // Re-resolve binary path + version from the downloader
+            // (covers a container restart between Step A and this step,
+            // and avoids trusting any stale value in cfg).
+            const dl = ChainRegistry.getBinaryDownloader();
+            const onDisk = await dl.getStatusWithDisk('mainchain');
+            if (!onDisk || !onDisk.binaryPath) {
+                throw new Error(
+                    'mainchain binary not resolvable on disk — install-mainchain-binary '
+                    + 'should have completed first (downloader phase='
+                    + (onDisk && onDisk.phase) + ')',
+                );
+            }
+
+            // Read the identity cache Step B wrote so the
+            // nodePublicKey field is populated for downstream consumers
+            // (Producer registration, audit UI). Missing identity is
+            // non-fatal — the field is allowed empty in the schema and
+            // the keystore-account endpoint can repopulate it later.
+            let nodePublicKey = '';
+            try {
+                const identityPath = path.join(chainDir('mainchain'), 'keystore-account.json');
+                const identity = JSON.parse(await fsp.readFile(identityPath, 'utf8'));
+                if (identity && typeof identity.publicKey === 'string') {
+                    nodePublicKey = identity.publicKey;
+                }
+            } catch (_) { /* missing/unreadable — non-fatal */ }
+
+            // Generate an RPC password the same way /setup/complete does.
+            // Council operators rarely touch RPC settings later, but if
+            // they do, Settings → Mainchain Advanced can replace this.
+            const rpcPasswordPlain = crypto.randomBytes(24).toString('hex');
+            const rpcPasswordEnvelope = encrypt(rpcPasswordPlain);
+
+            const council = cfg2.global && cfg2.global.council;
+            const keystoreEnvelope = (council && council.masterPasswordEncrypted) || '';
+
+            cfg2.chains.mainchain = {
+                enabled: m.enabled !== false,
+                binaryPath: onDisk.binaryPath,
+                binaryVersion: onDisk.version || null,
+                dataDir: chainDir('mainchain'),
+                activeNet: inputs.activeNet || m.activeNet || 'mainnet',
+                ports: { ...ELA_DEFAULT_PORTS, ...(m.ports || {}) },
+                rpc: m.rpc && m.rpc.passwordEncrypted ? m.rpc : {
+                    user: 'ela',
+                    passwordEncrypted: rpcPasswordEnvelope,
+                    whiteIPList: ['127.0.0.1'],
+                },
+                dpos: {
+                    enableArbiter: true,                       // Council always signs
+                    ipAddressMode: (m.dpos && m.dpos.ipAddressMode) || 'auto',
+                    ipAddressManual: (m.dpos && m.dpos.ipAddressManual) || null,
+                    refreshOnRestart: true,
+                    ownerPublicKey: (m.dpos && m.dpos.ownerPublicKey) || '',
+                    nodePublicKey: nodePublicKey || (m.dpos && m.dpos.nodePublicKey) || '',
+                    keystorePasswordEncrypted: keystoreEnvelope,
+                    // v0.4.7.1 — non-schema hint for the orchestrator's
+                    // idempotency check on re-runs. Schemas validated
+                    // by Joi ignore unknown keys when stripUnknown is
+                    // off; if it strips, the next pass will recreate
+                    // the keystore which is harmless (Step B's exists
+                    // check still wins).
+                    keystorePresent: true,
+                },
+                memoryLimitMb: m.memoryLimitMb || 4096,
+                archiveMode: m.archiveMode === true,
+                logLevel: m.logLevel || 'info',
+                healing: m.healing || { enabledRules: {} },
+            };
+
+            await ConfigStore.save(cfg2);
+            try { ChainRegistry.registerConfiguredAdapters({ cfg: cfg2 }); }
+            catch (_) { /* best-effort — adapter may already be registered */ }
+            return { message: 'cfg.chains.mainchain written; binary at ' + onDisk.binaryPath };
         });
 
         // ---- STEPS 2-4 — ESC + EID + PG cfg writes (cheap, sequential) ----
@@ -2150,11 +2384,25 @@ async function runCouncilInstall(args) {
             return { message: 'cfg.chains.arbiter written; binary at ' + arbStatus.binaryPath };
         });
 
-        // ---- Start all chains (DAG order: B → C → D) ----
+        // ---- Start all chains (DAG order: mainchain → B → C → D) ----
+        // v0.4.7.1 — mainchain starts FIRST and we wait for it to be
+        // alive before kicking off the sidechains. The EVM sidechains
+        // (ESC/EID/PG) read the mainchain keystore at spawn time for
+        // their PBFT consensus signer (passwordSource='mainchain-ela-txt');
+        // starting them before mainchain has opened its RPC port races
+        // against config readiness and tends to surface as "PBFT key
+        // unavailable" errors on the sidechain side.
+        //
+        // The mainchain start is best-effort same as the others — if
+        // it fails F1 self-heal retries it, and downstream chains will
+        // still be marked enabled=true (their adapter handles
+        // mainchain-down gracefully via reconnection backoff).
         await runStep('start-chains', async () => {
             const cfg2 = await ConfigStore.load();
             // beta.0.4.7 — PG is always part of the start order.
-            const startOrder = ['esc', 'eid', 'pg', 'esc-oracle', 'eid-oracle', 'pg-oracle', 'arbiter'];
+            // v0.4.7.1 — mainchain enabled + started ahead of others.
+            const startOrder = ['mainchain', 'esc', 'eid', 'pg',
+                'esc-oracle', 'eid-oracle', 'pg-oracle', 'arbiter'];
             // Flip enabled=true so AUTOSTART/restart logic respects it.
             for (const cid of startOrder) {
                 if (cfg2.chains[cid]) { cfg2.chains[cid].enabled = true; }
@@ -2162,7 +2410,39 @@ async function runCouncilInstall(args) {
             await ConfigStore.save(cfg2);
 
             const started = [];
-            for (const cid of startOrder) {
+
+            // Mainchain first — sequential and we briefly poll for
+            // alive before continuing. Timeout is generous (20s) because
+            // ela's start-up does an RPC bind + initial peer dial which
+            // can take a few seconds on a fresh data dir; if it's not
+            // up by then we still continue (F1 will retry) so the
+            // sidechain start path isn't blocked indefinitely.
+            try {
+                const mAdapter = ChainRegistry.getAdapter('mainchain');
+                const mCfg = cfg2.chains.mainchain;
+                if (mAdapter && mCfg) {
+                    await mAdapter.start(mCfg);
+                    started.push('mainchain');
+                    const ps = ChainRegistry.getProcessService();
+                    const deadline = Date.now() + 20_000;
+                    while (Date.now() < deadline) {
+                        let alive = false;
+                        try { alive = !!(ps.statusSync('mainchain').alive); }
+                        catch (_) { alive = false; }
+                        if (alive) { break; }
+                        await new Promise((r) => setTimeout(r, 1000));
+                    }
+                }
+            } catch (err) {
+                log.warn(`${ENM_LOG_PREFIX} install-council start mainchain failed: ${err.message} `
+                    + '(non-fatal; F1 self-heal will retry)');
+            }
+
+            // Sidechains + oracles + arbiter — sequential is fine here
+            // (each adapter.start is fast and they don't contend), and
+            // sequential keeps the SSE step messages readable.
+            const downstream = startOrder.filter((cid) => cid !== 'mainchain');
+            for (const cid of downstream) {
                 try {
                     const adapter = ChainRegistry.getAdapter(cid);
                     const chainCfg = cfg2.chains[cid];

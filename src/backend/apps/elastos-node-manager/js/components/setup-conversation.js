@@ -630,52 +630,61 @@
             return;
         }
 
+        // beta.0.4.7.1 — generate the master password CLIENT-SIDE. Pre-
+        // 0.4.7.1 the wizard called POST /setup/keystore here, but that
+        // endpoint creates keystore.dat via ela-cli — and on the Council
+        // path the mainchain binary isn't installed yet at Card 3 (the
+        // orchestrator hasn't run). Generating client-side decouples the
+        // password from keystore materialization; the keystore.dat gets
+        // created later by the orchestrator's install-mainchain-keystore
+        // step using this same password (passed in via /install-council).
+        //
+        // localStorage stash survives refresh — operator never loses the
+        // password between Card 3 reveal and Card 5 submission.
+        var stashed = null;
+        try { stashed = window.localStorage.getItem('enm:master-pw'); } catch (_) {}
+        if (stashed) {
+            this._masterPassword = stashed;
+            this._renderCard3Reveal(body, seq, stashed);
+            return;
+        }
         this._continueBtn.hidden = false;
         this._continueBtn.disabled = false;
         this._continueBtn.textContent = t('friendly.setup.card_3.cta_generate');
         this._continueBtn.addEventListener('click', function onGenerate() {
             if (self._destroyed || !self._stillRendering(seq)) { return; }
             self._continueBtn.removeEventListener('click', onGenerate);
-            self._continueBtn.disabled = true;
-            self._continueBtn.textContent = 'Generating…';
-            // Council needs the keystore + arbiter wallet, so we pass
-            // enableArbiter:true. BPoS-only also runs with
-            // enableArbiter:true because the keystore.dat we generate
-            // here serves as the DPoS signing key for the producer; the
-            // existing backend semantics treat that flag as "BPoS"
-            // (the original alpha-era schema; council reuses the same
-            // pathway).
-            self.api.post('/setup/keystore', { enableArbiter: true })
-                .then(function (resp) {
-                    if (self._destroyed || !self._stillRendering(seq)) { return; }
-                    var pw = (resp && resp.generatedPassword) || '';
-                    if (!pw) {
-                        // The backend reused an existing keystore on
-                        // disk (alpha.3.42 branch) — we don't know the
-                        // password. Surface a clear error so the
-                        // operator can decide what to do.
-                        self._notify(t('friendly.error.generic'),
-                            'A keystore already exists on disk; the master '
-                            + 'password generated for it earlier is not '
-                            + 'recoverable. Wipe the keystore and retry, '
-                            + 'or restore from your password manager.',
-                            'warning');
-                        self._continueBtn.disabled = false;
-                        self._continueBtn.textContent = t('friendly.setup.card_3.cta_generate');
-                        return;
-                    }
-                    self._masterPassword = pw;
-                    self._renderCard3Reveal(body, seq, pw);
-                })
-                .catch(function (err) {
-                    if (self._destroyed || !self._stillRendering(seq)) { return; }
-                    self._notify(t('friendly.error.generic'),
-                        (err && err.message) || String(err), 'warning');
-                    self._continueBtn.disabled = false;
-                    self._continueBtn.textContent = t('friendly.setup.card_3.cta_generate');
-                });
+            var pw = generateMasterPassword();
+            self._masterPassword = pw;
+            try { window.localStorage.setItem('enm:master-pw', pw); } catch (_) {}
+            self._renderCard3Reveal(body, seq, pw);
         });
     };
+
+    /**
+     * Generate a 32-character master password using the browser's CSPRNG.
+     * Output is URL-safe base64 truncated to 32 chars (~192 bits entropy).
+     * Identical complexity to backend EnmCrypto.generatePassword(32).
+     * @returns {string}
+     */
+    function generateMasterPassword() {
+        var bytes = new Uint8Array(24);  // 24 bytes → 32-char base64
+        (window.crypto || window.msCrypto).getRandomValues(bytes);
+        var b64 = '';
+        if (typeof window.btoa === 'function') {
+            var str = '';
+            for (var i = 0; i < bytes.length; i++) { str += String.fromCharCode(bytes[i]); }
+            b64 = window.btoa(str);
+        } else {
+            // Defensive fallback — every browser ENM targets has btoa.
+            for (var j = 0; j < bytes.length; j++) {
+                b64 += ('0' + bytes[j].toString(16)).slice(-2);
+            }
+            b64 = b64.slice(0, 32);
+        }
+        // URL-safe (no + / =)
+        return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '').slice(0, 32);
+    }
 
     /** @private */
     SetupConversation.prototype._renderCard3Reveal = function (body, seq, password) {
@@ -1067,6 +1076,9 @@
     // all 4 snapshots if useSnapshots=true.
     var COUNCIL_STEP_LABELS = {
         'council-strategy':           'Council strategy (Layer 1)',
+        'install-mainchain-binary':   'Installing mainchain (ela binary)',
+        'install-mainchain-keystore': 'Creating mainchain keystore',
+        'install-mainchain-cfg':      'Writing mainchain config',
         'install-esc-cfg':            'Smart Chain (ESC) — config',
         'install-eid-cfg':            'Identity Chain (EID) — config',
         'install-pg-cfg':             'PG Chain — config',
@@ -1082,6 +1094,9 @@
     };
     var COUNCIL_STEP_ORDER = [
         'council-strategy',
+        'install-mainchain-binary',
+        'install-mainchain-keystore',
+        'install-mainchain-cfg',
         'install-esc-cfg',
         'install-eid-cfg',
         'install-pg-cfg',
