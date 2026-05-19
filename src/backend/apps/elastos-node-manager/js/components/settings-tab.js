@@ -2303,7 +2303,30 @@
                     .then(function (r) {
                         if (!r.ok) {
                             return r.text().then(function (txt) {
-                                throw new Error(txt || ('HTTP ' + r.status));
+                                // 0.5.128 audit Session 128 — parse the
+                                // error envelope before throwing. Pre-
+                                // 0.5.128 we threw `new Error(txt)` with
+                                // the RAW response body — but identity
+                                // routes (Session 64/81 audits) emit
+                                // `errorBody({...})` which is JSON like
+                                // {"success":false,"error":"No keystore on
+                                // disk yet — finish the setup wizard first."}
+                                // Operator saw the literal JSON envelope in
+                                // the status text. Now: try JSON.parse,
+                                // extract `.error` field, fall back to raw
+                                // text, fall back to HTTP status. Matches
+                                // the pattern _doIdentityImport at line
+                                // ~2374 already uses correctly.
+                                var msg = txt;
+                                if (txt) {
+                                    try {
+                                        var parsed = JSON.parse(txt);
+                                        if (parsed && parsed.error) {
+                                            msg = parsed.error;
+                                        }
+                                    } catch (_) { /* not JSON — keep raw */ }
+                                }
+                                throw new Error(msg || ('HTTP ' + r.status));
                             });
                         }
                         var dispo = r.headers.get('Content-Disposition') || '';
