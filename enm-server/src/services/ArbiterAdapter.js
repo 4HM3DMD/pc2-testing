@@ -284,10 +284,18 @@ class ArbiterAdapter extends ChainAdapter {
         await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
         const configFile = path.join(dir, ARBITER_CONFIG_FILENAME);
         await atomicWrite(configFile, JSON.stringify(cfgObj, null, 2), { mode: 0o600 });
-        // Also write the mainchainKeystorePath into a sidecar so arbiter
-        // can find it without re-resolving (some arbiter versions read
-        // an absolute path from a config field).
-        // Note: cfg.spawnArgs not set here — arbiter reads config.json from cwd.
+        // 0.5.115 audit Session 115 — dropped a stale comment that
+        // described a planned-but-never-implemented "sidecar" file
+        // for mainchainKeystorePath. The current shape resolves the
+        // keystore path at every start() via resolveMainchainKeystorePath
+        // (above) — no sidecar needed. The mainchainKeystorePath local
+        // here is currently unused at write time (Arbiter reads
+        // config.json from cwd); kept for future per-process env-var
+        // wiring if a future arbiter release accepts the path via
+        // --keystore CLI flag.
+        // cfg.spawnArgs is intentionally not set — arbiter reads
+        // config.json from its working directory at start time.
+        void mainchainKeystorePath;  // currently unused; kept for future spawn-arg wiring
 
         // UFW open p2p + rpc (rpc is loopback-only too, but the operator
         // may forward through nginx if they want external admin access).

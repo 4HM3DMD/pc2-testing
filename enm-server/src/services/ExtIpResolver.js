@@ -68,14 +68,23 @@ async function resolve(opts) {
             redirect: 'follow',
             headers: { 'Accept': 'text/plain' },
         });
-    } catch (err) {
+    } catch (_) {
         if (timer) {
             clearTimeout(timer);
         }
+        // 0.5.115 audit Session 115 — replaced err.message interpolation
+        // with a static fallback. Pre-0.5.115 we surfaced Node fetch
+        // errno strings ("fetch failed", "getaddrinfo ENOTFOUND ...",
+        // certificate errors) verbatim — the operator-actionable
+        // recovery is the same regardless of which network-level
+        // failure mode tripped, so the verbose errno added noise
+        // without changing what the operator should do. Matches
+        // Sessions 64/67/79/81-84 + 107-112 leak-sweep pattern.
         return {
             ok: false,
             source: 'endpoint',
-            reason: `External IP probe failed: ${err.message}. You can paste your IP manually in Settings → Network.`,
+            reason: 'External IP probe failed (network unreachable, DNS, or TLS error). '
+                  + 'You can paste your IP manually in Settings → Network.',
         };
     }
     if (timer) {
