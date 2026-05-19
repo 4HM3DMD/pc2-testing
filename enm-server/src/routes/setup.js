@@ -2030,26 +2030,51 @@ async function runCouncilInstall(args) {
         // the binary + keystore live. Mirrors the shape /setup/complete
         // composes for the BPoS flow, with two intentional differences:
         //
-        //   1. dpos.enableArbiter defaults to TRUE — IMPORTANT CLARIFICATION:
-        //      This field name is a footgun (inherited from upstream Elastos
-        //      ELA naming). It controls the ela binary's --enable-arbiter
-        //      flag, which puts the mainchain node into BPoS PRODUCER mode
-        //      (eligible for community voting, signs DPoS rounds). It does
-        //      NOT enable the Class D Arbiter (a separate elastos-arbiter
-        //      binary at cfg.chains.arbiter that signs cross-chain txs).
+        //   1. dpos.enableArbiter defaults to TRUE — CORRECTED EXPLANATION
+        //      (v0.5.140 audit Session 140; the pre-0.5.140 explanation was
+        //      wrong, see below):
+        //
+        //      This flag controls the ela binary's --enable-arbiter switch.
+        //      Per Elastos.ELA main.go:114-130, --enable-arbiter ONLY tells
+        //      the node to open its keystore on startup so it CAN sign blocks
+        //      when called upon to do so. It does NOT register the operator
+        //      as a BPoS producer (that's a separate RegisterProducer tx with
+        //      a 2,000 ELA deposit, which ENM does not invoke during setup).
+        //
+        //      Becoming an active arbiter happens via one of two independent
+        //      on-chain paths, neither of which is triggered by this flag:
+        //        (a) BPoS path: operator submits RegisterProducer via wallet
+        //            → community votes them in → top-N producers selected per
+        //            DPoS round → signs blocks.
+        //        (b) CR Committee path: operator elected to CR Council →
+        //            during election period, Elastos.ELA
+        //            dpos/state/arbitrators.go:2439-2460
+        //            (resetNextArbiterByCRC) auto-promotes them to a CRC
+        //            arbiter slot → signs blocks.
+        //
+        //      enableArbiter=true is the NECESSARY-BUT-NOT-SUFFICIENT
+        //      precondition for either path — the node needs to be able to
+        //      sign if/when the chain selects it. For Council operators,
+        //      path (b) fires automatically during their election period; no
+        //      "BPoS producer mode" enrollment happens by setting this flag.
         //
         //      Sidechain PBFT signing (H23) uses the mainchain keystore.dat
-        //      via the sidechain binary's --pbft.keystore flag — it works
-        //      whether or not the mainchain is in BPoS producer mode.
+        //      via the sidechain binary's --pbft.keystore flag — independent
+        //      of this flag entirely.
         //
-        //      Council operators get enableArbiter=true because most Council
-        //      members are ALSO BPoS producers in practice, and the v0.5.0
-        //      Card 1 wizard now discloses this explicitly. A Council operator
-        //      who wants Council WITHOUT producer mode must toggle this off
-        //      via Settings → Mainchain → Producer Mode after install.
-        //      (v0.6.0 backlog: surface this as a Card 1 sub-question + rename
-        //      the schema field to dpos.bpsProducerEnabled to remove the
-        //      Arbiter naming collision.)
+        //      The pre-0.5.140 comment claimed enableArbiter=true puts the
+        //      mainchain into "BPoS PRODUCER mode (eligible for community
+        //      voting)" and described the Council-default as silently
+        //      enrolling operators in producer mode. That was wrong on both
+        //      counts (no enrollment happens; community voting is a separate
+        //      RegisterProducer-driven on-chain process). The amber Card A
+        //      callout that propagated this wrong copy to operators was also
+        //      dropped in the same audit; see
+        //      [[feedback-enm-council-auto-consensus]] memory.
+        //
+        //      (v0.6.0 backlog: still worth renaming the schema field to
+        //      dpos.bposProducerEnabled or similar to remove the Arbiter
+        //      naming collision with the separate Class D arbiter binary.)
         //
         //   2. keystorePasswordEncrypted is read from
         //      cfg.global.council.masterPasswordEncrypted (Council

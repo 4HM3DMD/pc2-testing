@@ -364,14 +364,32 @@
                     + escapeHtml(t('friendly.setup.card_a.council_wallet_value')) + '</span>'
                   + '<span><b>' + escapeHtml(t('friendly.setup.card_a.council_status_label')) + ':</b> '
                     + escapeHtml(t('friendly.setup.card_a.council_status_value')) + '</span>'
-                  // 0.5.0 audit Session 1 — CRITICAL fix: surface the
-                  // hardcoded enableArbiter=true → BPoS producer enrollment
-                  // that setup.js install-mainchain-cfg writes for Council.
-                  // Operators were silently registered as BPoS producer
-                  // candidates without seeing the implication. Showing
-                  // here BEFORE the click lets them decide knowingly.
-                  + '<span class="enm-role-card-meta-warn"><b>' + escapeHtml(t('friendly.setup.card_a.council_includes_bpos_label')) + ':</b> '
-                    + escapeHtml(t('friendly.setup.card_a.council_includes_bpos_value')) + '</span>'
+                  // 0.5.140 audit Session 140 — the alpha S1 amber callout
+                  // ("Also enables: BPoS producer mode on Main chain —
+                  // separate community vote required to earn block rewards")
+                  // was dropped. It conflated two distinct paths to
+                  // mainchain consensus and was operator-misleading.
+                  //
+                  // Verified against Elastos.ELA HEAD:
+                  //   - main.go:114-130 — EnableArbiter=true only opens
+                  //     the keystore so the node CAN sign blocks. It does
+                  //     NOT register the operator as a BPoS producer
+                  //     candidate. RegisterProducer is a separate on-chain
+                  //     transaction (with a 2,000 ELA deposit) that ENM
+                  //     does not invoke during setup.
+                  //   - dpos/state/arbitrators.go:2439-2460 — Council
+                  //     members are AUTOMATICALLY a CRC arbiter during
+                  //     their election period (resetNextArbiterByCRC).
+                  //     This is the chain code's behavior; no separate
+                  //     vote is required.
+                  //
+                  // Net: Council nodes participate in mainchain consensus
+                  // by virtue of being elected to the CR Committee — a
+                  // different path from BPoS producer registration. The
+                  // "Includes: Main chain + 3 EVM sidechains + 3 Oracles
+                  // + Arbiter Service" line above already discloses
+                  // mainchain participation, so the callout was redundant
+                  // as well as wrong.
                 + '</div>'
               + '</button>'
             + '</div>'

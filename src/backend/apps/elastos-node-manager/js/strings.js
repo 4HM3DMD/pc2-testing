@@ -123,17 +123,28 @@
                     // matches v0.5.24 install-stepper "Main chain
                     // keystore" label.
                     council_requires_value: 'Main chain keystore (signing key, shared across chains)',
-                    // 0.5.0 audit Session 1 CRITICAL — Council install hardcodes
-                    // dpos.enableArbiter=true in install-mainchain-cfg (setup.js:
-                    // 2079). That activates the ela binary's --enable-arbiter
-                    // flag which puts the mainchain into BPoS PRODUCER mode
-                    // (separate from the Class D Arbiter binary). Operators MUST
-                    // see this disclosure before clicking — a CR Council seat
-                    // and a BPoS producer slot are different elections with
-                    // different responsibilities. Today the Council card silently
-                    // enrolls them in producer mode.
-                    council_includes_bpos_label: 'Also enables',
-                    council_includes_bpos_value: 'BPoS producer mode on Main chain (separate community vote required to earn block rewards)',
+                    // 0.5.140 audit Session 140 — council_includes_bpos_label
+                    // and council_includes_bpos_value DROPPED. The original
+                    // S1 audit assumed dpos.enableArbiter=true puts the
+                    // mainchain into "BPoS PRODUCER mode (eligible for
+                    // community voting)". That assumption is wrong:
+                    //   - Elastos.ELA main.go:114-130 — EnableArbiter only
+                    //     opens the keystore so the node CAN sign blocks.
+                    //     It does NOT register the operator as a BPoS
+                    //     producer. BPoS producer registration is a
+                    //     separate on-chain RegisterProducer tx with a
+                    //     2,000 ELA deposit, which ENM does not call.
+                    //   - Elastos.ELA dpos/state/arbitrators.go:2439-2460
+                    //     (resetNextArbiterByCRC) — Council members are
+                    //     AUTOMATICALLY a CRC arbiter during their election
+                    //     period via the CR Committee → CRC arbiter
+                    //     pipeline. No separate vote required.
+                    // Net: Council nodes participate in mainchain consensus
+                    // by virtue of being elected to the CR Committee — a
+                    // different path from BPoS producer registration. The
+                    // council_status_value above already discloses Main
+                    // chain inclusion, so the callout was also redundant.
+                    // See [[feedback-enm-council-auto-consensus]] memory.
                     council_wallet_label:   'Wallet',
                     council_wallet_value:   'paired in the next step',
                     // 0.5.0 audit Session 1 — separated footnote from help copy.
