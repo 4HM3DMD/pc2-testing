@@ -1912,7 +1912,7 @@ async function runCouncilInstall(args) {
             if (cfgInit.chains && cfgInit.chains.mainchain
                 && cfgInit.chains.mainchain.binaryPath
                 && fs.existsSync(cfgInit.chains.mainchain.binaryPath)) {
-                return { skipped: true, message: 'mainchain binary already installed' };
+                return { skipped: true, message: 'Main chain binary already installed' };
             }
             const dl = ChainRegistry.getBinaryDownloader();
             // dl.start returns { alreadyRunning, status } and never
@@ -2011,8 +2011,8 @@ async function runCouncilInstall(args) {
             }), { mode: 0o600 });
 
             return {
-                message: 'keystore.dat created, publicKey='
-                    + (result.publicKey ? result.publicKey.slice(0, 16) + '...' : '<unknown>'),
+                message: 'Main chain keystore created; node public key starts '
+                    + (result.publicKey ? result.publicKey.slice(0, 16) + '…' : '<unknown>'),
             };
         });
 
@@ -2060,7 +2060,7 @@ async function runCouncilInstall(args) {
             const keystoreOnDisk = fs.existsSync(path.join(chainDir('mainchain'), 'keystore.dat'));
             if (m.binaryPath && fs.existsSync(m.binaryPath) && keystoreOnDisk
                 && m.dpos && m.dpos.keystorePasswordEncrypted) {
-                return { skipped: true, message: 'mainchain cfg already written' };
+                return { skipped: true, message: 'Main chain config already written' };
             }
 
             // Re-resolve binary path + version from the downloader
@@ -2132,7 +2132,7 @@ async function runCouncilInstall(args) {
             await ConfigStore.save(cfg2);
             try { ChainRegistry.registerConfiguredAdapters({ cfg: cfg2 }); }
             catch (_) { /* best-effort — adapter may already be registered */ }
-            return { message: 'cfg.chains.mainchain written; binary at ' + onDisk.binaryPath };
+            return { message: 'Main chain config written.' };
         });
 
         // ---- STEPS 2-4 — ESC + EID + PG cfg writes (cheap, sequential) ----
@@ -2438,7 +2438,7 @@ async function runCouncilInstall(args) {
             await ConfigStore.save(cfg2);
             try { ChainRegistry.registerConfiguredAdapters({ cfg: cfg2 }); }
             catch (_) { /* best-effort */ }
-            return { message: 'cfg.chains.arbiter written; binary at ' + arbStatus.binaryPath };
+            return { message: 'Arbiter config written.' };
         });
 
         // ---- Start all chains (DAG order: mainchain → B → C → D) ----
