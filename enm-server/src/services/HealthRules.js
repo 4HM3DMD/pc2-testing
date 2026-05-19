@@ -298,16 +298,30 @@ function detectF7(snap) {
  */
 function detectF8(snap) {
     if (!snap || !snap.chainConfig) return null;
+    // 0.5.150 audit Session 150 — F8 only applies to the ela MAINCHAIN.
+    // Geth-derived sidechains (esc/eid/pg) + their oracles report their
+    // UPSTREAM geth library version (e.g. "1.9.7.0") on the version
+    // subcommand — a different numbering universe from the elastos-fork
+    // release tag ENM records (e.g. "v0.0.3.1" / "v0.2.4" / "v0.2.7.1").
+    // They can NEVER be equal, so F8 fired a PERMANENT false-alarm
+    // "Binary version changed" proposal for every sidechain once the
+    // 1-hour install grace (below) expired — exactly what the operator
+    // hit (3 simultaneous popups). The grace only delayed the noise; the
+    // mismatch is structural. Sidechain/oracle binary integrity is
+    // covered separately by EnmIntegrityChecker + the PG SHA256 manifest
+    // gate (binarySha256Expected), so dropping F8 for non-mainchain
+    // loses no real protection. F8's expected-vs-actual string compare
+    // is only meaningful for the mainchain custom binary, whose
+    // `ela --version` tag matches the release tag we record.
+    if (snap.chainId !== 'mainchain') return null;
     const expected = snap.chainConfig.binaryVersion;
     const actual = snap.ruleState && snap.ruleState.lastBinaryVersion;
     if (!expected || !actual) return null;
     if (expected === actual) return null;
-    // beta.0.5.0 — suppress for 1 hour after install. Geth-fork sidechains
-    // (esc/eid/pg) report their internal geth version on the `version`
-    // subcommand, NOT the elastos-fork tag we downloaded — produces
-    // cosmetic version-drift proposals on every fresh install. The
-    // 1-hour window catches genuine out-of-band binary swaps but not
-    // the install-time noise.
+    // beta.0.5.0 — suppress for 1 hour after install. Retained for the
+    // mainchain genuine-swap case: a freshly recorded binaryInstalledAt
+    // means the operator just installed/updated, so a transient
+    // expected≠actual during the version-record settle is expected noise.
     const installedAt = snap.chainConfig.binaryInstalledAt;
     if (installedAt && Date.now() - installedAt < 3_600_000) return null;
     return {
