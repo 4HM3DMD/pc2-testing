@@ -185,11 +185,29 @@
     /** @private */
     EnmMultiChainOverviewPane.prototype._renderError = function (msg) {
         if (!this._root) { return; }
+        // 0.5.9 audit Session 9 — add Retry button. Pre-0.5.9 the error
+        // pane was terminal: operator on a flaky network or transient
+        // backend hiccup saw "Overview unavailable" with no recovery
+        // action except a full ENM tile reload. The Retry button calls
+        // back into _fetchInitial which clears + re-renders on success.
         this._root.innerHTML = ''
             + '<div class="enm-overview-error" role="alert">'
             + '<h2>' + escapeHtml(tFb('overview_pane.error_title', 'Overview unavailable')) + '</h2>'
             + '<p>' + escapeHtml(String(msg)) + '</p>'
+            + '<button type="button" class="enm-btn enm-btn-secondary enm-overview-retry" '
+            +   'data-action="retry">'
+            +   escapeHtml(tFb('overview_pane.retry', 'Retry'))
+            + '</button>'
             + '</div>';
+        var self = this;
+        var btn = this._root.querySelector('[data-action="retry"]');
+        if (btn) {
+            btn.addEventListener('click', function () {
+                if (self._destroyed) { return; }
+                self._renderLoading();
+                self._fetchInitial();
+            });
+        }
     };
 
     /** @private */
@@ -356,8 +374,17 @@
         if (!root.EnmSparkline) { return; }
         var self = this;
         // Set of chainIds that should have a sparkline right now.
+        // 0.5.9 audit Session 9 — also include 'starting' state. A chain
+        // that just spawned via Card 6's start-chains step may have
+        // alive=false for the first ~5 sec of the boot window; pre-0.5.9
+        // its sparkline holder stayed empty even though height events
+        // would arrive moments later. Including 'starting' gives the
+        // sparkline mount time to be ready when the first height-series
+        // event lands.
         var wanted = {};
-        chains.forEach(function (c) { if (c.alive) { wanted[c.chainId] = true; } });
+        chains.forEach(function (c) {
+            if (c.alive || c.state === 'starting') { wanted[c.chainId] = true; }
+        });
         // Drop any sparkline that's no longer wanted (chain stopped or removed).
         Object.keys(this._sparklines).forEach(function (cId) {
             if (!wanted[cId]) { self._teardownSparkline(cId); }
