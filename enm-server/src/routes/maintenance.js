@@ -261,9 +261,9 @@ function build(deps) {
             return res.json(successBody({
                 queued: true,
                 logFile: r.logFile,
-                message: 'Uninstall queued. ENM extension will be removed in a few seconds. '
-                    + 'Your chain data + keystore stay on disk at '
-                    + '/var/lib/pc2/data/extensions/elastos-node-manager for future recovery.',
+                message: 'Uninstall queued. ENM will be removed within ~10 seconds — '
+                    + 'this page will disconnect when it does. Chain data + keystore '
+                    + 'stay on disk so a reinstall can recover them.',
             }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} POST /maintenance/uninstall: ${err.message}`);
@@ -318,8 +318,9 @@ function build(deps) {
             return res.json(successBody({
                 queued: true,
                 logFile: r.logFile,
-                message: 'Nuclear wipe queued. ENM will be removed and ALL data destroyed '
-                    + '(including the keystore) in a few seconds. There is no undo.',
+                message: 'Nuclear wipe queued. ENM and all its data — including '
+                    + 'the keystore — will be destroyed within ~10 seconds. This '
+                    + 'page will disconnect when it does. There is no undo.',
             }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} POST /maintenance/nuke: ${err.message}`);
