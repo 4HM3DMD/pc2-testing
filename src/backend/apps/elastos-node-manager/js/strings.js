@@ -68,7 +68,13 @@
                     // governance roles. (See feedback_enm_vocabulary memory entry.)
                     bpos_title: 'BPoS supernode',
                     bpos_sub:   'Run as a producer and sign blocks for the DPoS consensus. Earns block rewards once your wallet is voted in by the community.',
-                    bpos_meta:  '~17% APR*',
+                    // 0.5.0 audit Session 1 — dropped the unanchored "~17% APR"
+                    // claim. Actual rewards depend on community votes + total stake
+                    // and can vary widely operator-to-operator (and change every
+                    // voting cycle). A specific percentage on a welcome card invites
+                    // complaint and misleads operators who join right before a
+                    // voting cycle. Footer's "depends on votes" stays.
+                    bpos_meta:  'Voted-in rewards*',
                     // 0.2.0-beta.3.6 — phase-06 mock spec is a three-line
                     // meta list (Requires / Wallet / Auto-installs) per
                     // role-card. Pre-beta.3.6 only had bpos_meta = "APR";
@@ -90,9 +96,21 @@
                     // node setup; this card is about the infrastructure,
                     // not the voting.)
                     council_title:   'Council node',
-                    council_sub:     'Run the full multi-chain operator stack — Main chain, EVM sidechains (ESC/EID/PG), their Oracles, and Arbiter for cross-chain signing. ENM installs everything in sequence; you provide 3 inputs (shared password, reward address, ELA mining address).',
-                    council_meta:    'Multi-chain',
-                    council_meta_compact: 'Multi',
+                    // 0.5.0 audit Session 1 — replaced stale "3 inputs" copy.
+                    // The 7-card redesign (v0.4.7) collapsed user-supplied inputs
+                    // to ONE: the EVM wallet address. The master password is
+                    // generated client-side (no operator typing) and the Arbiter
+                    // mining uses the same EVM address. Promising "3 inputs" then
+                    // showing 1 field on Card 4 was a trust gap.
+                    council_sub:     'Run the full multi-chain operator stack — Main chain, EVM sidechains (ESC/EID/PG), their Oracles, and Arbiter for cross-chain signing. ENM installs everything in sequence; you provide one wallet address — your master password is generated for you.',
+                    // 0.5.0 audit Session 1 — Council's economic story is
+                    // "many small streams" (PBFT block rewards on ESC/EID/PG +
+                    // Arbiter mining heartbeats + the mainchain BPoS rewards if
+                    // the operator's also a producer). We don't quote a number
+                    // for the same reason BPoS no longer does — depends on stake
+                    // + chain activity. "Multi-chain rewards*" anchors the role.
+                    council_meta:    'Multi-chain rewards*',
+                    council_meta_compact: 'Multi-chain',
                     council_status_label: 'Includes',
                     council_status_value: 'mainchain + 3 EVM sidechains + 3 oracles + arbiter',
                     // beta.0.4.3 — Council card is now ENABLED. The
@@ -104,10 +122,26 @@
                     council_disabled: false,
                     council_requires_label: 'Requires',
                     council_requires_value: 'mainchain keystore (signing key, shared across chains)',
+                    // 0.5.0 audit Session 1 CRITICAL — Council install hardcodes
+                    // dpos.enableArbiter=true in install-mainchain-cfg (setup.js:
+                    // 2079). That activates the ela binary's --enable-arbiter
+                    // flag which puts the mainchain into BPoS PRODUCER mode
+                    // (separate from the Class D Arbiter binary). Operators MUST
+                    // see this disclosure before clicking — a CR Council seat
+                    // and a BPoS producer slot are different elections with
+                    // different responsibilities. Today the Council card silently
+                    // enrolls them in producer mode.
+                    council_includes_bpos_label: 'Also enables',
+                    council_includes_bpos_value: 'BPoS producer mode on Main chain (separate community vote required to earn block rewards)',
                     council_wallet_label:   'Wallet',
                     council_wallet_value:   'paired in the next step',
-                    footer:     "* Rewards depend on votes from the community. We'll show you how after setup.\n"
-                              + "Council node is the full multi-chain operator role; BPoS supernode runs Main chain only. Pick whichever matches the role you want to run.",
+                    // 0.5.0 audit Session 1 — separated footnote from help copy.
+                    // Pre-0.5.0 the * "rewards depend on votes" line and the
+                    // "Council vs BPoS" comparison ran together as one
+                    // paragraph; visually + semantically distinct concerns
+                    // belong on separate lines.
+                    footer:     "Council node is the full multi-chain operator role; BPoS supernode runs Main chain only. Pick whichever matches the role you want to run.",
+                    footnote:   "* Rewards depend on community votes + chain activity. Both roles earn only when active.",
                 },
                 card_b: {
                     title_idle:        'Ready when you are',

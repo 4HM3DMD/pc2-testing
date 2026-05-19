@@ -353,9 +353,26 @@
                     + escapeHtml(t('friendly.setup.card_a.council_wallet_value')) + '</span>'
                   + '<span><b>' + escapeHtml(t('friendly.setup.card_a.council_status_label')) + ':</b> '
                     + escapeHtml(t('friendly.setup.card_a.council_status_value')) + '</span>'
+                  // 0.5.0 audit Session 1 — CRITICAL fix: surface the
+                  // hardcoded enableArbiter=true → BPoS producer enrollment
+                  // that setup.js install-mainchain-cfg writes for Council.
+                  // Operators were silently registered as BPoS producer
+                  // candidates without seeing the implication. Showing
+                  // here BEFORE the click lets them decide knowingly.
+                  + '<span class="enm-role-card-meta-warn"><b>' + escapeHtml(t('friendly.setup.card_a.council_includes_bpos_label')) + ':</b> '
+                    + escapeHtml(t('friendly.setup.card_a.council_includes_bpos_value')) + '</span>'
                 + '</div>'
               + '</button>'
-            + '</div>';
+            + '</div>'
+            // 0.5.0 audit Session 1 — wire the previously-DEAD `footer` +
+            // new `footnote` strings. Renderer pre-0.5.0 never emitted
+            // them; the comparison disclaimer was invisible since v0.4.3.
+            // Footer = help text comparing the two roles. Footnote =
+            // asterisk-explanation for the "*" in the meta badges.
+            + '<p class="enm-wiz-para enm-card-footer">'
+              + escapeHtml(t('friendly.setup.card_a.footer')) + '</p>'
+            + '<p class="enm-wiz-footnote">'
+              + escapeHtml(t('friendly.setup.card_a.footnote')) + '</p>';
 
         var self = this;
         var cards = this._body.querySelectorAll('.enm-role-card');

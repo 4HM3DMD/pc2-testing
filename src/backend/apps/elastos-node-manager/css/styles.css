@@ -3955,6 +3955,34 @@ body[data-app-size="compact"] .enm-log-ts,
     color: var(--text-secondary);
     font-weight: var(--fw-medium);
 }
+/* 0.5.1 audit Session 1 — `.enm-role-card-meta-warn` marks a high-attention
+   disclosure row inside .enm-role-card-meta (currently used for the Council
+   card's "Also enables: BPoS producer mode" disclosure — operators need to
+   see this BEFORE clicking). Same grid cell as siblings but warmer color +
+   subtle background so it doesn't blend in. */
+.enm-role-card-meta-warn {
+    color: var(--warning, #c87f00);
+    background: var(--warning-bg, rgba(255, 183, 77, 0.08));
+    border-left: 2px solid var(--warning, #ffb74d);
+    padding: 6px 8px;
+    border-radius: 4px;
+    margin-top: 2px;
+}
+.enm-role-card-meta-warn b {
+    color: var(--warning, #c87f00);
+}
+/* 0.5.1 audit Session 1 — footer text below the role-grid (previously
+   DEAD CODE). Same scale as wiz-para but slightly muted. */
+.enm-card-footer {
+    color: var(--text-secondary);
+    margin-top: var(--sp-3);
+}
+.enm-wiz-footnote {
+    font-size: var(--fs-caption);
+    color: var(--text-tertiary);
+    font-style: italic;
+    margin-top: var(--sp-1);
+}
 .enm-role-card-badge {
     position: absolute;
     top: var(--sp-3);

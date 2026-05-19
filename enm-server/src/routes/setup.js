@@ -2020,8 +2020,28 @@ async function runCouncilInstall(args) {
         // Writes cfg.chains.mainchain so the ELA adapter knows where
         // the binary + keystore live. Mirrors the shape /setup/complete
         // composes for the BPoS flow, with two intentional differences:
-        //   1. enableArbiter defaults to TRUE — Council operators
-        //      always run as Arbiter for sidechain PBFT signing.
+        //
+        //   1. dpos.enableArbiter defaults to TRUE — IMPORTANT CLARIFICATION:
+        //      This field name is a footgun (inherited from upstream Elastos
+        //      ELA naming). It controls the ela binary's --enable-arbiter
+        //      flag, which puts the mainchain node into BPoS PRODUCER mode
+        //      (eligible for community voting, signs DPoS rounds). It does
+        //      NOT enable the Class D Arbiter (a separate elastos-arbiter
+        //      binary at cfg.chains.arbiter that signs cross-chain txs).
+        //
+        //      Sidechain PBFT signing (H23) uses the mainchain keystore.dat
+        //      via the sidechain binary's --pbft.keystore flag — it works
+        //      whether or not the mainchain is in BPoS producer mode.
+        //
+        //      Council operators get enableArbiter=true because most Council
+        //      members are ALSO BPoS producers in practice, and the v0.5.0
+        //      Card 1 wizard now discloses this explicitly. A Council operator
+        //      who wants Council WITHOUT producer mode must toggle this off
+        //      via Settings → Mainchain → Producer Mode after install.
+        //      (v0.6.0 backlog: surface this as a Card 1 sub-question + rename
+        //      the schema field to dpos.bpsProducerEnabled to remove the
+        //      Arbiter naming collision.)
+        //
         //   2. keystorePasswordEncrypted is read from
         //      cfg.global.council.masterPasswordEncrypted (Council
         //      shared-password strategy), not from the per-wallet
