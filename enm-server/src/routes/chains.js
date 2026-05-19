@@ -957,7 +957,19 @@ function build(extensionHandle) {
                     }
                     return null;
                 }),
-                rpc.getdposrewards(ownerPubkey).catch(() => null),
+                // 0.5.151 QA Session 151 — getdposrewards does NOT exist on
+                // EnmRpcClient (EnmRpcClient.js:244 — the real method is
+                // dposv2rewardinfo, address-keyed; the node signing address
+                // has no rewards bookkeeping anyway). The old call evaluated
+                // `undefined(ownerPubkey)` which threw a SYNCHRONOUS TypeError
+                // BEFORE the `.catch()` could run — bypassing the per-call
+                // guard and 500-ing the entire GET /chains/:id/producer
+                // endpoint (caught only by the outer try → "Failed to read
+                // producer state."). Found via QA campaign R1 read-sweep.
+                // Resolve null so rewardsInfo stays null and recentRewardsEla
+                // renders "—" (the honest value — BPoS rewards accrue to the
+                // owner stake address in Essentials, not this node key).
+                Promise.resolve(null),
             ]);
             const currentHeight = info && (
                 typeof info.height === 'number' ? info.height
