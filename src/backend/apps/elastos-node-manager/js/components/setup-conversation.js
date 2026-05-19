@@ -505,6 +505,10 @@
         });
 
         function runChecks() {
+            // 0.5.22 audit Session 22 — disable Re-run button while
+            // in-flight. Same double-click guard rationale as Card 5
+            // (v0.5.21).
+            rerun.disabled = true;
             listEl.innerHTML = '<li class="enm-syscheck-row" data-state="checking">'
                 + '<span class="enm-syscheck-icon" aria-hidden="true">⟳</span>'
                 + '<span class="enm-syscheck-text">'
@@ -515,16 +519,35 @@
             self.api.get('/setup/system-check?path=' + pathName, { skipCache: true })
                 .then(function (report) {
                     if (self._destroyed || !self._stillRendering(seq)) { return; }
+                    rerun.disabled = false;
                     self._renderCard2Report(listEl, remEl, report, runChecks);
                 })
                 .catch(function (err) {
                     if (self._destroyed || !self._stillRendering(seq)) { return; }
+                    rerun.disabled = false;
+                    // 0.5.22 audit Session 22 — error row now matches the
+                    // visual structure of successful syscheck rows (label
+                    // + message) and surfaces a retry hint pointing at
+                    // the Re-run button. Card 2 is non-skippable per
+                    // operator directive 2026-05-19, so a stack-trace-
+                    // style error with no recovery affordance hurts more
+                    // here than on Card 5.
+                    var errMsg = (err && err.message) || String(err);
+                    var labelText = t('friendly.setup.card_2.err_label')
+                        || 'System check could not run';
+                    var bodyTpl = t('friendly.setup.card_2.err_body')
+                        || 'Network or server problem: {error}';
+                    var bodyText = bodyTpl.replace('{error}', errMsg);
+                    var retryHint = t('friendly.setup.card_2.err_retry_hint')
+                        || 'Press Re-run checks above to try again.';
                     listEl.innerHTML = '<li class="enm-syscheck-row" data-state="error">'
                         + '<span class="enm-syscheck-icon" aria-hidden="true">✗</span>'
-                        + '<span class="enm-syscheck-text">'
-                        +   escapeHtml(t('friendly.setup.card_2.err_prefix'))
-                        +   escapeHtml((err && err.message) || String(err))
-                        + '</span></li>';
+                        + '<div class="enm-syscheck-text">'
+                        +   '<div class="enm-syscheck-label">' + escapeHtml(labelText) + '</div>'
+                        +   '<div class="enm-syscheck-message">'
+                        +     escapeHtml(bodyText) + ' ' + escapeHtml(retryHint)
+                        +   '</div>'
+                        + '</div></li>';
                 });
         }
 

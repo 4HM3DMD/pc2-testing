@@ -307,7 +307,14 @@
                     add_swap_working:'Creating swapfile…',
                     add_swap_done:   'Swap is active ({freeGbAfter} GB free including swap). Re-running checks…',
                     add_swap_failed: 'Could not add swap: {error}',
-                    err_prefix:      'System check call failed: ',
+                    // 0.5.22 audit Session 22 — error UX parity with Card 5
+                    // (v0.5.21). Pre-0.5.22 a single `err_prefix` key
+                    // produced "System check call failed: Failed to fetch"
+                    // — stack-trace-style, no retry pointer. Same three-
+                    // key pattern: label / body / retry hint.
+                    err_label:       'System check could not run',
+                    err_body:        'Network or server problem: {error}',
+                    err_retry_hint:  'Press Re-run checks above to try again.',
                 },
                 card_3: {
                     title:           '🔑 Master password',
