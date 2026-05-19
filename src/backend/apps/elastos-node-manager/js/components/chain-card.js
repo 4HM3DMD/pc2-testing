@@ -174,7 +174,14 @@
         // alpha.28.1 batch 30 — visibility-pause wrap on the 60s
         // rotation poll. Saves 60 hidden-tab fetches/hr; resume-tick
         // re-fetches immediately so the rotation strip stays accurate.
-        if (typeof root !== 'undefined' && typeof root.enmUseVisibilityPause === 'function') {
+        //
+        // 0.5.10 audit Session 10 — skip the timer entirely for non-A
+        // chains. Pre-0.5.10 the interval fired every 60s for Class B/
+        // C/D/E cards too; _refreshRotation early-returned but the
+        // closure still ran. Now: no timer at all when chainClass != A.
+        if (this.chainClass && this.chainClass !== 'A') {
+            // Non-A chains never need rotation polling.
+        } else if (typeof root !== 'undefined' && typeof root.enmUseVisibilityPause === 'function') {
             this._rotationPauser = root.enmUseVisibilityPause(function () { self._refreshRotation(); }, 60_000);
         } else {
             this._rotationTimer = setInterval(function () { self._refreshRotation(); }, 60_000);
@@ -344,16 +351,47 @@
         this._meta.appendChild(this._stateChip);
 
         // height block
-        var heightBlock = document.createElement('div');
-        var heightLabel = document.createElement('div');
-        heightLabel.className = 'enm-chain-height-label';
-        heightLabel.textContent = t('chain_card.primary_label_height') || 'Block height';
-        heightBlock.appendChild(heightLabel);
-        this._chainHeight = document.createElement('div');
-        this._chainHeight.className = 'enm-chain-height';
-        this._chainHeight.textContent = '—';
-        heightBlock.appendChild(this._chainHeight);
-        this._meta.appendChild(heightBlock);
+        // 0.5.10 audit Session 10 — class-aware height block.
+        //   Class A (mainchain), Class B (ESC/EID/PG): "Block height"
+        //   Class D (Arbiter): "SPV height" — the value comes from
+        //       getspvheight RPC, NOT a chain the arbiter produces.
+        //       Renaming clarifies the SPV-mirror semantics.
+        //   Class C (Oracles): NO height concept at all. Oracles are
+        //       stateless HTTP relayers; rendering "Block height: —"
+        //       forever was misleading. Skip the block entirely.
+        //   Class E (SPV): "SPV header height" — like arbiter, it's an
+        //       SPV-side height. Renamed for clarity (E is deferred
+        //       in v0.4.x but we wire the right label now for forward
+        //       compat).
+        var heightLabelKey;
+        if (this.chainClass === 'D') {
+            heightLabelKey = 'chain_card.primary_label_spv_height';
+        } else if (this.chainClass === 'E') {
+            heightLabelKey = 'chain_card.primary_label_spv_header_height';
+        } else {
+            heightLabelKey = 'chain_card.primary_label_height';
+        }
+        var heightLabelFallback = (this.chainClass === 'D' || this.chainClass === 'E')
+            ? 'SPV height'
+            : 'Block height';
+        if (this.chainClass !== 'C') {
+            var heightBlock = document.createElement('div');
+            var heightLabel = document.createElement('div');
+            heightLabel.className = 'enm-chain-height-label';
+            heightLabel.textContent = t(heightLabelKey) || heightLabelFallback;
+            heightBlock.appendChild(heightLabel);
+            this._chainHeight = document.createElement('div');
+            this._chainHeight.className = 'enm-chain-height';
+            this._chainHeight.textContent = '—';
+            heightBlock.appendChild(this._chainHeight);
+            this._meta.appendChild(heightBlock);
+        } else {
+            // Oracle (Class C): no height block. _chainHeight stays
+            // undefined; any updater that pokes it must null-check.
+            // The state pill alone communicates running/stopped — which
+            // is the only meaningful runtime state for an oracle.
+            this._chainHeight = null;
+        }
 
         // subline — fully-synced ✓ tick OR sync info "Receiving 12 blocks/min"
         this._subline = document.createElement('div');
@@ -781,7 +819,11 @@
         // Block-height number. The "/ network" suffix when syncing is set
         // later by _refreshSync via _applySyncSnapshot.
         var height = (state && state.height != null) ? state.height : null;
-        this._chainHeight.textContent = formatPrimaryValue(t, coarse, height, null);
+        // 0.5.10 audit Session 10 — Class C oracle cards skip the height
+        // block entirely (oracles have no chain); _chainHeight is null.
+        if (this._chainHeight) {
+            this._chainHeight.textContent = formatPrimaryValue(t, coarse, height, null);
+        }
         // The "Block height" label stays static in phase-03; in alpha.27
         // it swapped to "connecting to peers" while we waited for the
         // first peer handshake. Preserve that behaviour but write into
@@ -1079,10 +1121,16 @@
 
         // Block-height number — when syncing, formatter shows
         // "local / network"; once basicallySynced, just local.
+        // 0.5.10 audit Session 10 — Class C oracle skips height block;
+        // _chainHeight + _primaryLabel both null. Guard each write.
         var height = (this._lastBackendState && this._lastBackendState.height != null)
             ? this._lastBackendState.height : null;
-        this._chainHeight.textContent = formatPrimaryValue(t, coarse, height, data);
-        this._primaryLabel.textContent  = formatPrimaryLabel(t, coarse, height, data);
+        if (this._chainHeight) {
+            this._chainHeight.textContent = formatPrimaryValue(t, coarse, height, data);
+        }
+        if (this._primaryLabel) {
+            this._primaryLabel.textContent = formatPrimaryLabel(t, coarse, height, data);
+        }
 
         // Subline — sync info ("Fully synced in ~4 min · 381,436 blocks
         // behind") + sync-progress-bar ("Receiving 12 new blocks/min from
