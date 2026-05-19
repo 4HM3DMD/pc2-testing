@@ -68,23 +68,21 @@
                     // governance roles. (See feedback_enm_vocabulary memory entry.)
                     bpos_title: 'BPoS supernode',
                     bpos_sub:   'Run as a producer and sign blocks for the DPoS consensus. Earns block rewards once your wallet is voted in by the community.',
-                    // 0.5.0 audit Session 1 — dropped the unanchored "~17% APR"
-                    // claim. Actual rewards depend on community votes + total stake
-                    // and can vary widely operator-to-operator (and change every
-                    // voting cycle). A specific percentage on a welcome card invites
-                    // complaint and misleads operators who join right before a
-                    // voting cycle. Footer's "depends on votes" stays.
-                    bpos_meta:  'Voted-in rewards*',
                     // 0.2.0-beta.3.6 — phase-06 mock spec is a three-line
                     // meta list (Requires / Wallet / Auto-installs) per
-                    // role-card. Pre-beta.3.6 only had bpos_meta = "APR";
-                    // these are the missing companions.
+                    // role-card. (0.5.25 audit Session 25 — dropped the
+                    // orphan bpos_meta key; replaced pre-beta.3.6.)
                     bpos_requires_label:  'Requires',
                     bpos_requires_value:  'producer keystore (signing key)',
                     bpos_wallet_label:    'Wallet',
                     bpos_wallet_value:    'paired in the next step',
                     bpos_install_label:   'Auto-installs',
-                    bpos_install_value:   'ela mainchain only',
+                    // 0.5.25 audit Session 25 — display-name parity with
+                    // v0.5.18+24. Pre-0.5.25: 'ela mainchain only' leaked
+                    // the binary name + used the raw chain id. New copy
+                    // also names the missing pieces (no sidechains) so
+                    // the contrast with Council card is explicit.
+                    bpos_install_value:   'Main chain only (no sidechains, no Arbiter)',
                     // beta.0.4.3 — Council node is a DISTINCT role from
                     // BPoS supernode (operator directive: "BPoS owners
                     // don't become Council nodes; Council nodes always
@@ -112,16 +110,19 @@
                     council_meta:    'Multi-chain rewards*',
                     council_meta_compact: 'Multi-chain',
                     council_status_label: 'Includes',
-                    council_status_value: 'mainchain + 3 EVM sidechains + 3 oracles + arbiter',
-                    // beta.0.4.3 — Council card is now ENABLED. The
-                    // backend install endpoints (install-class-b /
-                    // install-node-runtime / install-class-c /
-                    // install-class-d) all exist as of v0.4.1. The
-                    // CouncilSetupWizard component (M6.2 wizard surface)
-                    // walks the operator through sequentially.
-                    council_disabled: false,
+                    // 0.5.25 audit Session 25 — display-name parity.
+                    // Pre-0.5.25 used lowercase raw ids ("mainchain ...
+                    // oracles + arbiter") inconsistent with the rest
+                    // of the app post-v0.5.18.
+                    council_status_value: 'Main chain + 3 EVM sidechains + 3 Oracles + Arbiter Service',
+                    // 0.5.25 audit Session 25 — dropped the orphan
+                    // council_disabled boolean (no consumers since
+                    // beta.0.4.3 enabled the card unconditionally).
                     council_requires_label: 'Requires',
-                    council_requires_value: 'mainchain keystore (signing key, shared across chains)',
+                    // 0.5.25 audit Session 25 — "Main chain keystore"
+                    // matches v0.5.24 install-stepper "Main chain
+                    // keystore" label.
+                    council_requires_value: 'Main chain keystore (signing key, shared across chains)',
                     // 0.5.0 audit Session 1 CRITICAL — Council install hardcodes
                     // dpos.enableArbiter=true in install-mainchain-cfg (setup.js:
                     // 2079). That activates the ela binary's --enable-arbiter
