@@ -75,8 +75,48 @@ function build(extensionHandle) {
                 }));
             }
             const row = rows[0];
+            // 0.5.145 audit Session 145 — self-heal for the
+            // ConfigStore-vs-DB completed-flag desync. Pre-0.5.145 the
+            // Council install orchestrator's finalize step wrote
+            // cfg.setup.completed=true to cfg.json but never upserted
+            // completed=1 into this DB row (only the BPoS /setup/complete
+            // path did). Operators who completed Council setup on v<=0.5.144
+            // hit Card 1 again on every reload because /setup/state read
+            // from this row (still completed=0) instead of the cfg.
+            //
+            // The orchestrator is fixed at the start-chains step, but
+            // operators already past that point need a one-shot reconcile
+            // to escape Card 1. Strategy: if either store says "completed",
+            // treat as completed; if cfg says yes but DB disagrees, lazily
+            // upsert so subsequent calls don't re-pay the reconcile cost.
+            let completed = row.completed === 1;
+            if (!completed) {
+                try {
+                    const cfg = await ConfigStore.load();
+                    if (cfg.setup && cfg.setup.completed === true) {
+                        completed = true;
+                        await upsertSetupState(db, wallet, {
+                            completed: 1,
+                            current_step: 'complete',
+                            completed_at: cfg.setup.completedAt || Date.now(),
+                        });
+                        extensionHandle.log.info(
+                            `${ENM_LOG_PREFIX} /setup/state self-heal: `
+                            + 'cfg.setup.completed was true but DB row had '
+                            + 'completed=0 — reconciled. (S145 audit.)',
+                        );
+                    }
+                } catch (reconcileErr) {
+                    // Non-fatal — fall through with the DB value. The
+                    // operator will hit the wizard but won't crash.
+                    extensionHandle.log.warn(
+                        `${ENM_LOG_PREFIX} /setup/state self-heal failed: `
+                        + reconcileErr.message,
+                    );
+                }
+            }
             return res.json(successBody({
-                completed: row.completed === 1,
+                completed,
                 currentStep: row.current_step,
                 osCheckPassed: row.os_check_passed === 1,
                 diskCheckPassed: row.disk_check_passed === 1,
@@ -1541,6 +1581,14 @@ function build(extensionHandle) {
         // masterPassword + sharedPassword are already resolved at the
         // top of this handler (body → cfg-fallback). Reuse them here.
 
+        // 0.5.145 audit Session 145 — capture the actor wallet here so
+        // the orchestrator's final start-chains step can mirror the
+        // BPoS flow and write completed=1 into the enm_setup_state DB
+        // row (the row /setup/state reads). Pre-0.5.145 the orchestrator
+        // only wrote cfg.setup.completed=true to ConfigStore (cfg.json)
+        // — operator finished setup, refreshed, GET /setup/state hit the
+        // DB row (still completed=0), boot path re-mounted the wizard.
+        const installerWallet = readActorWallet(req);
         runCouncilInstall({
             extensionHandle,
             cfg,
@@ -1556,6 +1604,7 @@ function build(extensionHandle) {
                 useSnapshots,
             },
             sseHub,
+            wallet: installerWallet,
         }).catch((err) => {
             extensionHandle.log.error(
                 `${ENM_LOG_PREFIX} install-council orchestrator crashed: ${err.message}`,
@@ -1769,9 +1818,14 @@ function getCouncilInstallState() {
  * @param {object} args.cfg                   pre-loaded ConfigStore.load()
  * @param {object} args.inputs                { sharedPassword, sharedRewardAddress, arbiterMiningAddress, activeNet }
  * @param {object|null} args.sseHub
+ * @param {string|null} args.wallet           operator wallet (from readActorWallet),
+ *                                            used by the final start-chains step to
+ *                                            upsert completed=1 into enm_setup_state
+ *                                            so /setup/state returns completed=true
+ *                                            on the next boot (see S145 audit notes).
  */
 async function runCouncilInstall(args) {
-    const { extensionHandle, inputs, sseHub } = args;
+    const { extensionHandle, inputs, sseHub, wallet } = args;
     const log = extensionHandle.log;
     const EnmCrypto = require('../services/EnmCrypto');
     const ClassBPorts = require('../services/ClassBPorts');
@@ -2587,6 +2641,53 @@ async function runCouncilInstall(args) {
             cfgFinal.setup.completedAt = Date.now();
             cfgFinal.setup.completedStep = 'council-install';
             await ConfigStore.save(cfgFinal);
+
+            // 0.5.145 audit Session 145 — mirror BPoS /setup/complete (line
+            // 788-793) and also upsert completed=1 into enm_setup_state.
+            // The 0.5.0 fix above wrote cfg.setup.completed=true to cfg.json
+            // (ConfigStore), but GET /setup/state reads from the SQLite
+            // enm_setup_state TABLE, not cfg.json. Two different stores.
+            // The boot path at app.js init() calls /setup/state and routes
+            // to the dashboard when completed=true; the DB row still had
+            // completed=0 so the wizard re-mounted on every page reload
+            // even though setup was actually done.
+            //
+            // Wallet is captured at the POST /install-council handler via
+            // readActorWallet(req) and plumbed through args. If it's
+            // somehow missing (e.g. dev tooling calling runCouncilInstall
+            // directly), fall back to a SELECT-based reverse lookup so
+            // the install still completes cleanly rather than leaking the
+            // pre-0.5.145 bug.
+            try {
+                const { db } = extensionHandle.import('data');
+                let dbWallet = wallet;
+                if (!dbWallet) {
+                    const rows = await db.read(
+                        `SELECT wallet_address FROM enm_setup_state LIMIT 1`,
+                        [],
+                    );
+                    if (Array.isArray(rows) && rows.length > 0) {
+                        dbWallet = rows[0].wallet_address;
+                    }
+                }
+                if (dbWallet) {
+                    await upsertSetupState(db, dbWallet, {
+                        completed: 1,
+                        current_step: 'complete',
+                        completed_at: Date.now(),
+                    });
+                } else {
+                    log.warn(`${ENM_LOG_PREFIX} install-council finalize: no wallet `
+                        + 'available to upsert enm_setup_state.completed=1 — '
+                        + 'cfg.setup.completed is true but /setup/state will still '
+                        + 'return completed=false. Operator must POST /setup/complete '
+                        + 'manually or restart the wizard once to fix.');
+                }
+            } catch (dbErr) {
+                log.error(`${ENM_LOG_PREFIX} install-council finalize: `
+                    + `enm_setup_state upsert failed: ${dbErr.message}. `
+                    + 'cfg.setup.completed is true; DB row was not updated.');
+            }
             return { message: `${started.length}/${startOrder.length} chains started` };
         });
 
