@@ -56,117 +56,85 @@ function build(extensionHandle) {
             return res.status(401).json(errorBody('Authentication required.'));
         }
         try {
-            const { db } = extensionHandle.import('data');
-            // 0.5.147 audit Session 147 — wrap the SELECT so a missing
-            // table (the EnmDb CREATE TABLE IF NOT EXISTS didn't run on
-            // this install — verified on srv1682299) doesn't 500 the
-            // whole endpoint. Empty result is the same shape as
-            // "row not found", so the downstream branch handles both.
-            let rows = [];
+            // 0.5.148 audit Session 148 — COMPLETION IS DERIVED FROM DISK,
+            // NOT STORED.
+            //
+            // Background (the operator's "why is it so hard for the app to
+            // know it's deployed" question): pre-0.5.148 "is setup done?"
+            // lived in THREE places that drift out of sync —
+            //   1. cfg.setup.completed (cfg.json)
+            //   2. enm_setup_state.completed (SQLite row)
+            //   3. the actual filesystem (binary on disk + keystore.dat)
+            // Only #3 is self-evident truth. #1 and #2 are bookkeeping that
+            // every writer has to remember to keep aligned. The BPoS flow
+            // wrote both; the Council flow wrote only #1; the DB table
+            // didn't even exist on some installs. Result: completed
+            // installs kept showing the wizard. S145 + S147 were patches
+            // reconciling #1↔#2. This is the real fix: stop storing the
+            // answer, compute it.
+            //
+            // ChainState.snapshot() is the codebase's established disk-truth
+            // layer (Architectural Invariant #1, used by every adapter's
+            // start()). `installed` = binary on disk + executable +
+            // smoke-tested; `keystorePresent` = keystore.dat on disk. Both
+            // true ⇒ a node that can actually run ⇒ setup is done, for
+            // both BPoS and Council (Council additionally has sidechains,
+            // but mainchain-installed-with-keystore is the minimum bar to
+            // leave the wizard; the dashboard renders partial multi-chain
+            // states gracefully). This answer cannot desync from reality
+            // because it IS reality.
+            let completed = false;
+            let snap = {};
             try {
-                rows = await db.read(
+                const ChainState = require('../services/ChainState');
+                snap = ChainState.snapshot('mainchain') || {};
+                completed = !!(snap.installed && snap.keystorePresent);
+            } catch (snapErr) {
+                extensionHandle.log.warn(
+                    `${ENM_LOG_PREFIX} /setup/state: ChainState.snapshot `
+                    + `failed (${snapErr.message}) — treating as not-complete.`,
+                );
+            }
+
+            // The DB row is consulted ONLY for the mid-wizard step cursor
+            // (resume-at-the-right-card UX) and the ephemeral preflight
+            // flags. It is NEVER the completion authority. A missing table
+            // or row just means "no resume hint" — the wizard starts from
+            // whatever isn't yet done on disk. Best-effort: a SELECT
+            // failure (e.g. the table was never created) is non-fatal.
+            let row = null;
+            try {
+                const { db } = extensionHandle.import('data');
+                const rows = await db.read(
                     `SELECT * FROM enm_setup_state WHERE wallet_address = ?`,
                     [wallet],
                 );
-                if (!Array.isArray(rows)) { rows = []; }
+                if (Array.isArray(rows) && rows.length > 0) { row = rows[0]; }
             } catch (selectErr) {
                 extensionHandle.log.warn(
-                    `${ENM_LOG_PREFIX} /setup/state: SELECT failed `
-                    + `(${selectErr.message}) — treating as missing row, will `
-                    + 'fall back to cfg.setup for completion check.',
+                    `${ENM_LOG_PREFIX} /setup/state: step-cursor SELECT failed `
+                    + `(${selectErr.message}) — proceeding with disk-derived `
+                    + 'completion only (this is fine; the row is just a resume hint).',
                 );
             }
-            if (rows.length === 0) {
-                // 0.5.147 audit Session 147 — empty-row fallback. Pre-0.5.147
-                // this returned the default "fresh wizard" shape, which sent
-                // operators who had completed Council install back to Card 1
-                // every time the DB row was missing — and on srv1682299 the
-                // enm_setup_state TABLE itself didn't exist, so EVERY call
-                // hit this branch. Now: consult cfg.setup.completed as a
-                // fallback signal. If cfg says we're done, return completed=true
-                // so app.js routes to the dashboard. The DB-write fix in the
-                // Council orchestrator (S145) still lands the row on fresh
-                // installs; this branch is the recovery path for installs
-                // that already finished pre-fix or where the table init was
-                // skipped.
-                let cfgCompleted = false;
-                let cfgCompletedAt = null;
-                try {
-                    const cfg = await ConfigStore.load();
-                    if (cfg.setup && cfg.setup.completed === true) {
-                        cfgCompleted = true;
-                        cfgCompletedAt = cfg.setup.completedAt || null;
-                    }
-                } catch (cfgErr) {
-                    extensionHandle.log.warn(
-                        `${ENM_LOG_PREFIX} /setup/state: ConfigStore.load `
-                        + `failed during empty-row fallback: ${cfgErr.message}`,
-                    );
-                }
-                return res.json(successBody({
-                    completed: cfgCompleted,
-                    currentStep: cfgCompleted ? 'complete' : 'welcome',
-                    completedAt: cfgCompletedAt,
-                    osCheckPassed: cfgCompleted,
-                    diskCheckPassed: cfgCompleted,
-                    walletCheckPassed: cfgCompleted,
-                    binaryPath: null,
-                    binaryVersion: null,
-                    keystoreImported: cfgCompleted,
-                    configGenerated: cfgCompleted,
-                }));
-            }
-            const row = rows[0];
-            // 0.5.145 audit Session 145 — self-heal for the
-            // ConfigStore-vs-DB completed-flag desync. Pre-0.5.145 the
-            // Council install orchestrator's finalize step wrote
-            // cfg.setup.completed=true to cfg.json but never upserted
-            // completed=1 into this DB row (only the BPoS /setup/complete
-            // path did). Operators who completed Council setup on v<=0.5.144
-            // hit Card 1 again on every reload because /setup/state read
-            // from this row (still completed=0) instead of the cfg.
-            //
-            // The orchestrator is fixed at the start-chains step, but
-            // operators already past that point need a one-shot reconcile
-            // to escape Card 1. Strategy: if either store says "completed",
-            // treat as completed; if cfg says yes but DB disagrees, lazily
-            // upsert so subsequent calls don't re-pay the reconcile cost.
-            let completed = row.completed === 1;
-            if (!completed) {
-                try {
-                    const cfg = await ConfigStore.load();
-                    if (cfg.setup && cfg.setup.completed === true) {
-                        completed = true;
-                        await upsertSetupState(db, wallet, {
-                            completed: 1,
-                            current_step: 'complete',
-                            completed_at: cfg.setup.completedAt || Date.now(),
-                        });
-                        extensionHandle.log.info(
-                            `${ENM_LOG_PREFIX} /setup/state self-heal: `
-                            + 'cfg.setup.completed was true but DB row had '
-                            + 'completed=0 — reconciled. (S145 audit.)',
-                        );
-                    }
-                } catch (reconcileErr) {
-                    // Non-fatal — fall through with the DB value. The
-                    // operator will hit the wizard but won't crash.
-                    extensionHandle.log.warn(
-                        `${ENM_LOG_PREFIX} /setup/state self-heal failed: `
-                        + reconcileErr.message,
-                    );
-                }
-            }
+
             return res.json(successBody({
                 completed,
-                currentStep: row.current_step,
-                osCheckPassed: row.os_check_passed === 1,
-                diskCheckPassed: row.disk_check_passed === 1,
-                walletCheckPassed: row.wallet_check_passed === 1,
-                binaryPath: row.binary_path,
-                binaryVersion: row.binary_version,
-                keystoreImported: row.keystore_imported === 1,
-                configGenerated: row.config_generated === 1,
+                currentStep: completed
+                    ? 'complete'
+                    : (row && row.current_step ? row.current_step : 'welcome'),
+                // Sub-flags: disk-derived where the disk knows, row-backed
+                // for the ephemeral preflight results (which the disk
+                // can't recover). When completed, the preflight gates are
+                // moot — report them passed so the wizard never re-blocks
+                // a working node on a stale threshold.
+                osCheckPassed: completed || (row ? row.os_check_passed === 1 : false),
+                diskCheckPassed: completed || (row ? row.disk_check_passed === 1 : false),
+                walletCheckPassed: completed || (row ? row.wallet_check_passed === 1 : false),
+                binaryPath: snap.binaryPath || (row ? row.binary_path : null),
+                binaryVersion: snap.binaryVersion || (row ? row.binary_version : null),
+                keystoreImported: !!snap.keystorePresent,
+                configGenerated: completed || (row ? row.config_generated === 1 : false),
             }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} /setup/state error: ${err.message}`);
