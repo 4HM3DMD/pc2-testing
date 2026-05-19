@@ -52,6 +52,20 @@ const { spawn } = require('node:child_process');
 const { ENM_LOG_PREFIX } = require('./EnmConstants');
 const { enmDataDir, chainDir } = require('./DataDir');
 
+// 0.5.113 audit Session 113 — read the User-Agent's version segment
+// from package.json instead of hardcoding "0.2". Pre-0.5.113 both
+// _head() and _download() used `'enm-server/0.2 (bootstrap)'` —
+// stale since beta. Mirrors the Session 111 fix in EnmUpdateScanner.
+// Cached at module load; redeploys refresh it.
+function _readPackageVersion() {
+    try {
+        const pkg = require('../../package.json');
+        if (pkg && typeof pkg.version === 'string') { return pkg.version; }
+    } catch (_) { /* fall through */ }
+    return '0.0.0';
+}
+const USER_AGENT = 'enm-server/' + _readPackageVersion() + ' (bootstrap)';
+
 // Host + path of the snapshot. Mainchain only for now — ESC and EID
 // don't publish snapshots in the same shape. Easy to extend when
 // they do (parallel `CHAINS` table to EnmBinaryDownloader's).
@@ -353,7 +367,7 @@ class EnmBootstrapDownloader {
                     method: 'HEAD',
                     host: currentHost,
                     path: currentPath,
-                    headers: { 'User-Agent': 'enm-server/0.2 (bootstrap)' },
+                    headers: { 'User-Agent': USER_AGENT },
                     timeout: 15_000,
                 }, (res) => {
                     if (res.statusCode === 301 || res.statusCode === 302
@@ -409,7 +423,7 @@ class EnmBootstrapDownloader {
                     if (hops > 3) return reject(new Error('Too many redirects'));
                     currentReq = https.get({
                         host: currentHost, path: currentPath,
-                        headers: { 'User-Agent': 'enm-server/0.2 (bootstrap)' },
+                        headers: { 'User-Agent': USER_AGENT },
                         timeout: 60_000,
                     }, (res) => {
                         currentRes = res;

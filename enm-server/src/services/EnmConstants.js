@@ -119,8 +119,21 @@ const AUDIT_DECISION = Object.freeze({
 
 // HTTP error format (matches PC2 convention from Rev 4 audit:
 // inline try/catch + res.status().json({ success: false, error: '...' })).
+//
+// 0.5.113 audit Session 113 — defensive guard. Pre-0.5.113 a caller
+// that invoked errorBody() with null / undefined / no argument
+// produced { error: "undefined" } or { error: "null" } in the
+// response body — every operator-facing 4xx/5xx surface would have
+// shown the literal string "undefined" instead of a recovery hint.
+// Now: fall back to a static "Unknown error" string. Doesn't paper
+// over the real bug (callers should always pass a message) — the
+// fallback just keeps the operator-facing copy readable while the
+// caller's missing-message gets fixed.
 function errorBody(message) {
-    return { success: false, error: String(message) };
+    const text = (message == null || message === '')
+        ? 'Unknown error'
+        : String(message);
+    return { success: false, error: text };
 }
 
 function successBody(result) {
