@@ -244,6 +244,11 @@
             self._renderClassBForm(body, chainId, chainCfg);
         }).catch(function (err) {
             if (self._destroyed) { return; }
+            // 0.5.132 audit Session 132 — silence on 401. Loading state
+            // ("Loading current configuration…") stays in the body; login
+            // overlay takes over, on re-auth the operator can switch
+            // chains away and back to re-trigger this load cleanly.
+            if (err && err.status === 401) { return; }
             body.dataset.state = 'error';
             body.innerHTML = '<p class="enm-stub">Failed to load config: '
                 + escapeHtml((err && err.message) || String(err)) + '</p>';
@@ -386,6 +391,8 @@
             status.textContent = 'Saved. Use Restart below to apply.';
         }).catch(function (err) {
             if (self._destroyed) { return; }
+            // 0.5.132 audit Session 132 — silence on 401, see S129/130/131.
+            if (err && err.status === 401) { return; }
             status.textContent = 'Save failed: ' + ((err && err.message) || String(err));
         }).finally(function () {
             btn.disabled = false;
@@ -413,8 +420,11 @@
             })
             .catch(function (err) {
                 if (self._destroyed) { return; }
+                // Reset button first so operator can re-attempt after re-auth.
                 btn.disabled = false;
                 btn.textContent = labelDefault;
+                // 0.5.132 audit Session 132 — silence error text on 401.
+                if (err && err.status === 401) { return; }
                 statusEl.hidden = false;
                 statusEl.textContent = 'Restart failed: '
                     + ((err && err.message) || String(err));
@@ -481,6 +491,8 @@
             self._renderClassCInfo(body, chainId, oracleCfg);
         }).catch(function (err) {
             if (self._destroyed) { return; }
+            // 0.5.132 audit Session 132 — silence on 401, see _mountEvmSidechainSettings.
+            if (err && err.status === 401) { return; }
             body.dataset.state = 'error';
             body.innerHTML = '<p class="enm-stub">Failed to load config: '
                 + escapeHtml((err && err.message) || String(err)) + '</p>';
@@ -560,8 +572,11 @@
                     })
                     .catch(function (err) {
                         if (self._destroyed) { return; }
+                        // Reset button first so operator can re-attempt after re-auth.
                         restartBtn.disabled = false;
                         restartBtn.textContent = 'Restart oracle';
+                        // 0.5.132 audit Session 132 — silence error text on 401.
+                        if (err && err.status === 401) { return; }
                         statusEl.hidden = false;
                         statusEl.textContent = 'Restart failed: '
                             + ((err && err.message) || String(err));
@@ -615,6 +630,8 @@
             self._renderClassDInfo(body, arb, cfg.chains || {});
         }).catch(function (err) {
             if (self._destroyed) { return; }
+            // 0.5.132 audit Session 132 — silence on 401, see _mountEvmSidechainSettings.
+            if (err && err.status === 401) { return; }
             body.dataset.state = 'error';
             body.innerHTML = '<p class="enm-stub">Failed to load config: '
                 + escapeHtml((err && err.message) || String(err)) + '</p>';
@@ -705,8 +722,11 @@
                     })
                     .catch(function (err) {
                         if (self._destroyed) { return; }
+                        // Reset button first so operator can re-attempt after re-auth.
                         restartBtn.disabled = false;
                         restartBtn.textContent = 'Restart arbiter';
+                        // 0.5.132 audit Session 132 — silence error text on 401.
+                        if (err && err.status === 401) { return; }
                         statusEl.hidden = false;
                         statusEl.textContent = 'Restart failed: '
                             + ((err && err.message) || String(err));
