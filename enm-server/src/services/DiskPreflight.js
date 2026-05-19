@@ -46,18 +46,32 @@ async function check(dirPath) {
     let stats;
     try {
         stats = await fsp.statfs(dirPath);
-    } catch (err) {
+    } catch (_) {
+        // 0.5.116 audit Session 116 — replaced err.message interpolation
+        // with a static fallback. Pre-0.5.116 we leaked Node fs errno
+        // strings ("ENOENT: no such file...", EACCES details) into the
+        // setup wizard's system-check copy. Path is already in the
+        // message, and the recovery action is the same regardless of
+        // which fs errno fired — fix the path or fix the mount.
+        // Matches Sessions 64/67/79/81-84 + 107-112 leak-sweep pattern.
         return {
             ok: false,
             status: 'critical',
             freeGb: 0,
             totalGb: 0,
-            reason: `Could not stat filesystem at ${dirPath}: ${err.message}`,
+            reason: `Could not read filesystem stats for ${dirPath}. Check the path exists and is accessible.`,
         };
     }
 
-    // bavail = blocks available to non-root user (the safe choice for our use case).
-    // We're running as the same user PC2 runs as, NOT root.
+    // bavail = blocks available to non-root user. We choose `bavail` over
+    // `bfree` even though PC2 runs as root (so we technically have access
+    // to the reserved blocks) — `bavail` is the conservative number:
+    // under-reports free space, never lets a borderline host through. Same
+    // rationale as EnmSystemCheck.checkDisk's bavail usage.
+    // 0.5.116 audit Session 116 — corrected stale comment that claimed
+    // "NOT root". PC2 runs as root in production (verified per project
+    // deployment notes); the comment now reflects the actual runtime
+    // contract.
     const freeBytes = Number(stats.bavail) * Number(stats.bsize);
     const totalBytes = Number(stats.blocks) * Number(stats.bsize);
     const freeGb = freeBytes / BYTES_PER_GB;
