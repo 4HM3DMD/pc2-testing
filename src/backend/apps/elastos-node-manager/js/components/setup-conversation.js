@@ -1766,12 +1766,28 @@
                 +  '<span class="enm-council-step-message"></span>'
                 + '</li>';
         }).join('');
+        // 0.5.143 audit Session 143 — long-step guidance note for the
+        // snapshot download phase. Shown only while
+        // `download-snapshots-parallel` is the active running step;
+        // hidden in every other phase. Operator-requested after they
+        // sat watching the snapshot bar for 30+ minutes without any
+        // expectation-setting about duration or what would interrupt
+        // it. The note element is built up-front and toggled via the
+        // [hidden] attribute in setStep / applyStatusSnapshot below
+        // so the DOM doesn't re-flow when the step transitions.
+        var snapNoteTitle = t('friendly.setup.card_6.snapshot_note_title');
+        var snapNoteBody  = t('friendly.setup.card_6.snapshot_note_body');
         this._body.innerHTML = ''
             + '<h2 class="enm-wiz-heading" id="enm-wiz-heading-6">' + escapeHtml(heading) + '</h2>'
             + '<p class="enm-wiz-para">' + escapeHtml(sub) + '</p>'
             + '<ol class="enm-council-stepper" role="status" aria-live="polite">'
             +   stepsHtml
             + '</ol>'
+            + '<div class="enm-council-step-note" data-for-step="download-snapshots-parallel" '
+            +      'role="note" hidden>'
+            +   '<div class="enm-council-step-note-title">' + escapeHtml(snapNoteTitle) + '</div>'
+            +   '<div class="enm-council-step-note-body">' + escapeHtml(snapNoteBody) + '</div>'
+            + '</div>'
             + '<div class="enm-council-summary" data-state="running">'
             +   '<div class="enm-install-bar" aria-hidden="true">'
             +     '<div class="enm-install-bar-fill" style="width:0%"></div>'
@@ -1797,6 +1813,15 @@
             else if (status === 'skip')  { iconEl.textContent = '⊘'; }
             else if (status === 'error') { iconEl.textContent = '✗'; }
             if (msgEl) { msgEl.textContent = message || ''; }
+            // 0.5.143 audit Session 143 — show the snapshot-step
+            // guidance note only while download-snapshots-parallel
+            // is the active running step. Reveal on 'start', hide on
+            // any terminal status (done / skip / error).
+            var note = self._body.querySelector(
+                '.enm-council-step-note[data-for-step="' + step + '"]');
+            if (note) {
+                note.hidden = (status !== 'start');
+            }
         }
         function setSummary(state, text, percent) {
             var box = self._body.querySelector('.enm-council-summary');

@@ -505,11 +505,34 @@
                 },
                 card_6: {
                     title:           'Installing your node',
+                    // 0.5.143 audit Session 143 — duration honesty fix.
+                    // Pre-0.5.143 said "Usually 5–10 minutes if snapshots
+                    // are on" — the 5-minute floor was an optimistic
+                    // single-chain bench number. On a Hostinger VPS with
+                    // 4 chain snapshots in parallel, the mainchain tarball
+                    // alone takes 30-90 min. Operators stared at the bar
+                    // assuming it was hung. New copy matches real-world
+                    // wall time on the supported hardware tier.
                     sub:             'ENM is installing all 4 chains, 3 oracles and the Arbiter. '
-                                   + 'Real progress below — not a spinner. Usually 5–10 minutes if '
-                                   + 'snapshots are on, 1–3 days if not.',
+                                   + 'Real progress below — not a spinner. Usually 30 minutes to '
+                                   + '2 hours with snapshots on, 1–3 days without.',
                     sub_bpos:        'ENM is installing the mainchain binary and configuration. '
                                    + 'Usually 2–5 minutes.',
+                    // 0.5.143 audit Session 143 — operator-requested guidance
+                    // for the snapshot-download step. Shown only while
+                    // `download-snapshots-parallel` is the active running
+                    // step; hidden once it completes. The snapshot step is
+                    // the longest-running phase of the entire install
+                    // (network-bound, can run 30-120 min depending on
+                    // upstream bandwidth) and operators previously had no
+                    // signal that walking away or accidentally killing the
+                    // device's connection would lose progress.
+                    snapshot_note_title: '⏱ This step takes 30 minutes to 2 hours',
+                    snapshot_note_body:  'You can leave this page open and come back later — '
+                                       + 'the download continues in the background. Don’t shut '
+                                       + 'down your PC2 or disconnect its internet while this '
+                                       + 'runs; either will interrupt the download and you’ll '
+                                       + 'have to start the snapshot step over.',
                     cta_done:        'Open dashboard',
                     cta_retry:       'Retry from failed step',
                     cta_working:     'Working…',

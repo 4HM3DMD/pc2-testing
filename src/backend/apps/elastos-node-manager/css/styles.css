@@ -6752,6 +6752,31 @@ body[data-enm-overview="1"] .enm-app .enm-tabs {
     color: var(--text-primary);
 }
 
+/* 0.5.143 audit Session 143 — long-running step guidance note.
+ * Sits between the stepper and the summary bar. Amber-tinted to read
+ * as "heads-up, not error". Visibility is toggled via the [hidden]
+ * attribute by setStep() — no CSS-driven show/hide so the note
+ * lifecycle is explicit in the JS. */
+.enm-app .enm-council-step-note {
+    max-width: 640px;
+    margin: var(--sp-3, 12px) auto;
+    padding: var(--sp-3, 12px) var(--sp-4, 16px);
+    background: color-mix(in srgb, var(--state-syncing, #ffb74d) 12%, var(--bg-elevated));
+    border: 1px solid color-mix(in srgb, var(--state-syncing, #ffb74d) 40%, transparent);
+    border-radius: 10px;
+}
+.enm-app .enm-council-step-note-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: var(--sp-1, 4px);
+}
+.enm-app .enm-council-step-note-body {
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-muted, var(--text-primary));
+}
+
 /* beta.0.4.6 — Card E PG-include checkbox row. The .enm-council-form
    parent already lays out rows as flex-column with gap; the checkbox
    row inverts that into a horizontal flex so the checkbox sits to
