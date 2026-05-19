@@ -190,8 +190,8 @@ class ElaMainChainAdapter extends ChainAdapter {
         // socket is up, but UFW silently drops every SYN at INPUT. The
         // symptom is: outbound peers form, inbound count stays 0
         // forever, F18 fires (correctly) but the alert misled operators
-        // to look at NAT / router. Verified fix on srv832310 (Hostinger,
-        // 2026-05-15). Now baked in so every install gets reachable
+        // to look at NAT / router. Verified fix on a Hostinger Ubuntu
+        // VPS, 2026-05-15. Now baked in so every install gets reachable
         // inbound P2P out of the box.
         //
         // RPC port (cfg.ports.rpc) intentionally not opened — ela's

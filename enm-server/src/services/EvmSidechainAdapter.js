@@ -186,7 +186,11 @@ class EvmSidechainAdapter extends ChainAdapter {
      *     --http
      *     --http.addr 127.0.0.1
      *     --http.port 20636
-     *     --http.api eth,net,web3,personal,admin
+     *     --http.api eth,net,web3,admin
+     *       (`personal` deliberately omitted — H25 anti-pattern: it
+     *        exposes personal_unlockAccount via RPC, which combined
+     *        with an externally-bound listener would enable remote
+     *        unlock. The code below at line ~227 enforces this default.)
      *     --pbft.keystore /<mainchainDir>/keystore.dat
      *     --pbft.ipaddress <externalIP>            (only if known)
      *     --pbft.dposport 20639
