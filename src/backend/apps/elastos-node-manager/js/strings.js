@@ -861,7 +861,9 @@
         settings: {
             heading_network: 'Network',
             heading_advanced: 'Mainchain Advanced',
-            heading_general:  'General preferences',
+            // 0.5.35 audit Session 35 — dropped orphan heading_general
+            // i18n key. Only consumer was _buildGeneralSection_DEAD,
+            // also removed this session.
             ip_label:         'External IP / hostname',
             ip_mode_auto:     'Auto-detect',
             ip_mode_manual:   'Manual override',
