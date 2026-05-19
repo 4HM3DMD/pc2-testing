@@ -57,21 +57,63 @@ function build(extensionHandle) {
         }
         try {
             const { db } = extensionHandle.import('data');
-            const rows = await db.read(
-                `SELECT * FROM enm_setup_state WHERE wallet_address = ?`,
-                [wallet],
-            );
-            if (!Array.isArray(rows) || rows.length === 0) {
+            // 0.5.147 audit Session 147 — wrap the SELECT so a missing
+            // table (the EnmDb CREATE TABLE IF NOT EXISTS didn't run on
+            // this install — verified on srv1682299) doesn't 500 the
+            // whole endpoint. Empty result is the same shape as
+            // "row not found", so the downstream branch handles both.
+            let rows = [];
+            try {
+                rows = await db.read(
+                    `SELECT * FROM enm_setup_state WHERE wallet_address = ?`,
+                    [wallet],
+                );
+                if (!Array.isArray(rows)) { rows = []; }
+            } catch (selectErr) {
+                extensionHandle.log.warn(
+                    `${ENM_LOG_PREFIX} /setup/state: SELECT failed `
+                    + `(${selectErr.message}) — treating as missing row, will `
+                    + 'fall back to cfg.setup for completion check.',
+                );
+            }
+            if (rows.length === 0) {
+                // 0.5.147 audit Session 147 — empty-row fallback. Pre-0.5.147
+                // this returned the default "fresh wizard" shape, which sent
+                // operators who had completed Council install back to Card 1
+                // every time the DB row was missing — and on srv1682299 the
+                // enm_setup_state TABLE itself didn't exist, so EVERY call
+                // hit this branch. Now: consult cfg.setup.completed as a
+                // fallback signal. If cfg says we're done, return completed=true
+                // so app.js routes to the dashboard. The DB-write fix in the
+                // Council orchestrator (S145) still lands the row on fresh
+                // installs; this branch is the recovery path for installs
+                // that already finished pre-fix or where the table init was
+                // skipped.
+                let cfgCompleted = false;
+                let cfgCompletedAt = null;
+                try {
+                    const cfg = await ConfigStore.load();
+                    if (cfg.setup && cfg.setup.completed === true) {
+                        cfgCompleted = true;
+                        cfgCompletedAt = cfg.setup.completedAt || null;
+                    }
+                } catch (cfgErr) {
+                    extensionHandle.log.warn(
+                        `${ENM_LOG_PREFIX} /setup/state: ConfigStore.load `
+                        + `failed during empty-row fallback: ${cfgErr.message}`,
+                    );
+                }
                 return res.json(successBody({
-                    completed: false,
-                    currentStep: 'welcome',
-                    osCheckPassed: false,
-                    diskCheckPassed: false,
-                    walletCheckPassed: false,
+                    completed: cfgCompleted,
+                    currentStep: cfgCompleted ? 'complete' : 'welcome',
+                    completedAt: cfgCompletedAt,
+                    osCheckPassed: cfgCompleted,
+                    diskCheckPassed: cfgCompleted,
+                    walletCheckPassed: cfgCompleted,
                     binaryPath: null,
                     binaryVersion: null,
-                    keystoreImported: false,
-                    configGenerated: false,
+                    keystoreImported: cfgCompleted,
+                    configGenerated: cfgCompleted,
                 }));
             }
             const row = rows[0];
