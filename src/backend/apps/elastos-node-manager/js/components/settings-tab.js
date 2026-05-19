@@ -716,24 +716,39 @@
     };
 
     /**
-     * beta.3.93 (Wave M2.5) — Class E (SPV light client) settings mount.
+     * Class E (SPV) settings mount.
      *
-     * SPV is likely deferred indefinitely per plan §12 open question Q8
-     * (recommend defer; selector entry routes to "advanced only" dialog).
-     * If shipped (M6.7), the layout is minimal: ports + filter type.
+     * SPV (Simple Payment Verification) is a wallet/client protocol —
+     * mobile and light wallets use it to verify transactions without
+     * holding the full chain. The Main chain node already serves SPV
+     * clients via Bloom-filter relaying (Elastos.ELA/elanet/server.go);
+     * there is no separate SPV node mode an operator runs. This pane
+     * exists because the chain-selector ships an "SPV Module" row;
+     * its job here is to tell the operator honestly that there's
+     * nothing to configure.
      *
      * @private
      */
     SettingsTab.prototype._mountSpvSettings = function () {
-        var title = _tFb('settings_class_stub.spv_title', 'SPV settings');
-        var body  = _tFb(
-            'settings_class_stub.spv_body',
-            'Class E (SPV light client) is likely deferred indefinitely (plan §12 Q8). If shipped (M6.7) the layout will be minimal: RPC port and filter type.',
+        var title = _tFb('settings_class_stub.spv_title', 'SPV (light client)');
+        var lead = _tFb(
+            'settings_class_stub.spv_lead',
+            'SPV (Simple Payment Verification) is a wallet/client protocol, '
+            + 'not a node mode. Lightweight wallets — like the Elastos Essentials '
+            + 'mobile wallet — connect to your Main chain node and use SPV to '
+            + 'verify transactions without downloading the full chain.',
+        );
+        var note = _tFb(
+            'settings_class_stub.spv_note',
+            'Your Main chain node already serves SPV clients automatically. '
+            + 'There is nothing to configure here, and you can safely ignore '
+            + 'this option.',
         );
         this.root.innerHTML = ''
             + '<div class="enm-settings-class-stub" role="status" aria-live="polite">'
             + '<h2>' + escapeHtml(title) + '</h2>'
-            + '<p>' + escapeHtml(body) + '</p>'
+            + '<p>' + escapeHtml(lead) + '</p>'
+            + '<p>' + escapeHtml(note) + '</p>'
             + '</div>';
     };
 

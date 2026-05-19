@@ -640,9 +640,14 @@
             // Class D (Arbiter)
             arbiter_title:  'Arbiter settings',
             arbiter_body:   'Class D (Arbiter cross-chain signer) settings land in M6.4. The layout will include Wallet & Mining (wallet password, mining address, ELA balance), the Cross-chain Status reachability matrix, and a Danger Zone with reset controls.',
-            // Class E (SPV)
-            spv_title:      'SPV settings',
-            spv_body:       'Class E (SPV light client) is likely deferred indefinitely (plan §12 Q8). If shipped (M6.7) the layout will be minimal: RPC port and filter type.',
+            // Class E (SPV) — 0.5.15 audit Session 15. SPV is a
+            // wallet/client protocol, not a node mode (mainchain serves
+            // SPV clients via Bloom-filter relaying in elanet/server.go).
+            // The stub is operator-honest: explains what SPV is, then
+            // tells the operator there's nothing to configure.
+            spv_title:      'SPV (light client)',
+            spv_lead:       'SPV (Simple Payment Verification) is a wallet/client protocol, not a node mode. Lightweight wallets — like the Elastos Essentials mobile wallet — connect to your Main chain node and use SPV to verify transactions without downloading the full chain.',
+            spv_note:       'Your Main chain node already serves SPV clients automatically. There is nothing to configure here, and you can safely ignore this option.',
         },
 
         chain_actions: {
