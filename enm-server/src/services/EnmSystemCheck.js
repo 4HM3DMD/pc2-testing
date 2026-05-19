@@ -48,8 +48,22 @@ const FSTAB_ENTRY = '/swapfile none swap sw 0 0';
  * `ramRecommendedGb` only triggers a 'recommended' warning when total
  * is in [min, recommended); `ramRemediableExactGb` triggers add-swap
  * (only the exact value — <8 GB is hopeless, >8 GB doesn't need it).
+ *
+ * beta.0.5.0 — opt-in dev relaxation. Setting
+ * `ENM_DEV_RELAX_SYSCHECK=true` swaps the strict thresholds for a
+ * relaxed set (council RAM 30 GB / disk 50 GB) so the wizard can run
+ * on developer boxes. NOT FOR PRODUCTION — gated by an explicit env
+ * flag + a stderr warning so it can't be enabled accidentally. The
+ * exported `THRESHOLDS` name stays stable so callers and tests still
+ * resolve.
  */
-const THRESHOLDS = Object.freeze({
+const RELAX = process.env.ENM_DEV_RELAX_SYSCHECK === 'true';
+if (RELAX) {
+    // Warning log so the operator sees this in journalctl
+    // eslint-disable-next-line no-console
+    console.warn('[EnmSystemCheck] ENM_DEV_RELAX_SYSCHECK=true — using relaxed thresholds. NOT FOR PRODUCTION.');
+}
+const THRESHOLDS_STRICT = Object.freeze({
     council: Object.freeze({
         cpuCoresMin: 8,
         ramMinGb: 42,
@@ -65,6 +79,23 @@ const THRESHOLDS = Object.freeze({
         ramRemediableExactGb: 8,
     }),
 });
+const THRESHOLDS_RELAXED = Object.freeze({
+    council: Object.freeze({
+        cpuCoresMin: 8,
+        ramMinGb: 30,
+        ramRecommendedGb: 32,
+        diskFreeGbMin: 50,
+        ramRemediableExactGb: null,
+    }),
+    bpos: Object.freeze({
+        cpuCoresMin: 4,
+        ramMinGb: 8,
+        ramRecommendedGb: 8,
+        diskFreeGbMin: 50,
+        ramRemediableExactGb: 8,
+    }),
+});
+const THRESHOLDS = RELAX ? THRESHOLDS_RELAXED : THRESHOLDS_STRICT;
 
 /**
  * Round bytes → whole GB. Truncate (Math.floor) so "31.9 GB" doesn't
@@ -292,6 +323,28 @@ async function runSystemCheck(input) {
     if (pathName !== 'council' && pathName !== 'bpos') {
         throw new Error(`EnmSystemCheck.runSystemCheck: unknown path "${pathName}"`);
     }
+    // beta.0.5.0 — synthetic pass when setup is already completed.
+    // Lazy-require ConfigStore so test harnesses that import THRESHOLDS
+    // without a configured data dir don't trip the load() side effect.
+    try {
+        const ConfigStore = require('./ConfigStore');
+        const cfg = await ConfigStore.load();
+        if (cfg && cfg.setup && cfg.setup.completed === true) {
+            return {
+                ts: Date.now(),
+                path: pathName,
+                previouslyVerified: true,
+                checks: [{
+                    id: 'setup-completed',
+                    label: 'System check previously passed',
+                    ok: true,
+                    message: `Setup completed ${new Date(cfg.setup.completedAt || 0).toISOString()}`,
+                    severity: 'required',
+                }],
+                canProceed: true,
+            };
+        }
+    } catch (_) { /* not yet configured — run the real checks */ }
     const t = THRESHOLDS[pathName];
 
     const release = readOsRelease();

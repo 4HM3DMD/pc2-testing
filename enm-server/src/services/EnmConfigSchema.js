@@ -91,6 +91,11 @@ const mainchainSchema = Joi.object({
     enabled: Joi.boolean().default(true),
     binaryPath: Joi.string().min(1).required(),
     binaryVersion: Joi.string().allow(null, '').default(null),
+    // beta.0.5.0 — epoch ms of last binary install; HealthRules.detectF8
+    // suppresses the version-drift proposal for 1h after install so
+    // geth-fork sidechains' internal-version reporting doesn't trip
+    // a cosmetic rule on every fresh install.
+    binaryInstalledAt: Joi.number().integer().allow(null).default(null),
     dataDir: Joi.string().required(),
     activeNet: Joi.string().valid('mainnet', 'testnet', 'regnet').default('mainnet'),
     ports: portsSchema.required(),
@@ -235,6 +240,10 @@ const setupSchema = Joi.object({
         // either path advances completedStep through 'bootstrap'.
         'bootstrap',
         'keystore', 'config', 'complete',
+        // beta.0.5.0 — Council orchestrator's finalization step writes
+        // 'council-install' when the start-chains runStep finishes, so
+        // the wizard does not re-mount on the next page load.
+        'council-install',
     ).default('welcome'),
 });
 
@@ -304,6 +313,8 @@ const classBSchema = Joi.object({
     enabled: Joi.boolean().default(false),
     binaryPath: Joi.string().allow('').default(''),
     binaryVersion: Joi.string().allow('').default(''),
+    // beta.0.5.0 — epoch ms of last binary install; see mainchainSchema.
+    binaryInstalledAt: Joi.number().integer().allow(null).default(null),
     activeNet: Joi.string().valid('mainnet', 'testnet').default('mainnet'),
     ports: classBPortsSchema.required(),
     pbft: classBPbftSchema,
@@ -345,6 +356,8 @@ const classCSchema = Joi.object({
     enabled: Joi.boolean().default(false),
     binaryPath: Joi.string().allow('').default(''),
     binaryVersion: Joi.string().allow('').default(''),
+    // beta.0.5.0 — epoch ms of last binary install; see mainchainSchema.
+    binaryInstalledAt: Joi.number().integer().allow(null).default(null),
     activeNet: Joi.string().valid('mainnet', 'testnet').default('mainnet'),
     parentChainId: Joi.string().valid('esc', 'eid', 'pg').required(),
     scriptPath: Joi.string().allow('').default(''),
@@ -405,6 +418,8 @@ const classDSchema = Joi.object({
     enabled: Joi.boolean().default(false),
     binaryPath: Joi.string().allow('').default(''),
     binaryVersion: Joi.string().allow('').default(''),
+    // beta.0.5.0 — epoch ms of last binary install; see mainchainSchema.
+    binaryInstalledAt: Joi.number().integer().allow(null).default(null),
     activeNet: Joi.string().valid('mainnet', 'testnet').default('mainnet'),
     ports: classDPortsSchema.required(),
     wallet: classDWalletSchema,

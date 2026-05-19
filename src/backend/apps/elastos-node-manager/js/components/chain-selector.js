@@ -128,6 +128,17 @@
                 self._saveStoredSelection('mainchain');
                 resetHappened = true;
             }
+            // beta.0.5.0 — when the operator's node flips from bpos-only to council
+            // (sidechains/oracles/arbiter installed) AND they don't have an
+            // explicit stored selection, default to the Multi-chain overview ('all').
+            // Operators on a council node land on the dashboard expecting to see
+            // ALL their chains; pre-0.5.0 they'd see just mainchain and have to
+            // hunt for the selector.
+            if (self._mode === 'council' && !self._loadStoredSelection()) {
+                self._activeKey = 'all';
+                self._saveStoredSelection('all');
+                resetHappened = true;
+            }
             self._render();
             if (resetHappened) {
                 try {

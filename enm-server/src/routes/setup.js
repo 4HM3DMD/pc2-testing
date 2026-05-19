@@ -337,6 +337,9 @@ function build(extensionHandle) {
                             if (cfg.chains && cfg.chains[chainId]) {
                                 cfg.chains[chainId].binaryPath = s.binaryPath;
                                 cfg.chains[chainId].binaryVersion = s.version || '';
+                                // beta.0.5.0 — stamp install time so F8
+                                // suppresses version-drift for 1h after install.
+                                cfg.chains[chainId].binaryInstalledAt = Date.now();
                                 await ConfigStore.save(cfg);
                                 extensionHandle.log.info(
                                     `${ENM_LOG_PREFIX} install ${chainId} (Class B): wrote `
@@ -740,6 +743,9 @@ function build(extensionHandle) {
                 enabled: true,
                 binaryPath: stateRow.binary_path,
                 binaryVersion: stateRow.binary_version || null,
+                // beta.0.5.0 — stamp install time so F8 suppresses
+                // version-drift proposals for 1h after install.
+                binaryInstalledAt: Date.now(),
                 dataDir: chainDir('mainchain'),
                 activeNet: 'mainnet',
                 ports: { ...ELA_DEFAULT_PORTS },
@@ -1081,6 +1087,9 @@ function build(extensionHandle) {
                 enabled: false,           // operator flips after M3.8 binary download
                 binaryPath: '',           // filled by M3.8 install endpoint
                 binaryVersion: '',
+                // beta.0.5.0 — stamped when the binary download endpoint
+                // persists the resolved path/version (see M3.8 polling loop).
+                binaryInstalledAt: null,
                 activeNet,
                 ports,
                 pbft: {
@@ -1231,6 +1240,9 @@ function build(extensionHandle) {
                 enabled: false,                  // operator flips after install
                 binaryPath: runtime.path,         // the node interpreter
                 binaryVersion: runtime.version.raw,
+                // beta.0.5.0 — stamp install time so F8 suppresses
+                // version-drift proposals for 1h after install.
+                binaryInstalledAt: Date.now(),
                 activeNet,
                 parentChainId,
                 scriptPath,
@@ -1328,6 +1340,9 @@ function build(extensionHandle) {
                 enabled: false,           // operator flips after install
                 binaryPath: '',           // M3.8-style download path; M6.7 lands binary
                 binaryVersion: '',
+                // beta.0.5.0 — stamped by the M3.8-style binary download
+                // path when arbiter binary actually lands.
+                binaryInstalledAt: null,
                 activeNet,
                 ports,
                 wallet: {
@@ -2068,6 +2083,9 @@ async function runCouncilInstall(args) {
                 enabled: m.enabled !== false,
                 binaryPath: onDisk.binaryPath,
                 binaryVersion: onDisk.version || null,
+                // beta.0.5.0 — stamp install time so F8 suppresses
+                // version-drift proposals for 1h after install.
+                binaryInstalledAt: Date.now(),
                 dataDir: chainDir('mainchain'),
                 activeNet: inputs.activeNet || m.activeNet || 'mainnet',
                 ports: { ...ELA_DEFAULT_PORTS, ...(m.ports || {}) },
@@ -2113,6 +2131,9 @@ async function runCouncilInstall(args) {
                     enabled: false,
                     binaryPath: '',
                     binaryVersion: '',
+                    // beta.0.5.0 — stamped when the binary actually lands
+                    // in the install-binaries-parallel step (see below).
+                    binaryInstalledAt: null,
                     activeNet: inputs.activeNet,
                     ports,
                     pbft: { usesMainchainKeystore: true, ipAddress: null },
@@ -2270,6 +2291,9 @@ async function runCouncilInstall(args) {
                 if (cfg2.chains[r.cid]) {
                     cfg2.chains[r.cid].binaryPath = r.status.binaryPath;
                     cfg2.chains[r.cid].binaryVersion = r.status.version || '';
+                    // beta.0.5.0 — stamp install time so F8 suppresses
+                    // version-drift proposals for 1h after install.
+                    cfg2.chains[r.cid].binaryInstalledAt = Date.now();
                 }
             }
             await ConfigStore.save(cfg2);
@@ -2335,6 +2359,9 @@ async function runCouncilInstall(args) {
                     enabled: false,
                     binaryPath: runtime.path,
                     binaryVersion: runtime.version.raw,
+                    // beta.0.5.0 — stamp install time so F8 suppresses
+                    // version-drift proposals for 1h after install.
+                    binaryInstalledAt: Date.now(),
                     activeNet: inputs.activeNet,
                     parentChainId: parent,
                     // beta.0.4.7 — per-oracle subdir layout. Pre-0.4.7
@@ -2378,6 +2405,9 @@ async function runCouncilInstall(args) {
                 enabled: false,
                 binaryPath: arbStatus.binaryPath,
                 binaryVersion: arbStatus.version || '',
+                // beta.0.5.0 — stamp install time so F8 suppresses
+                // version-drift proposals for 1h after install.
+                binaryInstalledAt: Date.now(),
                 activeNet: inputs.activeNet,
                 ports,
                 wallet: { usesMainchainKeystore: true, passwordSource: 'mainchain-ela-txt' },
@@ -2460,6 +2490,21 @@ async function runCouncilInstall(args) {
                         + '(non-fatal; F1 self-heal will retry)');
                 }
             }
+            // beta.0.5.0 — mark setup as completed so app.js doesn't re-mount the
+            // wizard on the next page load. Pre-0.5.0 the orchestrator only set
+            // _councilInstallState.success=true (in-memory); the BACKEND setup
+            // state (cfg.setup.completed) was never written, so /setup/state
+            // returned currentStep≠'welcome' on every reload → wizard re-mounted.
+            //
+            // Use a FRESH ConfigStore.load() (not the cfg2 from earlier in this
+            // handler) so we don't clobber any concurrent writes from chain
+            // adapters that ran during `await adapter.start(...)` above.
+            const cfgFinal = await ConfigStore.load();
+            cfgFinal.setup = cfgFinal.setup || {};
+            cfgFinal.setup.completed = true;
+            cfgFinal.setup.completedAt = Date.now();
+            cfgFinal.setup.completedStep = 'council-install';
+            await ConfigStore.save(cfgFinal);
             return { message: `${started.length}/${startOrder.length} chains started` };
         });
 
@@ -2492,6 +2537,32 @@ async function runCouncilPreflight(args) {
     if (_preflightCache.result && now - _preflightCache.ts < 30_000) {
         return _preflightCache.result;
     }
+    // beta.0.5.0 — skip preflight when setup is already completed.
+    // Pre-0.5.0, post-install navigation back to Card 5 would re-run the
+    // preflight against current-disk-free (post-snapshot consumption) and
+    // block on the 250GB threshold; the operator had a working node and
+    // the preflight refused to acknowledge it. After install, the checks
+    // don't gate anything useful — surface a synthetic "previously verified"
+    // report and let the operator continue.
+    try {
+        const cfg = await ConfigStore.load();
+        if (cfg.setup && cfg.setup.completed === true) {
+            const result = {
+                ts: Date.now(),
+                previouslyVerified: true,
+                checks: [{
+                    id: 'setup-completed',
+                    label: 'Setup previously completed',
+                    ok: true,
+                    message: `Completed at ${new Date(cfg.setup.completedAt || 0).toISOString()}`,
+                    severity: 'required',
+                }],
+                allRequiredOk: true,
+            };
+            _preflightCache = { ts: Date.now(), result };
+            return result;
+        }
+    } catch (_) { /* fall through to live check */ }
     const EnmCrypto = require('../services/EnmCrypto');
     const { enmDataDir } = require('../services/DataDir');
     const fs = require('node:fs');
@@ -2516,6 +2587,10 @@ async function runCouncilPreflight(args) {
     // + PG; 20 GB was a hold-over from the mainchain-only era and
     // would let an under-provisioned host start the install and then
     // ENOSPC mid-extraction.
+    // beta.0.5.0 — opt-in dev relaxation. `ENM_DEV_RELAX_SYSCHECK=true`
+    // lowers the threshold to 50 GB so the wizard can run on developer
+    // boxes; production keeps 250 GB.
+    const DISK_MIN = process.env.ENM_DEV_RELAX_SYSCHECK === 'true' ? 50 : 250;
     let diskOk = false;
     let diskMsg = 'unknown';
     try {
@@ -2525,7 +2600,7 @@ async function runCouncilPreflight(args) {
         if (typeof fsp.statfs === 'function') {
             const sf = await fsp.statfs(dir);
             const freeGb = Math.floor((sf.bavail * sf.bsize) / (1024 * 1024 * 1024));
-            diskOk = freeGb >= 250;
+            diskOk = freeGb >= DISK_MIN;
             diskMsg = `${freeGb} GB free`;
         } else {
             diskOk = true;
@@ -2536,7 +2611,7 @@ async function runCouncilPreflight(args) {
     }
     checks.push({
         id: 'disk-space',
-        label: 'Disk space ≥ 250 GB free',
+        label: `Disk space ≥ ${DISK_MIN} GB free`,
         ok: diskOk,
         message: diskMsg,
         severity: 'required',

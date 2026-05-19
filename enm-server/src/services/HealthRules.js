@@ -302,7 +302,14 @@ function detectF8(snap) {
     const actual = snap.ruleState && snap.ruleState.lastBinaryVersion;
     if (!expected || !actual) return null;
     if (expected === actual) return null;
-
+    // beta.0.5.0 — suppress for 1 hour after install. Geth-fork sidechains
+    // (esc/eid/pg) report their internal geth version on the `version`
+    // subcommand, NOT the elastos-fork tag we downloaded — produces
+    // cosmetic version-drift proposals on every fresh install. The
+    // 1-hour window catches genuine out-of-band binary swaps but not
+    // the install-time noise.
+    const installedAt = snap.chainConfig.binaryInstalledAt;
+    if (installedAt && Date.now() - installedAt < 3_600_000) return null;
     return {
         ruleId: 'F8',
         tier: HEALING_TIERS.OWNER_CONFIRMS,

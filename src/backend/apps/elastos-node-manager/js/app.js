@@ -817,7 +817,13 @@
         // fresh post-reinstall state.
         var self = this;
         if (setupState) {
-            var resumeFromArg = setupState.currentStep && setupState.currentStep !== 'welcome';
+            // beta.0.5.0 — also gate on setup.completed. The orchestrator now writes
+            // cfg.setup.completed=true at the end of start-chains. Pre-0.5.0 the
+            // orchestrator left currentStep at 'start-chains' (or last orchestrator
+            // step) → resume was true → wizard re-mounted on every reload.
+            var resumeFromArg = setupState.currentStep
+                && setupState.currentStep !== 'welcome'
+                && !setupState.completed;
             if (resumeFromArg) {
                 this._mountSetupConversation();
             } else {
@@ -830,7 +836,7 @@
         // or partial install), skip the welcome screen and resume in the
         // conversation. Otherwise, lead with the welcome.
         this.services.api.get('/setup/state', { skipCache: true }).then(function (s) {
-            var resume = s && s.currentStep && s.currentStep !== 'welcome';
+            var resume = s && s.currentStep && s.currentStep !== 'welcome' && !s.completed;
             if (resume) {
                 self._mountSetupConversation();
             } else {
