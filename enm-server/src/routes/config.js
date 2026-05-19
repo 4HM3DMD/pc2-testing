@@ -152,7 +152,7 @@ function build(extensionHandle) {
             const cfg = await ConfigStore.load();
             const chain = cfg.chains && cfg.chains.mainchain;
             if (!chain) {
-                return res.status(409).json(errorBody('Mainchain not configured.'));
+                return res.status(409).json(errorBody('Main chain not configured.'));
             }
             chain.dpos = chain.dpos || {};
             if (mode) chain.dpos.ipAddressMode = mode;
@@ -212,7 +212,7 @@ function build(extensionHandle) {
             const cfg = await ConfigStore.load();
             const chain = cfg.chains && cfg.chains.mainchain;
             if (!chain) {
-                return res.status(409).json(errorBody('Mainchain not configured.'));
+                return res.status(409).json(errorBody('Main chain not configured.'));
             }
             // Joi validated types already — these checks are now just
             // "did the operator send the field?" presence guards.
@@ -497,7 +497,7 @@ function build(extensionHandle) {
         const enabledRules = body.enabledRules;
         if (!enabledRules || typeof enabledRules !== 'object' || Array.isArray(enabledRules)) {
             return res.status(400).json(errorBody(
-                'Body must include { enabledRules: { ruleId: bool, ... } }.',
+                'Missing or malformed rule toggles — expected a map of rule ID to true/false.',
             ));
         }
         // Validate keys + values inline (Joi schema enforces this too,
@@ -507,12 +507,12 @@ function build(extensionHandle) {
         for (const k of Object.keys(enabledRules)) {
             if (!RULE_KEY_RE.test(k)) {
                 return res.status(400).json(errorBody(
-                    `Invalid ruleId "${k}". Must match /^F\\d{1,2}$/ or be "AUTOSTART".`,
+                    `Invalid rule ID "${k}". Rule IDs must be F1-F99 or AUTOSTART.`,
                 ));
             }
             if (typeof enabledRules[k] !== 'boolean') {
                 return res.status(400).json(errorBody(
-                    `enabledRules.${k} must be boolean.`,
+                    `Rule "${k}" must be true or false.`,
                 ));
             }
         }
