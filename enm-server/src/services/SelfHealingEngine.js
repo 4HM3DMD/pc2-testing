@@ -511,6 +511,35 @@ class SelfHealingEngine {
         // The chainConfig must include binaryPath; the chains-route layer
         // already merged user config into a runnable shape before HealthChecker
         // ever reaches us (Phase 2 contract).
+        //
+        // BUG-C6b (v0.5.158) — route the automated restart through the chain's
+        // ADAPTER, exactly like POST /chains/:id/restart. Class B (EVM,
+        // spawnArgs) and Class C (oracle, spawnEnv) build their spawn recipe
+        // inside adapter.start(); calling processService.restart() directly
+        // with a bare chainConfig (no spawnArgs) tripped NativeProcessService's
+        // config.json precondition ("config.json missing"), so self-heal could
+        // NEVER recover a sidechain/oracle after it exited — they stayed down
+        // until OWNER-CONFIRMS (cycle-4 turnkey finding). ela mainchain
+        // (config.json-based) still works on the fallback path if its adapter
+        // is somehow unavailable.
+        let adapter = null;
+        try {
+            const ChainRegistry = require('./ChainRegistry');
+            adapter = ChainRegistry.getAdapter(chainId);
+        } catch (_) { adapter = null; }
+        if (adapter && typeof adapter.restart === 'function') {
+            // Load the authoritative runnable cfg (same shape the manual
+            // route passes) so the adapter can rebuild spawnArgs/spawnEnv.
+            let runCfg = chainConfig;
+            try {
+                const ConfigStore = require('./ConfigStore');
+                const cfg = await ConfigStore.load();
+                if (cfg && cfg.chains && cfg.chains[chainId]) {
+                    runCfg = cfg.chains[chainId];
+                }
+            } catch (_) { /* fall back to the passed chainConfig */ }
+            return adapter.restart(runCfg);
+        }
         return this.processService.restart(chainId, chainConfig);
     }
 

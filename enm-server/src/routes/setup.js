@@ -1673,7 +1673,15 @@ function build(extensionHandle) {
                 masterPassword,
                 sharedPassword,
                 sharedRewardAddress:  rewardCheck.normalized || body.rewardAddress,
-                arbiterMiningAddress: rewardCheck.normalized || body.rewardAddress,
+                // BUG-C9 (v0.5.158) — the arbiter's mining.miningAddress must be
+                // an ELA mainchain address (base58check), NOT the EVM 0x reward
+                // address. Historically this defaulted to rewardAddress, so the
+                // arbiter binary refused to start ("mining.miningAddress: not a
+                // valid ELA address ... got 0x..."). Pass through only an
+                // explicit ELA address here; when absent the install-arbiter-cfg
+                // step derives the operator's own ELA address from the mainchain
+                // keystore identity (keystore-account.json).
+                arbiterMiningAddress: (body.arbiterMiningAddress || '').trim(),
                 activeNet,
                 useSnapshots,
             },
@@ -2703,6 +2711,35 @@ async function runCouncilInstall(args) {
             const ports = inputs.activeNet === 'testnet'
                 ? { rpc: 21536, p2p: 21538 }
                 : { rpc: 20536, p2p: 20538 };
+            // BUG-C9 (v0.5.158) — resolve a VALID ELA mainchain address for the
+            // arbiter's mining.miningAddress. The arbiter binary validates this
+            // at start and refuses a non-ELA value (the old default was the EVM
+            // 0x reward address → "not a valid ELA address" → arbiter never
+            // started). Prefer an explicit arbiterMiningAddress; otherwise use
+            // the operator's own ELA address from the mainchain keystore identity
+            // (keystore-account.json, written at install-mainchain-keystore time).
+            let arbiterMining = '';
+            const explicitMining = String(inputs.arbiterMiningAddress || '').trim();
+            const explicitChk = explicitMining
+                ? EnmCrypto.validateElaAddress(explicitMining) : { valid: false };
+            if (explicitChk.valid) {
+                arbiterMining = explicitChk.normalized || explicitMining;
+            } else {
+                try {
+                    const idRaw = await fsp.readFile(
+                        path.join(chainDir('mainchain'), 'keystore-account.json'), 'utf8');
+                    const id = JSON.parse(idRaw);
+                    const idChk = (id && id.address)
+                        ? EnmCrypto.validateElaAddress(id.address) : { valid: false };
+                    if (idChk.valid) { arbiterMining = idChk.normalized || id.address; }
+                } catch (_) { /* handled by the guard below */ }
+            }
+            if (!arbiterMining) {
+                throw new Error(
+                    'arbiter: could not resolve a valid ELA mining address '
+                    + '(no explicit arbiterMiningAddress and the mainchain keystore '
+                    + 'identity is missing or invalid).');
+            }
             cfg2.chains = cfg2.chains || {};
             cfg2.chains.arbiter = {
                 enabled: false,
@@ -2714,7 +2751,7 @@ async function runCouncilInstall(args) {
                 activeNet: inputs.activeNet,
                 ports,
                 wallet: { usesMainchainKeystore: true, passwordSource: 'mainchain-ela-txt' },
-                mining: { miningAddress: inputs.arbiterMiningAddress, sideChainPowFeeEla: 0.1 },
+                mining: { miningAddress: arbiterMining, sideChainPowFeeEla: 0.1 },
                 crossChain: { sideNodeList: [], syncIntervalMs: 1000 },
                 healing: { enabledRules: {} },
             };
