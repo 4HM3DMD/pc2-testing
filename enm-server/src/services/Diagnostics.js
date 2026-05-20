@@ -180,7 +180,7 @@ async function runFullDiagnose(deps) {
                         id: 'binary-version-drift',
                         status: STATUS.WARN,
                         title: 'Binary version drift (F8)',
-                        detail: 'Recorded ' + chainConfig.binaryVersion + ' but ela now reports ' + smoke.version + '.',
+                        detail: 'Recorded ' + chainConfig.binaryVersion + ' but ' + chainId + ' now reports ' + smoke.version + '.',
                         fixes: [
                             'If you intentionally rebuilt, accept the new version:',
                             '  Settings → Mainchain Advanced → Save',
@@ -192,7 +192,7 @@ async function runFullDiagnose(deps) {
                 findings.push({
                     id: 'binary-smoke',
                     status: STATUS.FAIL,
-                    title: 'ela --version did not return cleanly',
+                    title: chainId + ' --version did not return cleanly',
                     detail: smoke.reason || 'unknown failure',
                     fixes: [
                         'Re-run the build:',
@@ -334,7 +334,7 @@ async function runFullDiagnose(deps) {
                 id: 'leveldb-lock',
                 status: STATUS.WARN,
                 title: 'Stale LevelDB LOCK file detected',
-                detail: 'File at ' + lockPath + ' exists with no live owner. ela will refuse to start.',
+                detail: 'File at ' + lockPath + ' exists with no live owner. ' + chainId + ' will refuse to start.',
                 fixes: [
                     'rm ' + lockPath,
                     'Then click Start.',
@@ -368,7 +368,7 @@ async function runFullDiagnose(deps) {
                     id: 'peer-count',
                     status: STATUS.FAIL,
                     title: 'Peer count is zero (F3 / F16)',
-                    detail: 'ela cannot reach any DPoS peer. The DNS seeds may be down or our network egress is blocked.',
+                    detail: chainId + ' cannot reach any peer. The DNS seeds may be down or our network egress is blocked.',
                     fixes: [
                         'Check outbound TCP from this host:',
                         '  curl -v https://api.elastos.io/ela',
@@ -453,7 +453,7 @@ async function runFullDiagnose(deps) {
                     id: 'disk-space',
                     status: STATUS.FAIL,
                     title: 'Disk space critical (F5): ' + freeGb.toFixed(1) + ' GB free',
-                    detail: 'ela halts on disk-full. You have minutes to act.',
+                    detail: chainId + ' halts on disk-full. You have minutes to act.',
                     fixes: [
                         'Free space immediately:',
                         '  sudo apt-get autoremove --purge',

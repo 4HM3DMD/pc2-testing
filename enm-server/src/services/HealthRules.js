@@ -919,11 +919,11 @@ const RULE_METADATA = Object.freeze({
     // spec that was never built (no height-regression detector exists
     // anywhere in this file). Behavior unchanged; pure label fix.
     F7:  { tier: 'OWNER_CONFIRMS',  title: 'Port conflict on start',
-           description: 'A port the chain needs (e.g. 20338 / 20339 / 20336) is already bound by another process. Open Settings → Advanced and pick free ports, or stop the conflicting service.' },
+           description: 'A port the chain needs is already bound by another process. Open Settings → Advanced and pick free ports, or stop the conflicting service.' },
     F8:  { tier: 'OWNER_CONFIRMS',  title: 'Binary version drift',
            description: 'The ela binary on disk reports a different version than ENM recorded at install. Suppressed for 1 hour after a fresh install (Geth-fork sidechains report their internal geth version on the `version` subcommand, not the elastos-fork tag). After the grace window, surfaces an OWNER_CONFIRMS proposal to update the recorded version.' },
     F9:  { tier: 'OWNER_CONFIRMS',  title: 'Config drift on disk',
-           description: 'Notice when ela.conf on disk has been edited outside of ENM (manual operator change).' },
+           description: 'Notice when the chain’s config file on disk has been edited outside of ENM (manual operator change).' },
     // 0.5.52 audit Session 52 — F10/F11 metadata realigned to detect-
     // function reality. Pre-0.5.52 these described phantom features
     // (rotation reminder / deposit-drift) that have never existed in
@@ -944,7 +944,7 @@ const RULE_METADATA = Object.freeze({
     F18: { tier: 'CRITICAL_NOTIFY', title: 'BPoS no-inbound',
            description: 'BPoS needs inbound peers to publish proposals. Surface a critical alert if there have been none for 5 minutes.' },
     F19: { tier: 'CRITICAL_NOTIFY', title: 'Host port conflict',
-           description: 'Another process on this host is bound to a port ela needs (20338 / 20339 / 20336). Surface critical for operator triage.' },
+           description: 'Another process on this host is bound to a port the chain needs. Surface critical for operator triage.' },
     F22: { tier: 'CRITICAL_NOTIFY', title: 'DPoS state desync (alert)',
            description: 'When the chain freezes with "sponsor is not in current or last arbitrators" — the signature of cp_dpos/default.dcp diverging from the block ledger — surface a critical alert with manual recovery steps. Pre-beta.3.78 this rule auto-rolled state back to a snapshot; that path was removed per operator review since it papered over upstream ela bugs and risked further desync.' },
     // beta.4.00 (Wave M3.6) — Class B-only. miner.enabled=true but
