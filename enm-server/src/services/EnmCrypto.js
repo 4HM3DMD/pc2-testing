@@ -227,6 +227,56 @@ function validateElaAddress(addr) {
     return { valid: true };
 }
 
+// enode URL (geth peer reference): enode://<pubkey>@<host>:<port>[?discport=N]
+//   pubkey  — the node's secp256k1 public key WITHOUT the 0x04 prefix =
+//             64 bytes = 128 hex chars (NOT 130; the uncompressed-point
+//             prefix is dropped in the enode form).
+//   host    — IPv4, bracketed IPv6 ([::1]), or DNS hostname.
+//   port    — TCP listener (devp2p RLPx). 1–65535.
+//   discport— optional UDP discovery port override (defaults to <port>).
+// v0.5.175 — used by the self-service "Peers & Bootnodes" panel so an
+// operator whose EVM sidechain is stuck at 0 peers can paste an enode and
+// have ENM validate it before persisting + live-dialing it.
+const ENODE_RE = /^enode:\/\/([0-9a-fA-F]{128})@(\[[0-9a-fA-F:]+\]|[^@:/]+):(\d{1,5})(\?discport=(\d{1,5}))?$/;
+
+/**
+ * Validate a geth enode URL (Class B EVM sidechain peer/bootnode). Returns a
+ * structured result mirroring validateEthAddress so the route can surface a
+ * hard error on bad shape. The pubkey is normalized to lowercase (geth treats
+ * it case-insensitively; lowercase is the canonical on-wire form).
+ *
+ * @param {string} enode
+ * @returns {{ valid: boolean, normalized?: string, warning?: string }}
+ */
+function validateEnode(enode) {
+    if (typeof enode !== 'string' || enode.trim().length === 0) {
+        return { valid: false, warning: 'enode is empty' };
+    }
+    const s = enode.trim();
+    if (s.length > 512) {
+        return { valid: false, warning: 'enode is too long (max 512 chars)' };
+    }
+    const m = ENODE_RE.exec(s);
+    if (!m) {
+        return {
+            valid: false,
+            warning: `not a valid enode URL (expected enode://<128-hex-pubkey>@<host>:<port>; got "${s.slice(0, 32)}${s.length > 32 ? '…' : ''}")`,
+        };
+    }
+    const port = Number(m[3]);
+    if (port < 1 || port > 65535) {
+        return { valid: false, warning: `enode port out of range (1–65535; got ${port})` };
+    }
+    if (m[5] !== undefined) {
+        const discport = Number(m[5]);
+        if (discport < 1 || discport > 65535) {
+            return { valid: false, warning: `enode discport out of range (1–65535; got ${discport})` };
+        }
+    }
+    const normalized = `enode://${m[1].toLowerCase()}@${m[2]}:${m[3]}${m[4] || ''}`;
+    return { valid: true, normalized };
+}
+
 module.exports = {
     // Password generation + validation (node.sh gen_pass parity)
     generatePassword,
@@ -235,6 +285,7 @@ module.exports = {
     // Address validation
     validateEthAddress,
     validateElaAddress,
+    validateEnode,
     // Re-exports from EnmEncryption for unified imports
     encrypt: EnmEncryption.encrypt,
     decrypt: EnmEncryption.decrypt,
@@ -243,4 +294,5 @@ module.exports = {
     PASSWORD_COMPLEXITY,
     ETH_ADDR_RE,
     ELA_ADDR_RE,
+    ENODE_RE,
 };

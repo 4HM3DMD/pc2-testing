@@ -7413,3 +7413,139 @@ body[data-app-size="compact"] .enm-app .enm-overview-row .enm-overview-spark {
     white-space: pre-wrap;
     word-break: break-word;
 }
+
+/* v0.5.175 — Peers & Bootnodes panel (components/peers-panel.js). EVM-only
+   per-chain dashboard card: live peer count, stuck banner, add/remove
+   bootnodes, inline how-to. */
+.enm-app .enm-peers { margin-top: var(--sp-3, 12px); }
+.enm-app .enm-peers-title {
+    color: var(--text-primary);
+    font-size: 14px;
+    margin: 0 0 var(--sp-2, 8px) 0;
+}
+.enm-app .enm-peers-loading { color: var(--text-secondary); font-size: 13px; margin: 0; }
+.enm-app .enm-peers-error   { color: var(--error); font-size: 13px; margin: 0; }
+
+/* Live status line + state dot. */
+.enm-app .enm-peers-status {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2, 8px);
+    margin: 0 0 var(--sp-2, 8px) 0;
+}
+.enm-app .enm-peers-status-text { color: var(--text-primary); font-size: 13px; }
+.enm-app .enm-peers-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    flex: 0 0 auto;
+    background: var(--text-tertiary);
+    display: inline-block;
+}
+.enm-app .enm-peers-dot.running { background: var(--success); box-shadow: 0 0 6px var(--success-soft); }
+.enm-app .enm-peers-dot.warn    { background: var(--warning); box-shadow: 0 0 6px var(--warning-soft); }
+.enm-app .enm-peers-dot.stopped { background: var(--text-tertiary); }
+
+/* Stuck banner — amber, only shown when alive && 0 peers. */
+.enm-app .enm-peers-stuck {
+    background: var(--warning-bg);
+    border: 1px solid var(--warning-soft);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 13px;
+    line-height: 1.5;
+    padding: var(--sp-2, 8px) var(--sp-3, 12px);
+    margin: 0 0 var(--sp-3, 12px) 0;
+}
+.enm-app .enm-peers-stuck[hidden] { display: none; }
+
+/* Collapsible how-to. */
+.enm-app .enm-peers-help { margin: 0 0 var(--sp-3, 12px) 0; }
+.enm-app .enm-peers-help > summary {
+    color: var(--accent);
+    cursor: pointer;
+    font-size: 13px;
+    list-style: revert;
+}
+.enm-app .enm-peers-help-body { margin-top: var(--sp-2, 8px); }
+.enm-app .enm-peers-help-body p {
+    color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.5;
+    margin: 0 0 var(--sp-2, 8px) 0;
+}
+.enm-app .enm-peers-help-fmt { color: var(--text-tertiary) !important; font-size: 12px !important; }
+.enm-app .enm-peers-help-cmd {
+    background: var(--bg-page, #0f1218);
+    border: 1px solid var(--border-color, var(--border-subtle));
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    margin: 0 0 var(--sp-2, 8px) 0;
+    padding: var(--sp-2, 8px);
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+/* Current bootnodes list. */
+.enm-app .enm-peers-empty { color: var(--text-secondary); font-size: 13px; margin: 0 0 var(--sp-3, 12px) 0; }
+.enm-app .enm-peers-row {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2, 8px);
+    padding: var(--sp-2, 8px) 0;
+    border-bottom: 1px solid var(--border-color, var(--border-subtle));
+}
+.enm-app .enm-peers-row:last-child { border-bottom: none; }
+.enm-app .enm-peers-enode {
+    flex: 1 1 auto;
+    color: var(--text-secondary);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    word-break: break-all;
+}
+.enm-app .enm-peers-remove {
+    flex: 0 0 auto;
+    background: transparent;
+    border: 1px solid var(--border-color, var(--border-subtle));
+    border-radius: 6px;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    padding: 2px 8px;
+}
+.enm-app .enm-peers-remove:hover { color: var(--error); border-color: var(--error); }
+.enm-app .enm-peers-remove:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Add row. */
+.enm-app .enm-peers-add { margin-top: var(--sp-3, 12px); }
+.enm-app .enm-peers-add-label {
+    display: block;
+    color: var(--text-secondary);
+    font-size: 12px;
+    margin-bottom: var(--sp-2, 8px);
+}
+.enm-app .enm-peers-add-row { display: flex; gap: var(--sp-2, 8px); align-items: stretch; }
+.enm-app .enm-peers-input {
+    flex: 1 1 auto;
+    background: var(--bg-page, #0f1218);
+    border: 1px solid var(--border-color, var(--border-subtle));
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    padding: 8px 10px;
+}
+.enm-app .enm-peers-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
+.enm-app .enm-peers-input:disabled { opacity: 0.6; }
+.enm-app .enm-peers-add-btn { flex: 0 0 auto; }
+.enm-app .enm-peers-feedback {
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.5;
+    margin: var(--sp-2, 8px) 0 0 0;
+    min-height: 1em;
+}
+.enm-app .enm-peers-feedback-error { color: var(--error); }

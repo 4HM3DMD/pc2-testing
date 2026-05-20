@@ -10,7 +10,7 @@
     <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
     <meta name="referrer" content="no-referrer">
     <title>Elastos Node Manager</title>
-    <link rel="stylesheet" href="css/styles.css?ts=20260520v168">
+    <link rel="stylesheet" href="css/styles.css?ts=20260521v175">
     <script>
         // Beta 3 — Phase 1c carried over. Dark-only. We hard-code data-theme=dark
         // on documentElement so any rule that still says [data-theme="dark"] keeps
@@ -193,7 +193,7 @@
         mock-derived markup; their JS contracts (event listeners,
         lifecycle guards, ARIA wiring) stay intact.
     -->
-    <script defer src="js/strings.js?ts=20260520v168"></script>
+    <script defer src="js/strings.js?ts=20260521v175"></script>
     <script defer src="js/utils.js?ts=20260506g"></script>
     <script defer src="js/illustrations.js?ts=20260506g"></script>
     <script defer src="js/services/wallet.js?ts=20260506g"></script>
@@ -255,10 +255,16 @@
          the chain selector key is 'spv' (aggregate arbiter SPV height +
          per-sidechain SPV heights + on-demand logs-spv tail). -->
     <script defer src="js/components/spv-module.js?ts=20260520spv168"></script>
+    <!-- v0.5.175 — Peers & Bootnodes panel. Mounts on the per-chain
+         dashboard for EVM sidechains (Class B: esc/eid/pg) so an operator
+         whose chain is stuck at 0 peers can add a peer by hand (the geth
+         fork's discv4 auto-discovery is weak). Self-service: validated,
+         persisted as --bootnodes, live-dialed via admin_addPeer. -->
+    <script defer src="js/components/peers-panel.js?ts=20260521v175"></script>
     <!-- BP-E — technical-view.js retired. Beta 3 top-level tabs
          (Dashboard / Logs / Settings / Audit) replaced its 4-sub-tab
          wrapper; the Dashboard pane now mounts SystemStatus + ChainCard
          + BPoS card + ToolsUpdate directly from app.js._showDashboard. -->
-    <script defer src="js/app.js?ts=20260520v168"></script>
+    <script defer src="js/app.js?ts=20260521v175"></script>
 </body>
 </html>

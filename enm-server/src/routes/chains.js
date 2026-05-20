@@ -43,6 +43,11 @@ const { chainDir, pidFilePath } = require('../services/DataDir');
  *  before re-checking process state. */
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** v0.5.175 — upper bound on persisted bootnodes per EVM chain. geth's
+ *  default --maxpeers is 50; there's no reason to persist more bootnodes
+ *  than that, and an unbounded list is a footgun on the spawn arg line. */
+const MAX_BOOTNODES = 50;
+
 /**
  * @param {object} extensionHandle
  * @returns {import('express').Router}
@@ -1467,6 +1472,162 @@ function build(extensionHandle) {
     // Returns 501 on non-B chains, 404 on unknown chain, 400 on
     // miner-address shape failure (with the address-validation warning
     // text from EnmCrypto so the UI can surface "EIP-55 mismatch" etc.).
+    // --- GET peers + bootnodes (Class B EVM only) ---
+    // v0.5.175 — feeds the "Peers & Bootnodes" settings panel. Returns the
+    // persisted bootnode list plus the LIVE peer count so the UI can show a
+    // "stuck" banner when an EVM sidechain is alive but isolated (0 peers).
+    // The old EID/ESC geth fork has weak discv4 auto-discovery; an operator
+    // whose chain finds no peers needs to add one by hand (see PUT below).
+    router.get('/:chainId/bootnodes', limit('read'), async (req, res) => {
+        if (!readActorWallet(req)) {
+            return res.status(401).json(errorBody('Authentication required.'));
+        }
+        try {
+            const adapter = adapterOr404(req, res, extensionHandle);
+            if (!adapter) return undefined;
+            const chainId = adapter.chainId;
+            if (adapter.chainClass !== 'B') {
+                return res.status(501).json(errorBody(
+                    `Peer management is available only for Class B (EVM sidechain) chains. `
+                    + `'${chainId}' is class ${adapter.chainClass || 'unknown'}.`,
+                ));
+            }
+            const cfg = await ConfigStore.load();
+            const chainCfg = cfg.chains && cfg.chains[chainId];
+            if (!chainCfg) {
+                return res.status(404).json(errorBody(`Chain '${chainId}' not configured.`));
+            }
+            const status = ChainRegistry.getProcessService().statusSync(chainId);
+            const alive = !!(status && status.alive);
+            let peers = null;
+            let height = null;
+            let synced = null;
+            if (alive) {
+                const ph = await adapter.primaryHeight(chainCfg);
+                peers = ph.peers;
+                height = ph.height;
+                synced = ph.synced;
+            }
+            // "stuck" = running but isolated (no peers to sync from). Only
+            // meaningful while alive; a stopped chain isn't "stuck".
+            const stuck = alive && peers === 0;
+            return res.json(successBody({
+                chainId,
+                bootnodes: Array.isArray(chainCfg.bootnodes) ? chainCfg.bootnodes.slice() : [],
+                alive,
+                peers,
+                height,
+                synced,
+                stuck,
+            }));
+        } catch (err) {
+            extensionHandle.log.error(
+                `${ENM_LOG_PREFIX} GET /chains/${req.params.chainId}/bootnodes: ${err.message}`,
+            );
+            return res.status(500).json(errorBody('Failed to read peer info.'));
+        }
+    });
+
+    // --- PUT bootnodes: validate + persist + live-apply (Class B EVM only) ---
+    // v0.5.175 — the operator-facing "add a peer because my chain is stuck"
+    // action. Distinct from class-b-config (bulk settings, persist-only / takes
+    // effect next restart): this route VALIDATES each enode, persists the list
+    // to cfg.bootnodes (so it survives restart as --bootnodes), AND — when the
+    // chain is alive — live-dials each NEWLY added enode via admin_addPeer +
+    // admin_addTrustedPeer so the fix takes effect immediately, no restart.
+    // That live-dial is the "auto adjustment when added by ENM" the operator
+    // asked for. admin_* RPC was enabled for EVM chains in v0.5.172.
+    router.put('/:chainId/bootnodes', limit('admin'), requireOwner, async (req, res) => {
+        try {
+            const adapter = adapterOr404(req, res, extensionHandle);
+            if (!adapter) return undefined;
+            const chainId = adapter.chainId;
+            if (adapter.chainClass !== 'B') {
+                return res.status(501).json(errorBody(
+                    `Peer management is available only for Class B (EVM sidechain) chains. `
+                    + `'${chainId}' is class ${adapter.chainClass || 'unknown'}.`,
+                ));
+            }
+            const body = req.body || {};
+            if (!Array.isArray(body.bootnodes)) {
+                return res.status(400).json(errorBody('bootnodes: array of enode URLs required'));
+            }
+            if (body.bootnodes.length > MAX_BOOTNODES) {
+                return res.status(400).json(errorBody(`bootnodes: too many (max ${MAX_BOOTNODES})`));
+            }
+            const { validateEnode } = require('../services/EnmCrypto');
+            const normalized = [];
+            for (const raw of body.bootnodes) {
+                const v = validateEnode(raw);
+                if (!v.valid) {
+                    return res.status(400).json(errorBody(`bootnodes: ${v.warning}`));
+                }
+                // De-dup on the normalized (lowercased-pubkey) form so the
+                // same peer pasted twice doesn't bloat the spawn arg line.
+                if (!normalized.includes(v.normalized)) {
+                    normalized.push(v.normalized);
+                }
+            }
+            const cfg = await ConfigStore.load();
+            const chainCfg = cfg.chains && cfg.chains[chainId];
+            if (!chainCfg) {
+                return res.status(404).json(errorBody(`Chain '${chainId}' not configured.`));
+            }
+            const previous = Array.isArray(chainCfg.bootnodes) ? chainCfg.bootnodes.slice() : [];
+            chainCfg.bootnodes = normalized;
+            await ConfigStore.save(cfg, { logger: extensionHandle.log });
+
+            // Live-apply only the NEWLY added enodes against a running chain.
+            // Nodes already in the persisted list were dialed on a prior call
+            // (or via --bootnodes at start), so re-dialing them is wasted work.
+            const status = ChainRegistry.getProcessService().statusSync(chainId);
+            const alive = !!(status && status.alive);
+            const added = normalized.filter((e) => !previous.includes(e));
+            const applied = [];
+            const failed = [];
+            if (alive && added.length > 0) {
+                let rpc = null;
+                try { rpc = adapter.rpcClient(chainCfg); } catch (_) { rpc = null; }
+                if (rpc) {
+                    for (const enode of added) {
+                        try {
+                            await rpc.addPeer(enode);
+                            // Trusted = exempt from the maxpeers slot cap so a
+                            // hand-added rescue peer can't be evicted. Best-effort:
+                            // some builds gate admin_addTrustedPeer behind a flag.
+                            try { await rpc.addTrustedPeer(enode); } catch (_) { /* non-fatal */ }
+                            applied.push(enode);
+                        } catch (err) {
+                            failed.push({ enode, error: err.message });
+                            extensionHandle.log.warn(
+                                `${ENM_LOG_PREFIX} ${chainId} admin_addPeer failed: ${err.message}`,
+                            );
+                        }
+                    }
+                }
+            }
+            extensionHandle.log.info(
+                `${ENM_LOG_PREFIX} PUT /chains/${chainId}/bootnodes saved `
+                + `(${normalized.length} total, ${applied.length} live-applied, ${failed.length} failed)`,
+            );
+            return res.json(successBody({
+                chainId,
+                bootnodes: normalized,
+                alive,
+                applied,
+                failed,
+                // When the chain is stopped, new bootnodes only take effect on
+                // next start (--bootnodes). Tell the UI so it can prompt.
+                restartRequired: !alive && added.length > 0,
+            }));
+        } catch (err) {
+            extensionHandle.log.error(
+                `${ENM_LOG_PREFIX} PUT /chains/${req.params.chainId}/bootnodes: ${err.message}`,
+            );
+            return res.status(500).json(errorBody('Could not save peers. Try again.'));
+        }
+    });
+
     router.put('/:chainId/class-b-config', limit('admin'), requireOwner, async (req, res) => {
         try {
             const adapter = adapterOr404(req, res, extensionHandle);
@@ -1544,16 +1705,27 @@ function build(extensionHandle) {
                     chainCfg.sync.mode = m;
                 }
             }
-            // Optional bootnodes array replace.
+            // Optional bootnodes array replace. v0.5.175 — validate each as a
+            // real enode URL (same check as PUT /:id/bootnodes) so the two
+            // write-paths can't diverge and persist garbage that geth then
+            // rejects at spawn. Persist-only here; live-apply is the dedicated
+            // peer route's job.
             if (Array.isArray(body.bootnodes)) {
+                if (body.bootnodes.length > MAX_BOOTNODES) {
+                    return res.status(400).json(errorBody(`bootnodes: too many (max ${MAX_BOOTNODES})`));
+                }
+                const { validateEnode } = require('../services/EnmCrypto');
+                const normalizedBootnodes = [];
                 for (const b of body.bootnodes) {
-                    if (typeof b !== 'string' || b.length > 512) {
-                        return res.status(400).json(errorBody(
-                            'bootnodes: must be array of strings (each <= 512 chars)',
-                        ));
+                    const v = validateEnode(b);
+                    if (!v.valid) {
+                        return res.status(400).json(errorBody(`bootnodes: ${v.warning}`));
+                    }
+                    if (!normalizedBootnodes.includes(v.normalized)) {
+                        normalizedBootnodes.push(v.normalized);
                     }
                 }
-                chainCfg.bootnodes = body.bootnodes.slice();
+                chainCfg.bootnodes = normalizedBootnodes;
             }
             await ConfigStore.save(cfg);
             extensionHandle.log.info(

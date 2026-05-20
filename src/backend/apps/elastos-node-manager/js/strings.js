@@ -1541,6 +1541,47 @@
             logs_error:      'Could not read SPV logs: {msg}',
         },
 
+        // v0.5.175 — Peers & Bootnodes panel (components/peers-panel.js).
+        // Mounts on the per-chain dashboard for EVM sidechains (Class B). The
+        // geth fork's discv4 auto-discovery is weak; this is the operator's
+        // manual escape hatch when a sidechain is stuck at 0 peers.
+        peers_panel: {
+            aria:            'Peers and bootnodes',
+            title:           'Peers & bootnodes',
+            loading:         'Loading peer status…',
+            error:           'Peer status unavailable.',
+            help_summary:    'What is an enode, and how do I get one?',
+            help_what:       'An enode is the address of another node on this sidechain. Adding one '
+                             + 'tells your node who to talk to, so it can start downloading blocks.',
+            help_how:        'To get an enode, run this on any healthy node for the same chain — its '
+                             + 'output is the enode to paste here:',
+            help_format:     'Format: enode://<128 hex chars>@<host>:<port>. ENM checks the shape, '
+                             + 'saves it (so it survives a restart), and dials it immediately if the '
+                             + 'chain is running.',
+            empty:           'No bootnodes configured. Your node relies on auto-discovery alone — '
+                             + 'if it is stuck at 0 peers, add one below.',
+            remove_aria:     'Remove this peer',
+            status_stopped:  'Chain is stopped — start it to connect to peers.',
+            status_unknown:  'Peer count unavailable.',
+            status_peers:    '{n} peer(s) connected',
+            stuck:           'This chain is running but has 0 peers, so it cannot sync. '
+                             + 'Add a peer below to get it moving.',
+            add_label:       'Add a peer (enode URL)',
+            add_btn:         'Add peer',
+            bad_format:      'That does not look like an enode. Expected enode://<128 hex>@host:port.',
+            already:         'That peer is already in the list.',
+            removed:         'Peer removed.',
+            dialed:          'Peer added and connected. Watch the peer count above start to climb.',
+            saved_restart:   'Peer saved. Start or restart this chain for it to take effect.',
+            saved:           'Saved.',
+            save_failed:     'Could not save. Try again.',
+            dial_failed:     'Saved, but the live connection failed: {err}. ENM will retry it '
+                             + 'next time the chain restarts.',
+            toast_dialed_title:      'Peer connected',
+            toast_saved_title:       'Peer saved',
+            toast_dial_failed_title: 'Peer saved (dial failed)',
+        },
+
         // beta.3.15 — producer_binding.* strings block deleted. Its only
         // consumer was components/producer-identity.js, which was dropped
         // in beta.3.15 (CR Council / DID content on the dashboard violated

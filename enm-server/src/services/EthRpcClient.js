@@ -238,6 +238,34 @@ class EthRpcClient {
     }
 
     /**
+     * v0.5.175 — admin_addPeer: dial an enode now (dynamic peer; lost on
+     * restart). Used by the self-service "add peer" feature for INSTANT effect
+     * (the durable side is cfg.bootnodes → --bootnodes on next start). Requires
+     * the `admin` RPC namespace (enabled in our rpcapi since v0.5.172).
+     *
+     * @param {string} enode  enode://<128hex>@<host>:<port>
+     * @returns {Promise<boolean>}
+     */
+    async addPeer(enode) {
+        const result = await this.call('admin_addPeer', [enode]);
+        return result === true;
+    }
+
+    /**
+     * v0.5.175 — admin_addTrustedPeer: like addPeer but the connection is
+     * persistent + reconnected + exempt from the maxpeers cap. Best for an
+     * operator-pinned seed (e.g. their own node). Still lost on restart unless
+     * persisted to cfg.bootnodes (which we do).
+     *
+     * @param {string} enode
+     * @returns {Promise<boolean>}
+     */
+    async addTrustedPeer(enode) {
+        const result = await this.call('admin_addTrustedPeer', [enode]);
+        return result === true;
+    }
+
+    /**
      * net_version. Returns the network version string (e.g. "20" for ESC mainnet).
      *
      * @returns {Promise<string>}
