@@ -340,6 +340,22 @@ class EvmSidechainAdapter extends ChainAdapter {
         }
         if (secrets.externalIp) {
             args.push('--pbft.net.address', secrets.externalIp);
+            // FIX-B2 (v0.5.174) — advertise the external IP at the ETH layer too
+            // (--nat extip:<ip>). Without it, geth's default --nat=any auto-detect
+            // falls back to 127.0.0.1 on a VPS → the node's enode advertises
+            // loopback → peers can't dial back → outbound-only peering → very few
+            // peers on a thin network (esp. EID). Verified the fork supports
+            // `--nat extip:<IP>` (eid --help: any|none|upnp|pmp|extip:<IP>).
+            args.push('--nat', `extip:${secrets.externalIp}`);
+        }
+        // FIX-B2 (v0.5.174) — discv4 bootnodes from cfg.bootnodes. node.sh relies
+        // solely on the binary's built-in bootnodes; for niche/thin networks
+        // (EID) those are stale → 0 peers. cfg.bootnodes lets the operator seed
+        // discovery with a known-good node (e.g. their own production node), so
+        // discv4 finds the rest of the network through it. Empty by default
+        // (binary bootnodes only) — exactly node.sh's behavior until populated.
+        if (Array.isArray(cfg.bootnodes) && cfg.bootnodes.length > 0) {
+            args.push('--bootnodes', cfg.bootnodes.join(','));
         }
         // 0.5.157 — BUG-C8b: this geth fork reads the PBFT keystore password
         // from the --pbft.keystore.password flag, whose value is a FILE PATH
