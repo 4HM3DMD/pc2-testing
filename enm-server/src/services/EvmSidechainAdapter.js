@@ -823,7 +823,14 @@ class EvmSidechainAdapter extends ChainAdapter {
         if (syn.status === 'fulfilled') {
             const s = syn.value;
             if (s === false) {
-                out.synced = true;
+                // eth_syncing === false means "not actively downloading" — which
+                // is EITHER fully caught up OR isolated (no peers) / not started.
+                // v0.5.171: only call it synced when the chain actually HAS blocks
+                // AND at least one peer to have synced from. A height-0 / 0-peer
+                // chain (e.g. pg before it finds peers) must NOT report "synced"
+                // — geth returns false there too, and the old code mislabeled it.
+                out.synced = (typeof out.height === 'number' && out.height > 0
+                    && typeof out.peers === 'number' && out.peers > 0);
             } else if (s && typeof s === 'object') {
                 out.synced = false;
                 if (typeof s.highestBlock === 'number') { out.networkHeight = s.highestBlock; }
