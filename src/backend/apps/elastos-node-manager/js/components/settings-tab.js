@@ -328,6 +328,13 @@
             + '<button type="button" class="enm-btn enm-btn-secondary" '
             +   'data-action="restart-class-b">Restart ' + escapeHtml(name) + '</button>'
             + '<p class="enm-section-status" data-role="restart-status" hidden></p>'
+            + '</section>'
+            // v0.5.176 — Network peers. Self-contained panel (EnmPeersPanel):
+            // its own GET/PUT /chains/<id>/bootnodes + add/remove, independent
+            // of the mining/sync "Save changes" above. Mounted below.
+            + '<section class="enm-section enm-section-classb">'
+            + '<h3>Network peers</h3>'
+            + '<div data-peers-mount></div>'
             + '</section>';
 
         // Wire address-format hints (soft validation — disables Save when invalid).
@@ -364,6 +371,25 @@
         restartBtn.addEventListener('click', function () {
             self._restartClassB(chainId, name, restartBtn, restartStatus);
         });
+
+        // v0.5.176 — mount the Network peers panel into its section. Destroy
+        // any prior instance first (this form re-renders on chain switch /
+        // reload). destroy() in this component's own destroy() tears it down.
+        if (this._peersPanel) {
+            try { this._peersPanel.destroy(); } catch (_) { /* idempotent */ }
+            this._peersPanel = null;
+        }
+        if (root.EnmPeersPanel) {
+            var peersMount = parent.querySelector('[data-peers-mount]');
+            if (peersMount) {
+                this._peersPanel = new root.EnmPeersPanel({
+                    api: this.api,
+                    chainId: chainId,
+                    notifications: this.notifications,
+                });
+                this._peersPanel.mount(peersMount);
+            }
+        }
     };
 
     /** @private */
@@ -781,6 +807,11 @@
         if (this._adv && this._adv.whiteIp
             && typeof this._adv.whiteIp.destroy === 'function') {
             try { this._adv.whiteIp.destroy(); } catch (_) { /* idempotent */ }
+        }
+        // v0.5.176 — stop the Network peers panel's poll + detach it.
+        if (this._peersPanel && typeof this._peersPanel.destroy === 'function') {
+            try { this._peersPanel.destroy(); } catch (_) { /* idempotent */ }
+            this._peersPanel = null;
         }
         if (this.root.parentNode) { this.root.parentNode.removeChild(this.root); }
     };

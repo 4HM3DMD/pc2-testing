@@ -1357,16 +1357,10 @@
             sys.mount(pane);
             this._dashboardMounts.push(sys);
         }
-        // v0.5.175 — EVM sidechains (Class B: esc/eid/pg) get a Peers &
-        // Bootnodes panel. The geth fork's discv4 auto-discovery is weak, so a
-        // node can sit at 0 peers; this panel lets the operator add a peer by
-        // hand (validated, persisted as --bootnodes, live-dialed via
-        // admin_addPeer). Self-service so no node has to depend on one seed.
-        if (chainClass === 'B' && root.EnmPeersPanel) {
-            var peersPanel = new root.EnmPeersPanel(common);
-            peersPanel.mount(pane);
-            this._dashboardMounts.push(peersPanel);
-        }
+        // v0.5.176 — the EVM Peers panel moved OFF the dashboard into EVM
+        // network Settings (Settings → <chain> → Network peers), mounted by
+        // settings-tab.js. It belongs with the other per-chain config (mining,
+        // sync), not on the live dashboard.
         // Mainchain-only cards: consensus signing identity, BPoS producer
         // registration, and binary-update are Class-A concepts. The EVM
         // sidechains / oracles / arbiter get the chain-card hero + system

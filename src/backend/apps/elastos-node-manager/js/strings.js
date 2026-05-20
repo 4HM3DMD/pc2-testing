@@ -1550,15 +1550,15 @@
             title:           'Peers & bootnodes',
             loading:         'Loading peer status…',
             error:           'Peer status unavailable.',
-            help_summary:    'What is an enode, and how do I get one?',
-            help_what:       'An enode is the address of another node on this sidechain. Adding one '
-                             + 'tells your node who to talk to, so it can start downloading blocks.',
-            help_how:        'To get an enode, run this on any healthy node for the same chain — its '
-                             + 'output is the enode to paste here:',
-            help_format:     'Format: enode://<128 hex chars>@<host>:<port>. ENM checks the shape, '
-                             + 'saves it (so it survives a restart), and dials it immediately if the '
-                             + 'chain is running.',
-            empty:           'No bootnodes configured. Your node relies on auto-discovery alone — '
+            help_summary:    'How do I get a peer to add?',
+            help_what:       'A peer is identified by its enode — its public key plus IP and port. '
+                             + 'An IP on its own is not enough: the key is required for the encrypted '
+                             + 'connection and cannot be looked up from the IP.',
+            help_how:        'To copy the peers a working node already has, attach to it '
+                             + '(./eid attach) and run:',
+            help_format:     'Paste any enode (enode://<key>@<ip>:<port>) above. ENM saves it so it '
+                             + 'survives a restart, and connects to it immediately if the chain is running.',
+            empty:           'No peers configured yet. Your node relies on auto-discovery alone — '
                              + 'if it is stuck at 0 peers, add one below.',
             remove_aria:     'Remove this peer',
             status_stopped:  'Chain is stopped — start it to connect to peers.',

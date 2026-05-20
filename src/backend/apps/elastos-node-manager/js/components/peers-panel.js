@@ -100,8 +100,10 @@
 
     EnmPeersPanel.prototype.mount = function (parent) {
         if (!parent) { throw new TypeError('EnmPeersPanel.mount: parent required'); }
-        this._root = document.createElement('section');
-        this._root.className = 'enm-card enm-peers';
+        // v0.5.176 — lives inside a Settings <section> now (no .enm-card
+        // framing, no internal <h3> — the section header owns the title).
+        this._root = document.createElement('div');
+        this._root.className = 'enm-peers';
         this._root.setAttribute('aria-label', tFb('peers_panel.aria', 'Peers and bootnodes'));
         parent.appendChild(this._root);
         this._renderLoading();
@@ -131,7 +133,6 @@
     EnmPeersPanel.prototype._renderLoading = function () {
         if (!this._root) { return; }
         this._root.innerHTML = ''
-            + '<h3 class="enm-peers-title">' + escapeHtml(tFb('peers_panel.title', 'Peers & bootnodes')) + '</h3>'
             + '<p class="enm-peers-loading" role="status" aria-live="polite">'
             + escapeHtml(tFb('peers_panel.loading', 'Loading peer status…')) + '</p>';
     };
@@ -163,7 +164,6 @@
     EnmPeersPanel.prototype._renderError = function (msg) {
         if (!this._root) { return; }
         this._root.innerHTML = ''
-            + '<h3 class="enm-peers-title">' + escapeHtml(tFb('peers_panel.title', 'Peers & bootnodes')) + '</h3>'
             + '<p class="enm-peers-error" role="alert">' + escapeHtml(String(msg)) + '</p>';
     };
 
@@ -178,26 +178,25 @@
         this._bootnodes = Array.isArray(snap.bootnodes) ? snap.bootnodes.slice() : [];
 
         var html = ''
-            + '<h3 class="enm-peers-title">' + escapeHtml(tFb('peers_panel.title', 'Peers & bootnodes')) + '</h3>'
             // Live status line (peer count + state). Updated in place on poll.
             + '<div class="enm-peers-status" data-peers-status></div>'
             // Stuck banner — shown/hidden by _updateStatus.
             + '<div class="enm-peers-stuck" data-peers-stuck hidden role="status"></div>'
             // Instructions (collapsed by default).
             + '<details class="enm-peers-help">'
-            +   '<summary>' + escapeHtml(tFb('peers_panel.help_summary', 'What is an enode, and how do I get one?')) + '</summary>'
+            +   '<summary>' + escapeHtml(tFb('peers_panel.help_summary', 'How do I get a peer to add?')) + '</summary>'
             +   '<div class="enm-peers-help-body">'
             +     '<p>' + escapeHtml(tFb('peers_panel.help_what',
-                      'An enode is the address of another node on this sidechain. Adding one '
-                      + 'tells your node who to talk to, so it can start downloading blocks.')) + '</p>'
+                      'A peer is identified by its enode — its public key plus IP and port. '
+                      + 'An IP on its own is not enough: the key is required for the encrypted '
+                      + 'connection and cannot be looked up from the IP.')) + '</p>'
             +     '<p>' + escapeHtml(tFb('peers_panel.help_how',
-                      'To get an enode, run this on any healthy node for the same chain — its '
-                      + 'output is the enode to paste here:')) + '</p>'
-            +     '<pre class="enm-peers-help-cmd" tabindex="0">admin.nodeInfo.enode</pre>'
+                      'To copy the peers a working node already has, attach to it '
+                      + '(./eid attach) and run:')) + '</p>'
+            +     '<pre class="enm-peers-help-cmd" tabindex="0">admin.peers.forEach(p =&gt; console.log(p.enode))</pre>'
             +     '<p class="enm-peers-help-fmt">' + escapeHtml(tFb('peers_panel.help_format',
-                      'Format: enode://<128 hex chars>@<host>:<port>. ENM checks the shape, '
-                      + 'saves it (so it survives a restart), and dials it immediately if the '
-                      + 'chain is running.')) + '</p>'
+                      'Paste any enode (enode://<key>@<ip>:<port>) above. ENM saves it so it '
+                      + 'survives a restart, and connects to it immediately if the chain is running.')) + '</p>'
             +   '</div>'
             + '</details>'
             // Current bootnodes list.
@@ -240,8 +239,10 @@
         }
         var self = this;
         var rowsHtml = this._bootnodes.map(function (enode) {
+            // v0.5.176 — show the peer by IP (operator-friendly); the full
+            // enode (with key + port) is in the title tooltip for the curious.
             return '<div class="enm-peers-row" data-enode="' + escapeHtml(enode) + '">'
-                + '<code class="enm-peers-enode" title="' + escapeHtml(enode) + '">' + escapeHtml(shortEnode(enode)) + '</code>'
+                + '<span class="enm-peers-ip" title="' + escapeHtml(enode) + '">' + escapeHtml(enodeIp(enode)) + '</span>'
                 + '<button type="button" class="enm-peers-remove" aria-label="'
                 +   escapeHtml(tFb('peers_panel.remove_aria', 'Remove this peer')) + '" '
                 +   'data-enode="' + escapeHtml(enode) + '">&times;</button>'
@@ -437,15 +438,21 @@
         } catch (_) { /* notifications are non-critical */ }
     };
 
-    /** Abbreviate an enode for the list row: enode://abcd1234…5678@host:port */
-    function shortEnode(enode) {
+    /**
+     * Extract the peer's host (IP or hostname) from an enode, for the
+     * operator-friendly list display ("IP only"). Handles IPv4, hostnames,
+     * and bracketed IPv6. Falls back to a trimmed enode if it doesn't parse.
+     * @param {string} enode
+     * @returns {string}
+     */
+    function enodeIp(enode) {
         var s = String(enode || '');
-        var m = /^enode:\/\/([0-9a-fA-F]{8})[0-9a-fA-F]+([0-9a-fA-F]{4})@(.+)$/.exec(s);
-        if (!m) { return s.length > 48 ? (s.slice(0, 45) + '…') : s; }
-        return 'enode://' + m[1] + '…' + m[2] + '@' + m[3];
+        var m = /@(\[[0-9a-fA-F:]+\]|[^@:/]+):/.exec(s);
+        if (m) { return m[1]; }
+        return s.length > 40 ? (s.slice(0, 37) + '…') : s;
     }
 
     root.EnmPeersPanel = EnmPeersPanel;
     // Exported for tests.
-    root.EnmPeersPanel._internal = { tFb, escapeHtml, fmtN, looksLikeEnode, shortEnode };
+    root.EnmPeersPanel._internal = { tFb, escapeHtml, fmtN, looksLikeEnode, enodeIp };
 }(typeof window !== 'undefined' ? window : globalThis));

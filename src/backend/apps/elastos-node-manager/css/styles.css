@@ -7414,15 +7414,11 @@ body[data-app-size="compact"] .enm-app .enm-overview-row .enm-overview-spark {
     word-break: break-word;
 }
 
-/* v0.5.175 — Peers & Bootnodes panel (components/peers-panel.js). EVM-only
-   per-chain dashboard card: live peer count, stuck banner, add/remove
-   bootnodes, inline how-to. */
-.enm-app .enm-peers { margin-top: var(--sp-3, 12px); }
-.enm-app .enm-peers-title {
-    color: var(--text-primary);
-    font-size: 14px;
-    margin: 0 0 var(--sp-2, 8px) 0;
-}
+/* v0.5.176 — Network peers panel (components/peers-panel.js). Lives inside
+   the EVM chain's Settings → Network peers section (no card framing; the
+   section header owns the title): live peer count, stuck banner, add/remove
+   peers (shown by IP), inline how-to. */
+.enm-app .enm-peers { margin-top: 0; }
 .enm-app .enm-peers-loading { color: var(--text-secondary); font-size: 13px; margin: 0; }
 .enm-app .enm-peers-error   { color: var(--error); font-size: 13px; margin: 0; }
 
@@ -7498,11 +7494,11 @@ body[data-app-size="compact"] .enm-app .enm-overview-row .enm-overview-spark {
     border-bottom: 1px solid var(--border-color, var(--border-subtle));
 }
 .enm-app .enm-peers-row:last-child { border-bottom: none; }
-.enm-app .enm-peers-enode {
+.enm-app .enm-peers-ip {
     flex: 1 1 auto;
-    color: var(--text-secondary);
+    color: var(--text-primary);
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 12px;
+    font-size: 13px;
     word-break: break-all;
 }
 .enm-app .enm-peers-remove {
