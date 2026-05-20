@@ -310,25 +310,35 @@ class EvmSidechainAdapter extends ChainAdapter {
         if (cfg.sync && cfg.sync.mode) {
             args.push('--syncmode', cfg.sync.mode);
         }
-        // Miner — only enabled when the operator opted in (sidechain is
-        // producing for rewards). All three values are operator-supplied:
+        // Miner — enabled for council validators (the sidechain produces
+        // blocks). Values:
         //   miner.enabled         → enable mining at all
-        //   miner.rewardAddress   → --miner.etherbase (where rewards go)
+        //   miner.evmKeystoreAddr → --miner.etherbase + --unlock (the LOCAL
+        //                           auto-created EVM account; see FIX-C12b)
         //   miner.threads         → --miner.threads (default 1)
-        //   miner.evmKeystoreAddr → --unlock (which EVM keystore unlocks)
         if (cfg.miner.enabled === true) {
-            if (!cfg.miner.rewardAddress) {
+            // FIX-C12b — the block signer / etherbase MUST be a LOCAL unlocked
+            // account. esc's pre-PBFT mining engine (">>> is not pbft engine")
+            // fatals "Failed to start mining: signer missing: unknown account"
+            // when --miner.etherbase points at an address not in the keystore.
+            // We previously set it to miner.rewardAddress (the operator's
+            // EXTERNAL 0x reward address), which is NOT a local account → esc
+            // died code=1 within 1.5s. (eid/pg use the PBFT engine + sign with
+            // --pbft.keystore, so they tolerated the wrong etherbase, masking
+            // the bug.) node.sh defaults the etherbase to the created --unlock
+            // account; we set it explicitly to the auto-created, unlocked EVM
+            // account (evmKeystoreAddr). EVM block rewards therefore accrue to
+            // the node's own EVM account, exactly as in node.sh.
+            if (!cfg.miner.evmKeystoreAddr) {
                 throw new Error(
-                    `${this.chainId}: miner.enabled=true but miner.rewardAddress not set. `
-                    + 'Set it in Settings → Mining & Rewards before starting.',
+                    `${this.chainId}: miner.enabled=true but evmKeystoreAddr not set. `
+                    + 'The EVM mining account must be created by start() before buildSpawnArgs.',
                 );
             }
-            args.push('--miner.etherbase', cfg.miner.rewardAddress);
+            args.push('--miner.etherbase', cfg.miner.evmKeystoreAddr);
             args.push('--mine');
             args.push('--miner.threads', String(cfg.miner.threads || 1));
-            if (cfg.miner.evmKeystoreAddr) {
-                args.push('--unlock', cfg.miner.evmKeystoreAddr);
-            }
+            args.push('--unlock', cfg.miner.evmKeystoreAddr);
             // FIX-C12 — node.sh's council miner branch (esc_start:2139)
             // sets --allow-insecure-unlock. geth refuses to unlock an
             // account with a password file unless this is set (the

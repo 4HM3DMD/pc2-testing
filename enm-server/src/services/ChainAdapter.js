@@ -175,11 +175,25 @@ class ChainAdapter {
     /**
      * Restart = stop then start.
      *
+     * FIX-C6b-v2 — go through THIS adapter's own stop()+start() (not
+     * processService.restart directly) so subclasses that build a spawn
+     * recipe in start() restart correctly: EVM sidechains build --spawnArgs
+     * and oracles build --spawnEnv in their start() override. The old
+     * `processService.restart(this.chainId, chainConfig)` passed a bare
+     * chainConfig with NO spawnArgs, so NativeProcessService threw
+     * "config.json missing" for every arg/env-configured chain — which is why
+     * self-heal (SelfHealingEngine._executeRestart → adapter.restart) AND the
+     * manual POST /chains/:id/restart route could never recover a sidechain or
+     * oracle. start() is the single source of the spawn recipe, so restart is
+     * literally stop + start.
+     *
      * @param {object} chainConfig
      * @returns {Promise<{ pid: number, startedAt: number }>}
      */
     async restart(chainConfig) {
-        return this.processService.restart(this.chainId, chainConfig);
+        try { await this.stop(); }
+        catch (_) { /* already stopped / never started — proceed to start */ }
+        return this.start(chainConfig);
     }
 
     /**
