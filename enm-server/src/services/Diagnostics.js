@@ -148,7 +148,7 @@ async function runFullDiagnose(deps) {
         findings.push({
             id: 'binary-path',
             status: STATUS.FAIL,
-            title: 'ela binary path invalid',
+            title: chainId + ' binary path invalid',
             detail: pathOk.reason || 'Path is missing or not executable.',
             fixes: [
                 'Build ela from source per docs/BUILD-ELA.md',
@@ -162,7 +162,7 @@ async function runFullDiagnose(deps) {
         findings.push({
             id: 'binary-path',
             status: STATUS.OK,
-            title: 'ela binary present and executable',
+            title: chainId + ' binary present and executable',
             detail: bin + ' (' + (pathOk.sizeBytes || 0) + ' bytes)',
         });
         // Smoke test (cheap — runs `ela --version`)
@@ -172,7 +172,7 @@ async function runFullDiagnose(deps) {
                 findings.push({
                     id: 'binary-smoke',
                     status: STATUS.OK,
-                    title: 'ela --version reports ' + smoke.version,
+                    title: chainId + ' --version reports ' + smoke.version,
                     detail: 'Binary runs and prints a recognizable version.',
                 });
                 if (chainConfig.binaryVersion && smoke.version !== chainConfig.binaryVersion) {

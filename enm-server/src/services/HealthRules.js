@@ -903,17 +903,17 @@ function detectF25(snap) {
  */
 const RULE_METADATA = Object.freeze({
     F1:  { tier: 'AUTOMATED_SAFE',  title: 'Auto-restart on crash',
-           description: 'If the ela process exits unexpectedly (non-zero or SIGKILL) and the operator didn’t manually stop it, restart it.' },
+           description: 'If the chain process exits unexpectedly (non-zero or SIGKILL) and the operator didn’t manually stop it, restart it.' },
     F2:  { tier: 'AUTOMATED_SAFE',  title: 'Restart on stuck RPC',
            description: 'If the chain’s RPC stops responding for over 2 minutes while the process is alive, restart it.' },
     F3:  { tier: 'AUTOMATED_SAFE',  title: 'Restart on peer-zero',
-           description: 'If peer count stays at 0 longer than your alert threshold, restart so ela reseeds peers from DNS.' },
+           description: 'If peer count stays at 0 longer than your alert threshold, restart so the chain reseeds peers from DNS.' },
     F4:  { tier: 'OWNER_CONFIRMS',  title: 'Restart on sync stall',
            description: 'If block height hasn’t advanced for over your sync-stall threshold despite peers, ask the operator before restarting.' },
     F5:  { tier: 'OWNER_CONFIRMS',  title: 'Disk space low',
            description: 'Surface a notice when free disk drops below the warn / critical thresholds in the Alerts section. Action stays operator-driven (ENM never deletes operator data).' },
     F6:  { tier: 'OWNER_CONFIRMS',  title: 'Process killed by OOM',
-           description: 'If ela was SIGKILL’d (Linux OOM), suggest raising the memory limit instead of just restarting blindly.' },
+           description: 'If the chain process was SIGKILL’d (Linux OOM), suggest raising the memory limit instead of just restarting blindly.' },
     // 0.5.20 audit Session 20 — F7/F8 metadata realigned to detect-
     // function reality. Pre-0.5.20 these titles described an early
     // spec that was never built (no height-regression detector exists
