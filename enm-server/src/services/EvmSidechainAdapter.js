@@ -219,25 +219,40 @@ class EvmSidechainAdapter extends ChainAdapter {
             );
         }
         const dataDir = path.join(chainDir(this.chainId), DATA_RELPATH);
+        // 0.5.155 — BUG-C8 fix: the Elastos ESC/EID/PG binaries are an OLD
+        // go-ethereum fork (Geth/v1.9.7.0-…) that uses LEGACY CLI flags, not
+        // the modern --http* names. Pre-0.5.155 buildSpawnArgs passed
+        // --http/--http.addr/--http.port/--http.api/--discovery.port/
+        // --pbft.dposport/--pbft.ipaddress — none of which this binary
+        // defines, so geth exited instantly with "flag provided but not
+        // defined: -http" (code=1) and NO EVM sidechain could ever start.
+        // Verified against `esc --help` on the live binary:
+        //   --http*        → --rpc / --rpcaddr / --rpcport / --rpcapi
+        //   --discovery.port → (none; old geth shares --port for TCP+UDP) → drop
+        //   --pbft.dposport  → --pbft.net.port
+        //   --pbft.ipaddress → --pbft.net.address
+        // Confirmed: with these flags geth boots ("Started P2P networking",
+        // "HTTP endpoint opened", "SPV Start Monitoring").
         const args = [
             '--datadir', dataDir,
             '--networkid', String(this.chainIdValue),
             '--port', String(cfg.ports.p2p),
-            // HTTP-RPC: loopback only by default (H25). The defaultRpcPort
-            // matches plan §14 + the audited Elastos docs ports table.
-            '--http',
-            '--http.addr', '127.0.0.1',
-            '--http.port', String(cfg.ports.rpc),
-            '--http.api', cfg.rpcApis || 'eth,net,web3,admin',
-            // UDP discovery — distinct from --port (TCP).
-            '--discovery.port', String(cfg.ports.discovery),
+            // HTTP-RPC: loopback only by default (H25). Legacy --rpc* flag
+            // names — this geth fork predates the --http* rename.
+            '--rpc',
+            '--rpcaddr', '127.0.0.1',
+            '--rpcport', String(cfg.ports.rpc),
+            '--rpcapi', cfg.rpcApis || 'eth,net,web3,admin',
+            // No separate discovery-port flag in this geth fork; UDP discovery
+            // shares the TCP --port above (cfg.ports.discovery is reserved for
+            // future use / firewall rules, not a geth CLI arg here).
             // PBFT keystore: ALWAYS points at the mainchain keystore.dat
             // (H23 / node.sh:2144). Subclasses cannot override this.
             '--pbft.keystore', secrets.mainchainKeystorePath,
-            '--pbft.dposport', String(cfg.ports.dpos),
+            '--pbft.net.port', String(cfg.ports.dpos),
         ];
         if (secrets.externalIp) {
-            args.push('--pbft.ipaddress', secrets.externalIp);
+            args.push('--pbft.net.address', secrets.externalIp);
         }
         // Sync mode: 'fast' / 'full' / 'archive'. node.sh default is 'fast'.
         if (cfg.sync && cfg.sync.mode) {

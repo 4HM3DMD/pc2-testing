@@ -2446,7 +2446,17 @@ async function runCouncilInstall(args) {
             };
             for (const cid of ['mainchain', 'esc', 'eid', 'pg']) {
                 if (cfg2.chains && cfg2.chains[cid]) {
-                    const rel = SNAPSHOT_TARGET_RELPATH[cid] || 'data';
+                    // 0.5.155 — BUG-C3 fix-of-the-fix: use an explicit
+                    // hasOwnProperty lookup, NOT `|| 'data'`. The v0.5.153
+                    // change set esc/eid/pg to '' (extract into <chainDir>/ so
+                    // the tarball's own `data/` becomes <chainDir>/data/), but
+                    // `SNAPSHOT_TARGET_RELPATH[cid] || 'data'` evaluated `'' ||
+                    // 'data'` === 'data' (empty string is falsy in JS) — so the
+                    // relpath stayed 'data' and EVM snapshots STILL double-nested
+                    // at <chainDir>/data/data (confirmed on cycle-2 fresh install).
+                    const rel = Object.prototype.hasOwnProperty.call(SNAPSHOT_TARGET_RELPATH, cid)
+                        ? SNAPSHOT_TARGET_RELPATH[cid]
+                        : 'data';
                     targetDirsByChain[cid] = path.join(chainDir(cid), rel);
                 }
             }
