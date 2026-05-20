@@ -74,6 +74,8 @@ const { initSchema } = require('./services/EnmDb');
 const setupRouter = require('./routes/setup');
 const systemRouter = require('./routes/system');
 const chainsRouter = require('./routes/chains');
+// v0.5.168 (Phase 2) — SPV Module (class E): aggregate + per-sidechain detail.
+const spvRouter = require('./routes/spv');
 const eventsRouter = require('./routes/events');
 const logsRouter = require('./routes/logs');
 const healingRouter = require('./routes/healing');
@@ -225,6 +227,8 @@ async function main() {
     api.use('/setup',  setupRouter.build(extensionHandle));
     api.use('/system', systemRouter.build(extensionHandle));
     api.use('/chains', chainsRouter.build(extensionHandle));
+    // v0.5.168 (Phase 2) — SPV Module aggregate + per-sidechain detail.
+    api.use('/spv', spvRouter.build(extensionHandle));
     api.use('/logs',   logsRouter.build({ extensionHandle }));
     api.use('/config', configRouter.build(extensionHandle));
     api.use('/updates', updatesRouter.build(extensionHandle));
