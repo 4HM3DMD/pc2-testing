@@ -56,6 +56,19 @@ const {
 
 /** @typedef {{ pid: number, binaryPath: string, startedAt: number, version?: string|null }} ProcessMeta */
 
+/**
+ * 0.5.165 — C23 fix. Per-chain disk-sink rotation threshold. The C21 sink
+ * (added 0.5.164) is a single appended file with NO size bound; a council EVM
+ * chain (esc/eid/pg — geth at default verbosity 3, mining genesis) emits
+ * ~1 MB/s ≈ 85 GB/day each, filling the disk in ~1.5 days → chains crash on
+ * ENOSPC. The daily LogCompactor only gzips after 7 days — far too late. We
+ * hard-cap the on-disk footprint per chain by rotating the active <id>.log to
+ * <id>.log.1 (retention = 1) once it crosses this size, mirroring node.sh's
+ * `rotatelogs ... 20M` (build/skeleton/node.sh:2169/2386/3603). Worst-case
+ * footprint per chain ≈ 2 × this value (active + one rotation).
+ */
+const LOG_SINK_ROTATE_BYTES = 20 * 1024 * 1024; // 20 MB — matches node.sh rotatelogs 20M
+
 class NativeProcessService extends EventEmitter {
     /**
      * @param {object} deps
@@ -475,8 +488,38 @@ class NativeProcessService extends EventEmitter {
         // the chain. We swallow open errors, attach an 'error' handler that
         // warns and continues, and guard the close against double-invocation
         // from the exit handler + any spawn-failure cleanup path.
+        //
+        // 0.5.165 — C23: the sink is now SIZE-bounded. We rotate the active
+        // <id>.log to <id>.log.1 (retention = 1) once it crosses
+        // LOG_SINK_ROTATE_BYTES, so the on-disk footprint is hard-capped at
+        // ~2 × LOG_SINK_ROTATE_BYTES per chain regardless of write rate. We
+        // track bytes in a counter (no per-write fs.stat) and rotate inline on
+        // the data-listener tick using SYNC fs ops so the rename is atomic
+        // within the single tick — no other write can interleave mid-rotation.
         let logSink = null;
         let logSinkClosed = false;
+        let sinkBytes = 0;
+        const sinkPath = chainLogSinkPath(chainId);
+        // openSink — (re)open a fresh write stream at sinkPath with the standard
+        // 'error' handler wiring, assigning it to logSink. Shared by the initial
+        // open and the post-rotation reopen so the createWriteStream + handler
+        // setup lives in exactly one place. May throw synchronously if the open
+        // itself fails (caught by the initial-open try/catch); async write
+        // failures are handled by the attached 'error' handler.
+        const openSink = () => {
+            const stream = fs.createWriteStream(sinkPath, { flags: 'a', mode: 0o600 });
+            stream.on('error', (err) => {
+                // Disk full / permissions / fd exhaustion — log once at warn
+                // and stop writing. The chain keeps running; only on-disk log
+                // capture degrades (SSE tailing still works).
+                this.extensionHandle.log.warn(
+                    `${ENM_LOG_PREFIX} ${chainId} log sink write error (${err.message}); on-disk logging disabled for this run`,
+                );
+                logSinkClosed = true;
+                logSink = null;
+            });
+            logSink = stream;
+        };
         const closeLogSink = () => {
             if (logSinkClosed || !logSink) {
                 return;
@@ -487,23 +530,74 @@ class NativeProcessService extends EventEmitter {
             } catch (_) { /* already destroyed — nothing to do */ }
             logSink = null;
         };
-        try {
-            const sinkPath = chainLogSinkPath(chainId);
-            fs.mkdirSync(path.dirname(sinkPath), { recursive: true, mode: 0o700 });
-            logSink = fs.createWriteStream(sinkPath, { flags: 'a', mode: 0o600 });
-            logSink.on('error', (err) => {
-                // Disk full / permissions / fd exhaustion — log once at warn
-                // and stop writing. The chain keeps running; only on-disk log
-                // capture degrades (SSE tailing still works).
+        // rotateSink — move the full <id>.log to <id>.log.1 (dropping any prior
+        // .1) and reopen a fresh active file. Halts writes first (null logSink)
+        // so nothing appends mid-rotation, then end()s the current stream: on
+        // POSIX the fd stays valid after the rename, so any buffered bytes still
+        // flush into the now-renamed .log.1 — no data loss. SYNC rm/rename keeps
+        // the swap atomic within this data-listener tick. Any fault → warn and
+        // leave logSink null (disable capture for this run; chain keeps running).
+        const rotateSink = () => {
+            if (logSinkClosed) {
+                return;
+            }
+            const cur = logSink;
+            logSink = null; // stop further writes before we touch the file
+            try {
+                if (cur) {
+                    try { cur.end(); } catch (_) { /* already destroyed */ }
+                }
+                fs.rmSync(`${sinkPath}.1`, { force: true }); // retention = 1
+                fs.renameSync(sinkPath, `${sinkPath}.1`);
+                openSink();
+                sinkBytes = 0;
+            } catch (err) {
                 this.extensionHandle.log.warn(
-                    `${ENM_LOG_PREFIX} ${chainId} log sink write error (${err.message}); on-disk logging disabled for this run`,
+                    `${ENM_LOG_PREFIX} ${chainId} log sink rotation failed (${err.message}); on-disk logging disabled for this run`,
                 );
-                logSinkClosed = true;
                 logSink = null;
-            });
+            }
+        };
+        // writeToSink — single write path used by BOTH stdout and stderr
+        // listeners so byte-accounting + rotation can never drift between them.
+        const writeToSink = (chunk) => {
+            if (!logSink) {
+                return;
+            }
+            try {
+                logSink.write(chunk);
+            } catch (_) {
+                // error handler already fired / stream torn down — bail without
+                // counting; never let a logging fault touch the chain process.
+                return;
+            }
+            sinkBytes += chunk.length;
+            if (sinkBytes >= LOG_SINK_ROTATE_BYTES) {
+                rotateSink();
+            }
+        };
+        try {
+            fs.mkdirSync(path.dirname(sinkPath), { recursive: true, mode: 0o700 });
+            // Rotate-on-open: a stale oversized <id>.log from a prior run must
+            // not be appended onto (it already busts the cap). If it's at/over
+            // the threshold, rotate it to .1 first; if it's smaller, seed
+            // sinkBytes with its current size so the pre-existing bytes still
+            // count toward the cap. Stat failures fall through to a 0 baseline.
+            let existingSize = 0;
+            try {
+                existingSize = fs.statSync(sinkPath).size;
+            } catch (_) { /* no pre-existing file (ENOENT) or unreadable — baseline 0 */ }
+            if (existingSize >= LOG_SINK_ROTATE_BYTES) {
+                fs.rmSync(`${sinkPath}.1`, { force: true }); // retention = 1
+                fs.renameSync(sinkPath, `${sinkPath}.1`);
+                sinkBytes = 0;
+            } else {
+                sinkBytes = existingSize;
+            }
+            openSink();
         } catch (err) {
-            // Failed to even open the sink (mkdir/create). Non-fatal — proceed
-            // without on-disk capture rather than blocking the chain start.
+            // Failed to even open the sink (mkdir/create/rotate). Non-fatal —
+            // proceed without on-disk capture rather than blocking chain start.
             this.extensionHandle.log.warn(
                 `${ENM_LOG_PREFIX} ${chainId} could not open log sink (${err.message}); on-disk logging disabled for this run`,
             );
@@ -560,23 +654,20 @@ class NativeProcessService extends EventEmitter {
         // Bubble stdio up so the log streamer (Phase 3) can subscribe, AND
         // append every chunk to the per-chain disk sink for the HTTP tail
         // endpoint. Both consumers coexist — the emit() keeps live SSE working;
-        // the write() persists for reattach/initial-load/reconnect reads.
-        // logSink may be null (open failed) or get nulled by its error handler;
-        // guard every write so a logging fault never touches the chain process.
+        // the writeToSink() persists for reattach/initial-load/reconnect reads.
+        // writeToSink centralises the null-guard, byte-accounting, and
+        // size-rotation (0.5.165 — C23) so stdout/stderr stay in sync and a
+        // logging fault never touches the chain process.
         if (child.stdout) {
             child.stdout.on('data', (chunk) => {
                 this.emit('stdout', { chainId, chunk });
-                if (logSink) {
-                    try { logSink.write(chunk); } catch (_) { /* error handler already fired */ }
-                }
+                writeToSink(chunk);
             });
         }
         if (child.stderr) {
             child.stderr.on('data', (chunk) => {
                 this.emit('stderr', { chainId, chunk });
-                if (logSink) {
-                    try { logSink.write(chunk); } catch (_) { /* error handler already fired */ }
-                }
+                writeToSink(chunk);
             });
         }
 

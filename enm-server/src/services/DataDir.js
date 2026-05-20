@@ -117,8 +117,12 @@ function pidFilePath(chainId) {
  * native log for mainchain and uses this sink for every other chain.
  *
  * Lives under chains/<id>/logs/ (NOT elastos/logs/node which ela owns).
- * LogCompactor.DEFAULT_LOG_SUBDIRS includes 'logs' so this file is gzipped
- * + purged by the same daily compaction pass — no unbounded growth.
+ * Growth is bounded by NativeProcessService's size-based rotation (0.5.165 —
+ * C23): the active <id>.log is rotated to <id>.log.1 at LOG_SINK_ROTATE_BYTES
+ * with retention=1, hard-capping disk to ~2× that per chain regardless of
+ * write rate. (LogCompactor sweeps the 'logs' subdir too, but only gzips
+ * names ending in '.log' — the active file rarely goes stale while live and
+ * '.log.1' is skipped — so rotation, not compaction, is the real bound.)
  *
  * @param {string} chainId
  * @returns {string}

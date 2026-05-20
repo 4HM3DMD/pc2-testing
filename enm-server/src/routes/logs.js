@@ -120,12 +120,61 @@ async function tailLogFile(chainId, n) {
         if (!candidate) {
             continue;
         }
-        const lines = await readTailOfFile(candidate, n);
+        // 0.5.165 — C23: the sink is now size-rotated (active <id>.log +
+        // one <id>.log.1). Right after a rotation the active file can be
+        // tiny, so a tail of just <id>.log would look truncated. For the
+        // sink only, span the tail across .log.1 when the active file
+        // yields fewer than `n` lines — bounded so the COMBINED read never
+        // exceeds TAIL_BYTE_BUDGET. The native ela log self-rotates and is
+        // read unchanged.
+        const lines = candidate === sinkPath
+            ? await readSinkTailSpanningRotation(sinkPath, n)
+            : await readTailOfFile(candidate, n);
         if (lines !== null) {
             return lines;
         }
     }
     return [];
+}
+
+/**
+ * 0.5.165 — C23. Tail the size-rotated sink, spanning <id>.log.1 when the
+ * active <id>.log is short (e.g. just after a rotation). Reads the active
+ * file first within the byte budget; if it yields fewer than `n` lines and a
+ * <id>.log.1 exists, reads the tail of .log.1 with the REMAINING budget and
+ * prepends it, so the combined on-disk read never exceeds TAIL_BYTE_BUDGET.
+ *
+ * Returns null only when the active sink file is absent (preserving the
+ * fallback-to-native contract in tailLogFile); otherwise an array (possibly
+ * empty). A missing/oversized .log.1 is simply skipped — never fatal.
+ *
+ * @param {string} sinkPath active sink file path (chains/<id>/logs/<id>.log)
+ * @param {number} n
+ * @returns {Promise<Array<{ stream: 'file', line: string, ts: number }>|null>}
+ */
+async function readSinkTailSpanningRotation(sinkPath, n) {
+    const active = await readTailBytes(sinkPath, n, TAIL_BYTE_BUDGET);
+    if (active === null) {
+        // No active sink file — let the caller fall back to the native log.
+        return null;
+    }
+    if (active.lines.length >= n) {
+        return active.lines;
+    }
+    // Active file came up short — try to backfill from the prior rotation,
+    // but only with whatever budget the active read left unused so the
+    // combined read stays within TAIL_BYTE_BUDGET.
+    const remainingBudget = TAIL_BYTE_BUDGET - active.bytesRead;
+    if (remainingBudget <= 0) {
+        return active.lines;
+    }
+    const want = n - active.lines.length;
+    const prev = await readTailBytes(`${sinkPath}.1`, want, remainingBudget);
+    if (prev === null || prev.lines.length === 0) {
+        return active.lines;
+    }
+    // Prepend the older rotation's tail (it precedes the active file in time).
+    return prev.lines.concat(active.lines);
 }
 
 /**
@@ -171,6 +220,29 @@ async function newestNativeNodeLog(chainId) {
  * @returns {Promise<Array<{ stream: 'file', line: string, ts: number }>|null>}
  */
 async function readTailOfFile(filePath, n) {
+    const res = await readTailBytes(filePath, n, TAIL_BYTE_BUDGET);
+    return res === null ? null : res.lines;
+}
+
+/**
+ * Bounded tail read of a single file with an explicit byte budget. Reads up to
+ * `byteBudget` bytes from the END of the file (the whole file when smaller),
+ * so callers that span multiple files (the C23 rotation pair) can divide one
+ * shared budget between them and never exceed it in total.
+ *
+ * Returns null if the file does not exist (ENOENT) so callers can fall back;
+ * otherwise `{ lines, bytesRead }` where `bytesRead` is the number of bytes
+ * actually read from disk (for budget accounting).
+ *
+ * @param {string} filePath
+ * @param {number} n        max line entries to return (last `n`)
+ * @param {number} byteBudget  hard cap on bytes read from this file
+ * @returns {Promise<{ lines: Array<{ stream: 'file', line: string, ts: number }>, bytesRead: number }|null>}
+ */
+async function readTailBytes(filePath, n, byteBudget) {
+    if (!Number.isFinite(byteBudget) || byteBudget <= 0) {
+        return { lines: [], bytesRead: 0 };
+    }
     let stat;
     try {
         stat = await fs.stat(filePath);
@@ -184,10 +256,10 @@ async function readTailOfFile(filePath, n) {
         return null;
     }
 
-    // Read up to TAIL_BYTE_BUDGET bytes from the END of the file. For simplicity
+    // Read up to byteBudget bytes from the END of the file. For simplicity
     // we read the whole file when small; for big files we slice. Bounded so
     // operators don't trigger an OOM on a 20 MB log file.
-    const readBytes = Math.min(stat.size, TAIL_BYTE_BUDGET);
+    const readBytes = Math.min(stat.size, byteBudget);
     const handle = await fs.open(filePath, 'r');
     try {
         const buf = Buffer.alloc(readBytes);
@@ -201,7 +273,10 @@ async function readTailOfFile(filePath, n) {
         }
         const last = lines.slice(-n).filter((l) => l.length > 0);
         const ts = Date.now();
-        return last.map((line) => ({ stream: 'file', line, ts }));
+        return {
+            lines: last.map((line) => ({ stream: 'file', line, ts })),
+            bytesRead: readBytes,
+        };
     } finally {
         await handle.close();
     }
