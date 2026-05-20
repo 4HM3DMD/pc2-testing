@@ -288,7 +288,14 @@ class EvmSidechainAdapter extends ChainAdapter {
         // "HTTP endpoint opened", "SPV Start Monitoring").
         const args = [
             '--datadir', dataDir,
-            '--networkid', String(this.chainIdValue),
+            // v0.5.172 (#4 node.sh parity) — do NOT pass --networkid. node.sh
+            // never sets it; the binary's built-in genesis selects the correct
+            // Elastos network. Hardcoding it (esc=20 / eid=22 / pg=24 — and pg
+            // was an *unverified guess* per PgAdapter) risks a network-id that
+            // disagrees with the genesis → the node silently can't peer with the
+            // real network. Letting the genesis decide matches node.sh exactly
+            // and removes the guess. (this.chainIdValue is still used by EID's
+            // spvconfig.json generation — that stays.)
             '--port', String(cfg.ports.p2p),
             // HTTP-RPC: loopback only by default (H25). Legacy --rpc* flag
             // names — this geth fork predates the --http* rename.
@@ -305,9 +312,14 @@ class EvmSidechainAdapter extends ChainAdapter {
             // listener stays bound to 127.0.0.1 (H25) regardless.
             '--rpcapi',
             cfg.rpcApis
+                // v0.5.172 (#7 node.sh parity) — node.sh's sets are
+                // 'db,eth,net,pbft,personal,txpool,web3' (miner, esc_start:2150)
+                // and 'admin,eth,net,txpool,web3' (non-miner). We cover both +
+                // keep 'admin' (used by ENM's own diagnostics / SPV reads). All
+                // loopback-bound (H25), so 'db' is harmless here.
                 || (cfg.miner.enabled === true
-                    ? 'eth,net,web3,admin,pbft,personal,txpool'
-                    : 'eth,net,web3,admin'),
+                    ? 'db,eth,net,web3,admin,pbft,personal,txpool'
+                    : 'eth,net,web3,admin,txpool'),
             // No separate discovery-port flag in this geth fork; UDP discovery
             // shares the TCP --port above (cfg.ports.discovery is reserved for
             // future use / firewall rules, not a geth CLI arg here).

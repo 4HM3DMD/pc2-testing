@@ -71,6 +71,7 @@ const ChainAdapter = require('./ChainAdapter');
 const { EthRpcClient } = require('./EthRpcClient');
 const { chainDir } = require('./DataDir');
 const ConfigStore = require('./ConfigStore');
+const { ENM_LOG_PREFIX } = require('./EnmConstants');
 
 class OracleAdapter extends ChainAdapter {
     constructor(deps) {
@@ -155,22 +156,20 @@ class OracleAdapter extends ChainAdapter {
      * @param {object} secrets  { parentRpcUrl, mainchainRpcUrl }
      * @returns {object}
      */
-    buildEnv(cfg, secrets) {
+    buildEnv(cfg) {
         if (!cfg || !cfg.ports || !cfg.ports.httpRpc) {
             throw new Error(`${this.chainId}: buildEnv requires cfg.ports.httpRpc`);
         }
-        if (!secrets || !secrets.parentRpcUrl || !secrets.mainchainRpcUrl) {
-            throw new Error(
-                `${this.chainId}: buildEnv requires secrets.{parentRpcUrl, mainchainRpcUrl}`,
-            );
-        }
+        // v0.5.172 (#2 node.sh parity) — the upstream crosschain_*.js + common.js
+        // read ONLY process.env.env (to pick mainnet/testnet contract addresses);
+        // node.sh likewise exports just `export env=...`. The listen port +
+        // parent-RPC URL the oracle uses are HARDCODED in the script files and
+        // are now rewritten from ENM's config by _alignScriptConfig() at start.
+        // Pre-0.5.172 we also exported ENM_PARENT_CHAIN / ENM_PARENT_RPC /
+        // ENM_MAINCHAIN_RPC / ENM_ORACLE_PORT — all DEAD: the scripts never read
+        // them, so they only gave a false impression of configuring the oracle.
         return {
             env: cfg.activeNet || 'mainnet',
-            // Upstream node.sh sets these prefixes; we mirror them.
-            ENM_PARENT_CHAIN: this.parentChainId,
-            ENM_PARENT_RPC: secrets.parentRpcUrl,
-            ENM_MAINCHAIN_RPC: secrets.mainchainRpcUrl,
-            ENM_ORACLE_PORT: String(cfg.ports.httpRpc),
         };
     }
 
@@ -212,6 +211,84 @@ class OracleAdapter extends ChainAdapter {
     }
 
     /**
+     * v0.5.172 (#2 node.sh parity) — the upstream crosschain_*.js + common.js
+     * HARDCODE the oracle's listen port (e.g. `app.listen('20632')`) and its
+     * parent-chain RPC URL (e.g. `new Web3("http://127.0.0.1:20636")`), and read
+     * ONLY process.env.env. ENM's old ENM_* env vars were dead — the oracle
+     * worked only because the hardcoded values equalled ENM's standard ports.
+     * This rewrites those two values in-place from ENM's config so ENM is
+     * authoritative. Best-effort + idempotent: each rewrite fires only when its
+     * pattern matches EXACTLY once; otherwise it logs and leaves the file
+     * untouched (oracle falls back to its hardcoded default = pre-0.5.172
+     * behavior). It never throws, so it can never block or regress start.
+     *
+     * @param {object} cfg          cfg.scriptPath (dir) + cfg.ports.httpRpc (desired listen port)
+     * @param {string} parentRpcUrl parent EVM chain RPC, e.g. http://127.0.0.1:20636/
+     */
+    async _alignScriptConfig(cfg, parentRpcUrl) {
+        const dir = (cfg && cfg.scriptPath) || '';
+        const listenPort = cfg && cfg.ports && cfg.ports.httpRpc;
+        const parentUrl = String(parentRpcUrl || '').replace(/\/+$/, '');
+        if (listenPort) {
+            await this._patchOnce(
+                path.join(dir, this.scriptFilename),
+                /app\.listen\((['"])\d+\1\)/g,
+                `app.listen('${listenPort}')`,
+                'oracle listen port',
+            );
+        }
+        if (parentUrl) {
+            await this._patchOnce(
+                path.join(dir, 'common.js'),
+                /new Web3\((['"])http:\/\/127\.0\.0\.1:\d+\1\)/g,
+                `new Web3("${parentUrl}")`,
+                'parent RPC url',
+            );
+        }
+    }
+
+    /**
+     * @private — rewrite `regex` → `replacement` in `file`, but only when the
+     * pattern matches exactly once. Idempotent (no-op when already aligned) and
+     * fully best-effort (any read/write problem is logged, never thrown).
+     */
+    async _patchOnce(file, regex, replacement, label) {
+        const log = this.extensionHandle && this.extensionHandle.log;
+        let text;
+        try {
+            text = await fs.promises.readFile(file, 'utf8');
+        } catch (err) {
+            if (log) {
+                log.warn(`${ENM_LOG_PREFIX} ${this.chainId}: cannot read ${path.basename(file)} `
+                    + `to align ${label} (${err.message}) — leaving oracle script as-is`);
+            }
+            return;
+        }
+        const matches = text.match(regex);
+        if (!matches || matches.length !== 1) {
+            if (log) {
+                log.warn(`${ENM_LOG_PREFIX} ${this.chainId}: ${label} pattern matched `
+                    + `${matches ? matches.length : 0}x in ${path.basename(file)} (expected 1) — `
+                    + 'not patching; oracle keeps its hardcoded default');
+            }
+            return;
+        }
+        const next = text.replace(regex, replacement);
+        if (next === text) { return; }   // already aligned — no-op
+        try {
+            await fs.promises.writeFile(file, next);
+            if (log) {
+                log.info(`${ENM_LOG_PREFIX} ${this.chainId}: aligned ${label} -> ${replacement}`);
+            }
+        } catch (err) {
+            if (log) {
+                log.warn(`${ENM_LOG_PREFIX} ${this.chainId}: failed writing ${label} to `
+                    + `${path.basename(file)} (${err.message}) — oracle keeps its hardcoded default`);
+            }
+        }
+    }
+
+    /**
      * start() — overrides base to handle node-vs-binary spawn.
      *
      * Pre-flight:
@@ -242,9 +319,16 @@ class OracleAdapter extends ChainAdapter {
             );
         }
         const parentRpcUrl = await this.resolveParentRpcUrl();
-        const mainchainRpcUrl = await this.resolveMainchainRpcUrl();
+        // Precondition only — the oracle relays to mainchain, so it must be
+        // configured. (The URL is no longer passed as an env var; the script
+        // reaches mainchain via its own bundled logic.)
+        await this.resolveMainchainRpcUrl();
+        // v0.5.172 (#2) — rewrite the oracle script's hardcoded listen port +
+        // parent-RPC URL from ENM's config so ENM is authoritative (the script
+        // reads no env vars for these). Best-effort; never blocks start.
+        await this._alignScriptConfig(cfg, parentRpcUrl);
         cfg.spawnArgs = this.buildSpawnArgs(cfg);
-        cfg.spawnEnv = this.buildEnv(cfg, { parentRpcUrl, mainchainRpcUrl });
+        cfg.spawnEnv = this.buildEnv(cfg);
         return this.processService.start(this.chainId, cfg);
     }
 

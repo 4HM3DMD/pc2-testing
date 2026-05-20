@@ -212,10 +212,15 @@ async function main() {
             // because deploys were the only "killer"). Synchronous; the
             // markers must land before pc2-node sends the signal.
             try {
-                const marked = ChainRegistry.getProcessService().markAllManualStop();
+                const ps = ChainRegistry.getProcessService();
+                const marked = ps.markAllManualStop();
                 log('info', `teardown: pre-marked ${marked.length} chain(s) as manualStop`);
+                // v0.5.172 (#3) — graceful SIGINT flush before pc2-node kills us
+                // (clean leveldb flush for EVM geth, matching node.sh's SIGINT).
+                const flushed = ps.signalAll('SIGINT');
+                if (flushed > 0) { log('info', `teardown: sent SIGINT flush to ${flushed} child(ren)`); }
             } catch (markErr) {
-                log('warn', `teardown: markAllManualStop failed (non-fatal): ${markErr.message}`);
+                log('warn', `teardown: chain handling failed (non-fatal): ${markErr.message}`);
             }
             const result = backupKeystoreForTeardown();
             return res.json(successBody(result));
@@ -467,10 +472,18 @@ async function main() {
         const onShutdown = (signal) => {
             log('info', `received ${signal} — pre-marking running chains as manualStop`);
             try {
-                const marked = ChainRegistry.getProcessService().markAllManualStop();
+                const ps = ChainRegistry.getProcessService();
+                const marked = ps.markAllManualStop();
                 log('info', `${signal}: pre-marked ${marked.length} chain(s)`);
+                // v0.5.172 (#3) — give the children a graceful-stop head start
+                // before pc2-node finishes tearing the app down. EVM geth needs
+                // SIGINT for a clean leveldb flush (node.sh `kill -s SIGINT`);
+                // ela/arbiter/oracles handle SIGINT gracefully too. Marking
+                // manual FIRST keeps the resulting exits classified manual.
+                const flushed = ps.signalAll('SIGINT');
+                if (flushed > 0) { log('info', `${signal}: sent SIGINT flush to ${flushed} child(ren)`); }
             } catch (err) {
-                log('warn', `${signal}: markAllManualStop failed (non-fatal): ${err.message}`);
+                log('warn', `${signal}: shutdown chain handling failed (non-fatal): ${err.message}`);
             }
             // Don't process.exit() — let the natural exit path run so any
             // pending writes complete. The Node process exits when the

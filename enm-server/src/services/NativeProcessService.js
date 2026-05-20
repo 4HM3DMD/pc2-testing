@@ -197,6 +197,46 @@ class NativeProcessService extends EventEmitter {
     }
 
     /**
+     * v0.5.172 (#3) — fire-and-forget send `signal` to every child WE spawned,
+     * giving them a graceful-flush head start when ENM itself is shutting down
+     * (a deploy/restart). EVM sidechains especially need SIGINT for a clean
+     * leveldb flush (node.sh stops them with `kill -s SIGINT`); ela/arbiter/
+     * oracles all handle SIGINT as a graceful stop too. Without this, the
+     * children only receive whatever pc2-node sends when it tears the app down,
+     * which can be an abrupt mid-write kill → unclean shutdown.
+     *
+     * No wait, no grace timer — this is meant to run inside the synchronous
+     * shutdown handler (pc2-node then finishes the kill). Pair with
+     * markAllManualStop() FIRST so the resulting exits classify as manual.
+     * Only signals children with a live ChildProcess handle (skips chains we
+     * merely reattached to — those have no handle); never throws.
+     *
+     * @param {string} [signal='SIGINT']
+     * @returns {number} count of children signalled
+     */
+    signalAll(signal = 'SIGINT') {
+        let sent = 0;
+        for (const [chainId, handle] of this.handles.entries()) {
+            const child = handle && handle.child;
+            if (!child || child.killed || typeof child.pid !== 'number') { continue; }
+            try {
+                child.kill(signal);
+                sent += 1;
+            } catch (err) {
+                this.extensionHandle.log.debug(
+                    `${ENM_LOG_PREFIX} signalAll: ${chainId} kill(${signal}) failed: ${err.message}`,
+                );
+            }
+        }
+        if (sent > 0) {
+            this.extensionHandle.log.info(
+                `${ENM_LOG_PREFIX} signalAll: sent ${signal} to ${sent} child(ren) for graceful flush`,
+            );
+        }
+        return sent;
+    }
+
+    /**
      * Stop the chain. <stopSignal> → wait grace → SIGKILL. Marks as
      * user-initiated so F1 honors the stop and doesn't try to restart.
      * Locked per chainId.
