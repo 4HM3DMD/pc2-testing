@@ -41,6 +41,7 @@ const {
 const {
     chainDir,
     pidFilePath,
+    chainLogSinkPath,
     runDir,
     atomicWrite,
 } = require('./DataDir');
@@ -462,6 +463,53 @@ class NativeProcessService extends EventEmitter {
             throw writeErr;
         }
 
+        // Open a per-chain disk sink for the child's stdout+stderr. node.sh
+        // persists every process to a tailable file (esc/pg/oracle via
+        // rotatelogs, ela/arbiter via `2>output`); ENM matches so the HTTP
+        // tail endpoint (routes/logs.js) works for EVERY chain — not just ela
+        // mainchain, which is the only binary that self-writes elastos/logs/
+        // node/. The live SSE path (ProcessLogStreamer) is unaffected: the
+        // emit() calls below stay intact, so both consumers coexist.
+        //
+        // Robustness: a sink failure (disk full, EACCES, etc.) must NEVER kill
+        // the chain. We swallow open errors, attach an 'error' handler that
+        // warns and continues, and guard the close against double-invocation
+        // from the exit handler + any spawn-failure cleanup path.
+        let logSink = null;
+        let logSinkClosed = false;
+        const closeLogSink = () => {
+            if (logSinkClosed || !logSink) {
+                return;
+            }
+            logSinkClosed = true;
+            try {
+                logSink.end();
+            } catch (_) { /* already destroyed — nothing to do */ }
+            logSink = null;
+        };
+        try {
+            const sinkPath = chainLogSinkPath(chainId);
+            fs.mkdirSync(path.dirname(sinkPath), { recursive: true, mode: 0o700 });
+            logSink = fs.createWriteStream(sinkPath, { flags: 'a', mode: 0o600 });
+            logSink.on('error', (err) => {
+                // Disk full / permissions / fd exhaustion — log once at warn
+                // and stop writing. The chain keeps running; only on-disk log
+                // capture degrades (SSE tailing still works).
+                this.extensionHandle.log.warn(
+                    `${ENM_LOG_PREFIX} ${chainId} log sink write error (${err.message}); on-disk logging disabled for this run`,
+                );
+                logSinkClosed = true;
+                logSink = null;
+            });
+        } catch (err) {
+            // Failed to even open the sink (mkdir/create). Non-fatal — proceed
+            // without on-disk capture rather than blocking the chain start.
+            this.extensionHandle.log.warn(
+                `${ENM_LOG_PREFIX} ${chainId} could not open log sink (${err.message}); on-disk logging disabled for this run`,
+            );
+            logSink = null;
+        }
+
         const handle = { child, meta, manualStop: false };
         this.handles.set(chainId, handle);
 
@@ -471,6 +519,9 @@ class NativeProcessService extends EventEmitter {
             const wasManual = handle.manualStop;
             const exitedPid = child.pid;
             this.handles.delete(chainId);
+            // Close the disk sink so we don't leak a file descriptor across
+            // restarts. Guarded against double-close (see closeLogSink).
+            closeLogSink();
             // best-effort cleanup; don't await inside the listener
             this._unlinkSilent(pidFilePath(chainId)).catch(() => {});
             this._unlinkSilent(metaFilePath(chainId)).catch(() => {});
@@ -498,16 +549,35 @@ class NativeProcessService extends EventEmitter {
             }
         });
         child.on('error', (err) => {
+            // A spawn-level error (e.g. ENOENT/EACCES on the binary) may fire
+            // without a paired 'exit'. Close the sink here too so we never leak
+            // its fd; closeLogSink is idempotent so a later 'exit' is a no-op.
+            closeLogSink();
             this.extensionHandle.log.error(`${ENM_LOG_PREFIX} ${chainId} child error: ${err.message}`);
             this.emit('child-error', { chainId, error: err });
         });
 
-        // Bubble stdio up so the log streamer (Phase 3) can subscribe.
+        // Bubble stdio up so the log streamer (Phase 3) can subscribe, AND
+        // append every chunk to the per-chain disk sink for the HTTP tail
+        // endpoint. Both consumers coexist — the emit() keeps live SSE working;
+        // the write() persists for reattach/initial-load/reconnect reads.
+        // logSink may be null (open failed) or get nulled by its error handler;
+        // guard every write so a logging fault never touches the chain process.
         if (child.stdout) {
-            child.stdout.on('data', (chunk) => this.emit('stdout', { chainId, chunk }));
+            child.stdout.on('data', (chunk) => {
+                this.emit('stdout', { chainId, chunk });
+                if (logSink) {
+                    try { logSink.write(chunk); } catch (_) { /* error handler already fired */ }
+                }
+            });
         }
         if (child.stderr) {
-            child.stderr.on('data', (chunk) => this.emit('stderr', { chainId, chunk }));
+            child.stderr.on('data', (chunk) => {
+                this.emit('stderr', { chainId, chunk });
+                if (logSink) {
+                    try { logSink.write(chunk); } catch (_) { /* error handler already fired */ }
+                }
+            });
         }
 
         this.extensionHandle.log.info(

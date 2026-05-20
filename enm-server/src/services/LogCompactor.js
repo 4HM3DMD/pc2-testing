@@ -43,7 +43,11 @@ const { chainDir } = require('./DataDir');
 
 const DEFAULT_GZIP_AFTER_DAYS = 7;
 const DEFAULT_PURGE_AFTER_DAYS = 90;
-const DEFAULT_LOG_SUBDIRS = ['elastos/logs/node', 'elastos/logs/dpos', 'elastos/logs'];
+// 'logs' covers ENM's per-chain stdout/stderr sink (chains/<id>/logs/<id>.log,
+// written by NativeProcessService for every chain) so it's gzipped + purged by
+// the same daily pass and never grows unbounded. The elastos/* entries cover
+// ela mainchain's own rotated node/dpos logs.
+const DEFAULT_LOG_SUBDIRS = ['elastos/logs/node', 'elastos/logs/dpos', 'elastos/logs', 'logs'];
 
 /**
  * @typedef {object} CompactReport

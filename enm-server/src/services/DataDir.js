@@ -103,6 +103,30 @@ function pidFilePath(chainId) {
     return path.join(runDir(), `ela-${chainId}.pid`);
 }
 
+/**
+ * Per-chain stdout/stderr sink file. NativeProcessService appends every
+ * child's stdout+stderr here; routes/logs.js tails it for the HTTP log
+ * viewer. Single source of truth so the writer (Part A) and reader (Part B)
+ * cannot drift.
+ *
+ * Mirrors node.sh, which writes each non-ela process to
+ * $SCRIPT_PATH/<chain>/logs/<chain>-...log (build/skeleton/node.sh:2169,
+ * 2386, 3603 for esc/pg/oracle; arbiter/ela use `2>output` at :4963/:878).
+ * ela mainchain ALSO self-writes a richer structured log under
+ * elastos/logs/node/ via its own logger — the tail handler prefers that
+ * native log for mainchain and uses this sink for every other chain.
+ *
+ * Lives under chains/<id>/logs/ (NOT elastos/logs/node which ela owns).
+ * LogCompactor.DEFAULT_LOG_SUBDIRS includes 'logs' so this file is gzipped
+ * + purged by the same daily compaction pass — no unbounded growth.
+ *
+ * @param {string} chainId
+ * @returns {string}
+ */
+function chainLogSinkPath(chainId) {
+    return path.join(chainDir(chainId), 'logs', `${chainId}.log`);
+}
+
 /** Master encryption key path. */
 function encryptionKeyPath() {
     return path.join(enmDataDir(), 'encryption.key');
@@ -145,6 +169,7 @@ module.exports = {
     chainDir,
     runDir,
     pidFilePath,
+    chainLogSinkPath,
     encryptionKeyPath,
     configPath,
     configBackupPath,
