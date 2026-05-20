@@ -42,11 +42,13 @@
         { key: 'eid',        label: 'Identity Chain',        hint: 'EID + EID Oracle' },
         { key: 'pg',         label: 'PG Chain',              hint: 'PG + PG Oracle' },
         { key: 'arbiter',    label: 'Arbiter Service',       hint: 'Cross-chain arbitration' },
-        // 0.5.30 audit Session 30 — hint aligned with Session 15
-        // (v0.5.15) reframing. SPV is a wallet/client protocol Main
-        // chain serves automatically, not a node-mode an operator runs.
-        // Row is always grayed (cfg.chains.spv is never populated).
-        { key: 'spv',        label: 'SPV Module',            hint: 'Wallet protocol (served by Main chain)' },
+        // v0.5.168 (Phase 2) — SPV (class E) is NOT a standalone process: it's
+        // embedded in the EVM sidechains (esc/eid/pg keep their own light-client
+        // state under data/logs-spv) and in the arbiter (getspvheight +
+        // per-sidechain getsidechainblockheight). The SPV Module view aggregates
+        // those heights. Enabled on council nodes running ≥1 EVM sidechain or the
+        // arbiter (see _isOptionEnabled); grayed on a Main-chain-only node.
+        { key: 'spv',        label: 'SPV Module',            hint: 'Cross-chain SPV heights' },
     ];
 
     var STORAGE_KEY = 'enm:chain-selection';
@@ -122,7 +124,17 @@
         var self = this;
         if (!this.api || typeof this.api.get !== 'function') { return; }
         this.api.get('/config').then(function (data) {
-            var cfg = (data && data.result && data.result.config) || data || {};
+            // api.js unwraps the envelope to `parsed.result` (api.js:260), so
+            // `data` here is the RESULT level = { config: { chains: {...} } } —
+            // NOT the full { success, result } envelope. Resolve the config
+            // object across all three shapes: full envelope (data.result.config),
+            // unwrapped result (data.config — the actual runtime shape), or a
+            // bare config object (data). Pre-fix this only tried
+            // data.result.config || data, so chains came out empty on EVERY
+            // council node → keys.length 0 → mis-detected bpos-only + grayed.
+            var cfg = (data && data.result && data.result.config)
+                   || (data && data.config)
+                   || data || {};
             var chains = cfg.chains || {};
             var keys = Object.keys(chains);
             self._availableChains = new Set(keys);
@@ -262,6 +274,16 @@
             // Multi-chain overview only makes sense once >1 chain is
             // installed. Grayed out for BPoS-only nodes.
             return this._mode === 'council';
+        }
+        if (key === 'spv') {
+            // v0.5.168 (Phase 2) — SPV is virtual (embedded in the EVM
+            // sidechains + the arbiter), so cfg.chains.spv never exists. Enable
+            // the SPV Module whenever at least one of its host chains is
+            // configured — otherwise there are no SPV heights to show.
+            return this._availableChains.has('esc')
+                || this._availableChains.has('eid')
+                || this._availableChains.has('pg')
+                || this._availableChains.has('arbiter');
         }
         return this._availableChains.has(key);
     };

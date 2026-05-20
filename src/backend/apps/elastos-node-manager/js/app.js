@@ -614,6 +614,10 @@
                 // prepends. Optional; absence falls back to the old
                 // refresh-to-see-new-rows behaviour.
                 sse: self.services.sse,
+                // v0.5.168 (Phase 4) — the active chain, so the audit tab can
+                // offer a "This chain only" scope chip. Lazy panes are torn
+                // down + re-mounted on chain change, so this stays current.
+                chainId: self._activeChainId || 'mainchain',
             });
             self._auditTab.mount(self.els.paneAudit);
         }
@@ -1310,57 +1314,35 @@
         };
         this._dashboardMounts = [];
 
-        if (chainId !== 'mainchain') {
-            // M2.1 stub. Per-class dashboards land in M3 (Class B —
-            // ESC/EID/PG), M4 (Class C — Oracles), M6 (Class D —
-            // Arbiter). Until then any non-mainchain selection shows
-            // a "Coming soon" stub so the operator gets a clear signal
-            // rather than a broken mainchain dashboard rendered for
-            // the wrong chain.
-            // beta.3.94 (M2.6) — labels sourced from strings.js with
-            // English fallbacks. Falls back to the in-place table when
-            // strings.js isn't loaded yet (very first paint).
-            var labelMap = {
-                esc:     'Smart Chain (ESC)',
-                eid:     'Identity Chain (EID)',
-                pg:      'PG Chain',
-                arbiter: 'Arbiter Service',
-                spv:     'SPV Module',
-            };
-            var t = root.enmTOrFallback;
-            function _fb(key, fb, vars) {
-                if (typeof t !== 'function') {
-                    return vars ? fb.replace(/\{(\w+)\}/g, function (m, n) { return vars[n] || m; }) : fb;
-                }
-                var v = t(key, vars);
-                if (!v || v === key || v === ('[' + key + ']')) {
-                    return vars ? fb.replace(/\{(\w+)\}/g, function (m, n) { return vars[n] || m; }) : fb;
-                }
-                return v;
+        // 0.5 — per-chain dashboards. chain-card.js is already class-aware
+        // (Class A/B/C/D height labels, oracle parent block, start/stop/restart,
+        // self-fetch of /chains/:id) so every real chain mounts the SAME hero
+        // the mainchain dashboard uses (below).
+        //
+        // v0.5.168 (Phase 2) — SPV (Class E) is the one selection with no
+        // configured chain of its own: its sync state is embedded in the EVM
+        // sidechains (data/logs-spv) + the arbiter (getspvheight /
+        // getsidechainblockheight). It gets a dedicated aggregate view
+        // (EnmSpvModule, self-fetches GET /spv) instead of a chain-card.
+        if (chainId === 'spv') {
+            if (root.EnmSpvModule) {
+                var spvView = new root.EnmSpvModule(common);
+                spvView.mount(pane);
+                this._dashboardMounts.push(spvView);
+            } else {
+                // Defensive: the component script hasn't parsed yet (first
+                // paint race). It's a deferred <script> in index.html, so this
+                // only shows for a frame before the operator can navigate here.
+                pane.innerHTML = '<div class="enm-pane-stub" role="status" aria-live="polite">'
+                    + '<h2>SPV Module</h2><p>Loading…</p></div>';
             }
-            var displayName = _fb('chain_name.' + chainId, labelMap[chainId] || chainId);
-            var titleText = _fb('pane_stub.dashboard_title', '{chainName} dashboard', { chainName: displayName });
-            // 0.5.29 audit Session 29 — operator-facing fallback matches
-            // the updated pane_stub.dashboard_body in strings.js. Pre-
-            // 0.5.29 the inline fallback leaked M3/M4/M6 milestone tags.
-            var bodyText = _fb('pane_stub.dashboard_body',
-                'A detailed dashboard for this chain isn\'t ready yet. '
-                + 'To check its current state use the Settings tab, or '
-                + 'switch the chain selector to "Multi-chain overview" '
-                + 'to see status for every installed chain in one place.');
-            // escape minimal — these come from our own strings, but
-            // defense in depth in case a future translation adds
-            // markup-looking chars.
-            function _esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-            pane.innerHTML =
-                '<div class="enm-pane-stub" role="status" aria-live="polite">'
-                + '<h2>' + _esc(titleText) + '</h2>'
-                + '<p>' + _esc(bodyText) + '</p>'
-                + '</div>';
             return;
         }
 
-        // Class A — mainchain. Original 5-component dashboard layout.
+        // All chains — class-aware layout (0.5: was mainchain-only + a stub for
+        // every other chain). chain-card.js renders every class (A/B/C/D), so it
+        // + system-status mount for ALL chains here; the mainchain-only cards
+        // (identity / BPoS / binary-update) are gated to chainId==='mainchain'.
         // 0.2.0-beta.3.4 — phase-03 mock puts the chain-card hero at
         // the TOP of the dashboard pane (the primary affordance —
         // operator looks at the power button / sync ring first), with
@@ -1375,20 +1357,26 @@
             sys.mount(pane);
             this._dashboardMounts.push(sys);
         }
-        if (root.EnmNodeIdentityCard) {
-            var ident = new root.EnmNodeIdentityCard(common);
-            ident.mount(pane);
-            this._dashboardMounts.push(ident);
-        }
-        if (root.EnmValidatorRegistrationCard) {
-            var bpos = new root.EnmValidatorRegistrationCard(common);
-            bpos.mount(pane);
-            this._dashboardMounts.push(bpos);
-        }
-        if (root.EnmToolsUpdateCard) {
-            var upd = new root.EnmToolsUpdateCard(common);
-            upd.mount(pane);
-            this._dashboardMounts.push(upd);
+        // Mainchain-only cards: consensus signing identity, BPoS producer
+        // registration, and binary-update are Class-A concepts. The EVM
+        // sidechains / oracles / arbiter get the chain-card hero + system
+        // status above (matching the mainchain layout, minus these three).
+        if (chainId === 'mainchain') {
+            if (root.EnmNodeIdentityCard) {
+                var ident = new root.EnmNodeIdentityCard(common);
+                ident.mount(pane);
+                this._dashboardMounts.push(ident);
+            }
+            if (root.EnmValidatorRegistrationCard) {
+                var bpos = new root.EnmValidatorRegistrationCard(common);
+                bpos.mount(pane);
+                this._dashboardMounts.push(bpos);
+            }
+            if (root.EnmToolsUpdateCard) {
+                var upd = new root.EnmToolsUpdateCard(common);
+                upd.mount(pane);
+                this._dashboardMounts.push(upd);
+            }
         }
     };
 

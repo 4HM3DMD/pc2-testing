@@ -274,6 +274,34 @@ class OracleAdapter extends ChainAdapter {
         }
         return { alive: true, rpcOk: true, pid: procStatus.pid };
     }
+
+    /**
+     * v0.5.168 (Phase 1) — oracles are stateless relayers with no chain of
+     * their own (height/peers/synced stay null — the chain card already skips
+     * the height block for class C). For hero context we surface the PARENT
+     * EVM sidechain's current block height (e.g. esc for esc-oracle) so the
+     * operator can see what the relayer is tracking. Best-effort: loads the
+     * parent's RPC port and reads eth_blockNumber. Never throws.
+     *
+     * @param {object} cfg  (this oracle's chain config — unused; parent looked
+     *                       up from the full ConfigStore by parentChainId)
+     * @returns {Promise<{height:number|null, peers:number|null, networkHeight:number|null, synced:boolean|null, parentBlockHeight:number|null}>}
+     */
+    async primaryHeight(cfg) {  // eslint-disable-line no-unused-vars
+        const out = {
+            height: null, peers: null, networkHeight: null, synced: null, parentBlockHeight: null,
+        };
+        try {
+            const full = await ConfigStore.load();
+            const parent = full && full.chains && full.chains[this.parentChainId];
+            if (parent && parent.ports && parent.ports.rpc) {
+                const rpc = new EthRpcClient({ host: '127.0.0.1', port: parent.ports.rpc });
+                const v = await rpc.getBlockNumber();
+                if (typeof v === 'number') { out.parentBlockHeight = v; }
+            }
+        } catch (_) { /* parent RPC unreachable; parentBlockHeight stays null */ }
+        return out;
+    }
 }
 
 module.exports = OracleAdapter;

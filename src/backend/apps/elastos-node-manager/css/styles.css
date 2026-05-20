@@ -7313,3 +7313,103 @@ body[data-app-size="compact"] .enm-app .enm-overview-row .enm-overview-spark {
     max-width: 640px;
     margin: var(--sp-3, 12px) auto var(--sp-4, 16px) auto;
 }
+
+/* ============================================================
+   v0.5.168 (Phase 2) — SPV Module pane (components/spv-module.js)
+   ============================================================
+   Aggregate hero (arbiter SPV height) + per-sidechain rows + an
+   on-demand logs-spv tail. Reuses .enm-card / .enm-btn; adds only
+   the SPV-specific layout + the shared state dot. */
+.enm-app .enm-spv-intro {
+    color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.5;
+    margin: 0 0 var(--sp-3, 12px) 0;
+    max-width: 760px;
+}
+.enm-app .enm-spv-loading,
+.enm-app .enm-spv-error {
+    color: var(--text-secondary);
+    padding: var(--sp-4, 16px);
+}
+.enm-app .enm-spv-error h2 { color: var(--text-primary); margin: 0 0 var(--sp-2, 8px) 0; }
+
+.enm-app .enm-spv-hero {
+    text-align: center;
+    padding: var(--sp-4, 16px) var(--sp-3, 12px);
+}
+.enm-app .enm-spv-hero-label {
+    color: var(--text-tertiary);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+.enm-app .enm-spv-hero-value {
+    color: var(--text-primary);
+    font-size: 40px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.1;
+    margin: var(--sp-1, 4px) 0;
+}
+.enm-app .enm-spv-hero-sub {
+    color: var(--text-secondary);
+    font-size: 13px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.enm-app .enm-spv-sidechains h3,
+.enm-app .enm-spv-logs-panel h3 {
+    color: var(--text-primary);
+    font-size: 14px;
+    margin: 0 0 var(--sp-2, 8px) 0;
+}
+.enm-app .enm-spv-row {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3, 12px);
+    padding: var(--sp-2, 8px) 0;
+    border-bottom: 1px solid var(--border-color, var(--border-subtle));
+}
+.enm-app .enm-spv-row:last-child { border-bottom: none; }
+.enm-app .enm-spv-name { flex: 1 1 auto; color: var(--text-primary); font-size: 14px; }
+.enm-app .enm-spv-height {
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+    font-size: 14px;
+    min-width: 96px;
+    text-align: right;
+}
+.enm-app .enm-spv-no-logs { color: var(--text-tertiary); font-size: 12px; }
+.enm-app .enm-spv-empty { color: var(--text-secondary); font-size: 13px; margin: 0; }
+
+/* Shared state dot — green when running, dim when stopped, hollow when absent. */
+.enm-app .enm-spv-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    flex: 0 0 auto;
+    background: var(--text-tertiary);
+    display: inline-block;
+}
+.enm-app .enm-spv-dot.running { background: var(--success); box-shadow: 0 0 6px var(--success-soft); }
+.enm-app .enm-spv-dot.stopped { background: var(--text-tertiary); }
+.enm-app .enm-spv-dot.absent  { background: transparent; border: 1px solid var(--text-tertiary); }
+
+.enm-app .enm-spv-logs-pre {
+    background: var(--bg-page, #0f1218);
+    border: 1px solid var(--border-color, var(--border-subtle));
+    border-radius: 6px;
+    color: var(--text-secondary);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    margin: 0;
+    max-height: 320px;
+    overflow: auto;
+    padding: var(--sp-2, 8px);
+    white-space: pre-wrap;
+    word-break: break-word;
+}

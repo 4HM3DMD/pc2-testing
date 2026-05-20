@@ -151,10 +151,11 @@ async function runFullDiagnose(deps) {
             title: chainId + ' binary path invalid',
             detail: pathOk.reason || 'Path is missing or not executable.',
             fixes: [
-                'Build ela from source per docs/BUILD-ELA.md',
-                'Then point ENM at the result:',
-                '  Settings → Mainchain Advanced → Binary path',
-                '  or re-run the setup wizard',
+                // v0.5.168 (Phase 5, C22) — chain-generic. Pre-0.5.168 this
+                // hard-coded "Build ela from source" + "Mainchain Advanced",
+                // wrong for esc/eid/pg/arbiter/oracle binary-path failures.
+                'Re-run the setup wizard to (re)install the binary for this chain,',
+                'or set an existing binary path under Settings then Advanced for this chain',
             ],
             autoFix: null,
         });
@@ -467,8 +468,10 @@ async function runFullDiagnose(deps) {
                     id: 'disk-space',
                     status: STATUS.WARN,
                     title: 'Disk space low: ' + freeGb.toFixed(1) + ' GB free',
-                    detail: 'ELA grows ~5 GB/month. Plan a prune or volume migration.',
-                    fixes: ['Compact logs: Settings → Mainchain Advanced → Compact logs'],
+                    // v0.5.168 (Phase 5, C22) — chain-generic (was ELA-specific
+                    // "ELA grows ~5 GB/month" + "Mainchain Advanced").
+                    detail: 'Chain data grows over time. Plan a prune or volume migration.',
+                    fixes: ['Compact logs under Settings then Advanced for this chain'],
                 });
             } else {
                 findings.push({

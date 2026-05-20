@@ -1454,6 +1454,12 @@
             col_outcome:    'Outcome',
             tier_any:       'Any kind',
             filter_when:    'When',
+            // v0.5.168 (Phase 4) — re-introduced (Session 138 had dropped
+            // filter_chain as orphaned). The audit tab now offers a per-chain
+            // scope chip ("All chains" / "<this chain>") that adds chainId= to
+            // the /audit query, so these keys have live consumers again.
+            filter_chain:   'Chain',
+            chain_all:      'All chains',
             copy_filtered:  'Copy filtered rows',
             load_more:      'Load more',
             load_more_capped: 'Cap reached — narrow filters or export to see more.',
@@ -1508,6 +1514,31 @@
             // caller picks between the two keys based on count.
             row_count:      '{n} entries',
             row_count_one:  '{n} entry',
+        },
+
+        // v0.5.168 (Phase 2/5) — SPV Module pane (components/spv-module.js).
+        // SPV (class E) is embedded in the EVM sidechains + the arbiter; this
+        // pane aggregates getspvheight + per-sidechain getsidechainblockheight
+        // and tails each sidechain's on-disk logs-spv on demand.
+        spv_module: {
+            aria:            'SPV Module',
+            loading:         'Loading SPV status…',
+            error_title:     'SPV status unavailable',
+            intro:           'SPV (light-client) sync is embedded in the EVM sidechains and the '
+                             + 'Arbiter — there is no separate SPV process. This view aggregates '
+                             + 'each chain’s SPV-tracked height.',
+            hero_label:      'Arbiter SPV height',
+            arbiter_running: 'Arbiter running',
+            arbiter_stopped: 'Arbiter stopped',
+            arbiter_absent:  'Arbiter not installed',
+            sidechains_title: 'Sidechain SPV heights',
+            no_sidechains:   'No EVM sidechains are configured, so there are no SPV heights to show.',
+            view_logs:       'View SPV logs',
+            no_logs_yet:     'No SPV logs yet',
+            logs_title:      'SPV logs — {chain}',
+            logs_loading:    'Loading…',
+            logs_empty:      'No SPV log lines yet for this chain.',
+            logs_error:      'Could not read SPV logs: {msg}',
         },
 
         // beta.3.15 — producer_binding.* strings block deleted. Its only

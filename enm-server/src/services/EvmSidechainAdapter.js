@@ -793,6 +793,44 @@ class EvmSidechainAdapter extends ChainAdapter {
         }
         return { alive: true, rpcOk: true, pid: procStatus.pid };
     }
+
+    /**
+     * v0.5.168 (Phase 1) — EVM sidechains speak Ethereum JSON-RPC, not the
+     * ELA Bitcoin-style RPC the base primaryHeight() uses. Map to:
+     *   height        ← eth_blockNumber  (the chain's current block)
+     *   peers         ← net_peerCount
+     *   synced        ← (eth_syncing === false)
+     *   networkHeight ← eth_syncing.highestBlock while still catching up
+     * Never throws; each call is settled independently so one RPC blip doesn't
+     * blank the whole hero.
+     *
+     * @param {object} cfg
+     * @returns {Promise<{height:number|null, peers:number|null, networkHeight:number|null, synced:boolean|null, parentBlockHeight:number|null}>}
+     */
+    async primaryHeight(cfg) {
+        const out = {
+            height: null, peers: null, networkHeight: null, synced: null, parentBlockHeight: null,
+        };
+        let rpc;
+        try { rpc = this.rpcClient(cfg); } catch (_) { return out; }
+        const [hgt, prs, syn] = await Promise.allSettled([
+            rpc.getBlockNumber(),
+            rpc.getPeerCount(),
+            rpc.syncing(),
+        ]);
+        if (hgt.status === 'fulfilled' && typeof hgt.value === 'number') { out.height = hgt.value; }
+        if (prs.status === 'fulfilled' && typeof prs.value === 'number') { out.peers = prs.value; }
+        if (syn.status === 'fulfilled') {
+            const s = syn.value;
+            if (s === false) {
+                out.synced = true;
+            } else if (s && typeof s === 'object') {
+                out.synced = false;
+                if (typeof s.highestBlock === 'number') { out.networkHeight = s.highestBlock; }
+            }
+        }
+        return out;
+    }
 }
 
 module.exports = EvmSidechainAdapter;

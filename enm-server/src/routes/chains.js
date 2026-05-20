@@ -98,6 +98,21 @@ function build(extensionHandle) {
             // Each lookup is in its own try/catch so a single RPC blip
             // doesn't take down the whole status response.
             let height = null, peers = null, uptimeSec = null;
+            // v0.5.168 (Phase 1) — hoisted so the class-aware primaryHeight()
+            // call below can pre-fill them for non-A classes. For class A they
+            // stay at these defaults here and are filled by the getnodestate
+            // neighbor walk further down.
+            let synced = false;
+            let lastBlockTime = null;
+            let networkHeight = null;
+            let producerState = null;
+            // 0.2.0-alpha.7 — peer-quality summary surfaced for the chain-card
+            // hover panel. Populated inside the synced/at-tip neighbors walk
+            // below so we don't make a second `getnodestate` RPC for it.
+            let peerSummary = null;
+            // v0.5.168 (Phase 1) — class C oracle context: the parent EVM
+            // sidechain's current block height. null for every non-oracle.
+            let parentBlockHeight = null;
             if (status && status.alive) {
                 // Uptime — read from the meta sidecar's startedAt.
                 try {
@@ -109,25 +124,23 @@ function build(extensionHandle) {
                     }
                 } catch (_) { /* meta missing; uptime stays null */ }
 
-                // Height + peers — single RPC client, parallel calls. If
-                // RPC isn't ready yet (chain still booting), both fail
-                // and the response has nulls — which the UI renders as
-                // "—" honestly.
+                // v0.5.168 (Phase 1) — class-aware primary metric. Each adapter
+                // probes with its own RPC dialect (ELA getblockcount, EVM
+                // eth_blockNumber, arbiter getspvheight, oracle parent-chain
+                // block) via primaryHeight(). Pre-0.5.168 this called
+                // getblockcount/getconnectioncount unconditionally, so every
+                // non-mainchain chain rendered "—" for height + peers.
                 try {
-                    const rpc = adapter.rpcClient(chainCfg);
-                    const results = await Promise.allSettled([
-                        rpc.getblockcount(),
-                        rpc.getconnectioncount(),
-                    ]);
-                    if (results[0].status === 'fulfilled') {
-                        const v = results[0].value;
-                        height = (typeof v === 'number') ? v : (v && v.result) || null;
-                    }
-                    if (results[1].status === 'fulfilled') {
-                        const v = results[1].value;
-                        peers = (typeof v === 'number') ? v : (v && v.result) || null;
-                    }
-                } catch (_) { /* RPC unreachable; height/peers stay null */ }
+                    const pm = await adapter.primaryHeight(chainCfg);
+                    height = pm.height;
+                    peers = pm.peers;
+                    // Non-A classes carry their own networkHeight/synced (e.g.
+                    // EVM eth_syncing). Class A leaves these null here and fills
+                    // them from the neighbor walk below.
+                    if (pm.networkHeight != null) { networkHeight = pm.networkHeight; }
+                    if (typeof pm.synced === 'boolean') { synced = pm.synced; }
+                    if (pm.parentBlockHeight != null) { parentBlockHeight = pm.parentBlockHeight; }
+                } catch (_) { /* primaryHeight never throws, but stay defensive */ }
             }
 
             // alpha.14/.15 — synced detection. The truthful signal on
@@ -143,15 +156,15 @@ function build(extensionHandle) {
             // "syncing" during slow-block periods even when fully caught
             // up. alpha.15 adds (b) by also calling getnodestate for
             // peers' max height.
-            let synced = false;
-            let lastBlockTime = null;
-            let networkHeight = null;
-            let producerState = null;
-            // 0.2.0-alpha.7 — peer-quality summary surfaced for the chain-card
-            // hover panel. Populated inside the synced/at-tip neighbors walk
-            // below so we don't make a second `getnodestate` RPC for it.
-            let peerSummary = null;
-            if (status && status.alive && height != null) {
+            //
+            // v0.5.168 (Phase 1) — this walk is class-A ONLY: it relies on
+            // ela's getbestblockhash + getnodestate Neighbors[] schema, which
+            // EVM (EthRpcClient) / arbiter / oracle classes don't serve. Those
+            // classes already populated synced + networkHeight from
+            // primaryHeight() above, so we gate the walk to class A to avoid
+            // wasted failing RPCs. (synced/lastBlockTime/networkHeight/
+            // producerState/peerSummary are declared at the top of the handler.)
+            if (adapter.chainClass === 'A' && status && status.alive && height != null) {
                 try {
                     const rpc = adapter.rpcClient(chainCfg);
 
@@ -396,6 +409,12 @@ function build(extensionHandle) {
                 // the same `getnodestate.neighbors` we already walked for
                 // the at-tip check; null when chain is dead or RPC missed.
                 peerSummary,
+                // v0.5.168 (Phase 1) — class C oracle context, surfaced so the
+                // oracle card's "Relays for <parent>" row + parent-block metric
+                // populate from the live poll (not just the boot-time overview
+                // snapshot). null/absent for every non-oracle chain.
+                parentChainId: adapter.parentChainId || null,
+                parentBlockHeight,
             }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} GET /chains/${req.params.chainId}: ${err.message}`);
@@ -783,7 +802,11 @@ function build(extensionHandle) {
                     // proven shape HealthChecker uses: just two RPC calls,
                     // peers + max-height both parsed from Neighbors.
                     const cfgChain = cfg.chains[adapter.chainId];
-                    if (cfgChain) {
+                    // v0.5.168 (Phase 1) — the ela getblockcount/getnodestate/
+                    // getbestblockhash enrichment below is class-A only. Non-A
+                    // classes get their localHeight/peers/networkHeight/synced
+                    // from the class-aware primaryHeight() else-branch instead.
+                    if (cfgChain && adapter.chainClass === 'A') {
                         try {
                             const rpc = adapter.rpcClient(cfgChain);
                             const [blockCount, nodeStateRes] = await Promise.allSettled([
@@ -870,6 +893,20 @@ function build(extensionHandle) {
                                 }
                             } catch (_) { /* getbestblockhash failed — lastBlockTime stays null, synced stays false */ }
                         } catch (_) { /* RPC failed entirely; leave snapshot as-is */ }
+                    } else if (cfgChain) {
+                        // v0.5.168 (Phase 1) — non-mainchain classes: pull the
+                        // class-correct localHeight / peers / networkHeight /
+                        // synced from primaryHeight() (EVM eth_blockNumber +
+                        // eth_syncing; arbiter getspvheight). The recompute
+                        // block below then derives percent/blocksBehind/ETA the
+                        // same way as for class A.
+                        try {
+                            const pm = await adapter.primaryHeight(cfgChain);
+                            if (pm.height != null) { snapshot.localHeight = pm.height; }
+                            if (pm.peers != null) { snapshot.peers = pm.peers; }
+                            if (pm.networkHeight != null) { snapshot.networkHeight = pm.networkHeight; }
+                            if (typeof pm.synced === 'boolean') { snapshot.synced = pm.synced; }
+                        } catch (_) { /* leave snapshot as-is */ }
                     }
 
                     // Recompute progress now that we may have a fresh

@@ -230,6 +230,54 @@ class ChainAdapter {
         }
         return { alive: true, rpcOk, pid: procStatus.pid };
     }
+
+    /**
+     * v0.5.168 (Phase 1) — class-aware primary metric for the dashboard hero.
+     *
+     * Returns { height, peers, networkHeight, synced, parentBlockHeight } with
+     * any field null when unavailable. WHY this exists: the dashboard endpoints
+     * (GET /chains/:id and /:id/sync) used to fetch height/peers unconditionally
+     * via getblockcount + getconnectioncount — ELA (Bitcoin-style) RPCs that
+     * ONLY the mainchain's EnmRpcClient serves. EVM sidechains (EthRpcClient),
+     * the arbiter (getspvheight only), and oracles (no chain) therefore showed
+     * "—" for every metric. Each subclass now does its own class-correct probe,
+     * mirroring the FIX-C19 polymorphic health() pattern so the route layer
+     * stays free of per-chain conditionals.
+     *
+     * This base implementation is the ELA / class-A shape: getblockcount +
+     * getconnectioncount. networkHeight + synced are left null here — the
+     * mainchain route fills them from its getnodestate neighbor walk (peer max
+     * height + best-block recency). Caller guarantees the process is alive
+     * before calling. NEVER throws: RPC failures resolve to null fields so the
+     * UI renders "—" honestly. This is read-only telemetry — it does NOT feed
+     * the F2 self-heal gate (that stays PID-based via health()).
+     *
+     * @param {object} chainConfig
+     * @returns {Promise<{height:number|null, peers:number|null, networkHeight:number|null, synced:boolean|null, parentBlockHeight:number|null}>}
+     */
+    async primaryHeight(chainConfig) {
+        const out = {
+            height: null, peers: null, networkHeight: null, synced: null, parentBlockHeight: null,
+        };
+        try {
+            const rpc = this.rpcClient(chainConfig);
+            const [h, p] = await Promise.allSettled([
+                rpc.getblockcount(),
+                rpc.getconnectioncount(),
+            ]);
+            if (h.status === 'fulfilled') {
+                const v = h.value;
+                out.height = (typeof v === 'number') ? v
+                    : (v && typeof v.result === 'number') ? v.result : null;
+            }
+            if (p.status === 'fulfilled') {
+                const v = p.value;
+                out.peers = (typeof v === 'number') ? v
+                    : (v && typeof v.result === 'number') ? v.result : null;
+            }
+        } catch (_) { /* RPC unreachable; fields stay null */ }
+        return out;
+    }
 }
 
 module.exports = ChainAdapter;

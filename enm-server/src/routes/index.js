@@ -32,6 +32,8 @@ const enmAuditMiddleware = require('../services/EnmAuditMiddleware');
 const setupRouter = require('./setup');
 const systemRouter = require('./system');
 const chainsRouter = require('./chains');
+// v0.5.168 (Phase 2) — SPV Module (class E): aggregate + per-sidechain detail.
+const spvRouter = require('./spv');
 const eventsRouter = require('./events');
 const logsRouter = require('./logs');
 const healingRouter = require('./healing');
@@ -92,6 +94,8 @@ function mountRoutes(app, extensionHandle) {
     api.use('/setup', setupRouter.build(extensionHandle));
     api.use('/system', systemRouter.build(extensionHandle));
     api.use('/chains', chainsRouter.build(extensionHandle));
+    // v0.5.168 (Phase 2) — SPV Module aggregate + per-sidechain detail.
+    api.use('/spv', spvRouter.build(extensionHandle));
     api.use('/logs', logsRouter.build({ extensionHandle }));
     api.use('/config', configRouter.build(extensionHandle));
     // 0.2.0-alpha.8 — upstream-release detection backing the Tools tab

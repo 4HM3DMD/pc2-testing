@@ -628,6 +628,32 @@ class ArbiterAdapter extends ChainAdapter {
         }
         return { alive: true, rpcOk: true, pid: procStatus.pid };
     }
+
+    /**
+     * v0.5.168 (Phase 1) — the arbiter's hero metric is its SPV height
+     * (getspvheight, node.sh:5060). It does NOT serve getblockcount or a
+     * connection count, so the base primaryHeight() would return all-null.
+     * peers/networkHeight/synced stay null — the arbiter has no sync concept
+     * to surface; the dashboard derives its coarse state from process-alive
+     * (PID-based, matching node.sh's `pgrep -x arbiter`). The richer
+     * per-sidechain getsidechainblockheight values power the SPV Module
+     * (Phase 2 GET /spv), not this single hero number. Never throws.
+     *
+     * @param {object} cfg
+     * @returns {Promise<{height:number|null, peers:number|null, networkHeight:number|null, synced:boolean|null, parentBlockHeight:number|null}>}
+     */
+    async primaryHeight(cfg) {
+        const out = {
+            height: null, peers: null, networkHeight: null, synced: null, parentBlockHeight: null,
+        };
+        try {
+            const rpc = this.rpcClient(cfg);
+            const v = await rpc.getspvheight();
+            out.height = (typeof v === 'number') ? v
+                : (v && typeof v.result === 'number') ? v.result : null;
+        } catch (_) { /* arbiter RPC not ready; height stays null */ }
+        return out;
+    }
 }
 
 module.exports = ArbiterAdapter;
@@ -636,4 +662,8 @@ module.exports._internal = {
     SIDECHAINS_REQUIRED,
     ARBITER_CONFIG_FILENAME,
     MAINCHAIN_KEYSTORE_FILENAME,
+    // v0.5.168 (Phase 2) — exported so routes/spv.js can read each sidechain's
+    // genesis block hash (the key getsidechainblockheight expects) without
+    // duplicating the table. Single source of truth.
+    ARBITER_SIDE_NODE_DEFS,
 };

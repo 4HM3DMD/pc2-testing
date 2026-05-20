@@ -230,6 +230,32 @@ class EnmRpcClient {
      *     from the producer's OwnerPublicKey (NOT the node keystore).
      */
     dposv2rewardinfo(ownerAddr) { return this.call('dposv2rewardinfo', { address: ownerAddr }); }
+
+    /**
+     * v0.5.168 (Phase 1) — ARBITER-only methods. These are served by the
+     * `arbiter` binary's JSON-RPC interface, NOT the ela mainchain. node.sh
+     * only ever calls getspvheight on the arbiter (node.sh:5060) and uses
+     * getsidechainblockheight to read each bridged sidechain's SPV-tracked
+     * height (node.sh:5073-5145). The arbiter reuses the same EnmRpcClient
+     * (ArbiterAdapter.rpcClient) so they live here rather than in a separate
+     * client. Calling them against a mainchain ela process returns an RPC
+     * method error (the caller treats that as null).
+     *
+     * getspvheight — the arbiter's own SPV sync height (its view of the
+     * mainchain it follows to sign cross-chain payloads).
+     */
+    getspvheight() { return this.call('getspvheight'); }
+
+    /**
+     * getsidechainblockheight — the SPV-tracked block height the arbiter has
+     * for one bridged sidechain, keyed by that sidechain's genesis block hash
+     * (the values in ArbiterAdapter.ARBITER_SIDE_NODE_DEFS[net][id].GenesisBlock).
+     *
+     * @param {string} genesisHash  the sidechain's genesis block hash (hex)
+     */
+    getsidechainblockheight(genesisHash) {
+        return this.call('getsidechainblockheight', { hash: genesisHash });
+    }
 }
 
 /*

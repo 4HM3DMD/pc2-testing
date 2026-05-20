@@ -131,6 +131,22 @@ function chainLogSinkPath(chainId) {
     return path.join(chainDir(chainId), 'logs', `${chainId}.log`);
 }
 
+/**
+ * v0.5.168 (Phase 2) — the embedded-SPV log directory for an EVM sidechain.
+ * The geth fork (esc/eid/pg) runs its light-client SPV module against its
+ * --datadir (chains/<id>/data) and writes SPV logs under data/logs-spv (the
+ * node.sh layout). The SPV Module view (GET /spv/:id/logs) tails the newest
+ * file here to surface per-chain SPV evidence. Returns the path even when it
+ * doesn't exist yet — callers fs-check before reading. Distinct from
+ * chainLogSinkPath() (the process stdout/stderr sink under chains/<id>/logs).
+ *
+ * @param {string} chainId
+ * @returns {string}
+ */
+function chainSpvLogDir(chainId) {
+    return path.join(chainDir(chainId), 'data', 'logs-spv');
+}
+
 /** Master encryption key path. */
 function encryptionKeyPath() {
     return path.join(enmDataDir(), 'encryption.key');
@@ -174,6 +190,7 @@ module.exports = {
     runDir,
     pidFilePath,
     chainLogSinkPath,
+    chainSpvLogDir,
     encryptionKeyPath,
     configPath,
     configBackupPath,

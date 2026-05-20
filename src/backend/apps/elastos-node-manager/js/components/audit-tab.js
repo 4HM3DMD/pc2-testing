@@ -55,6 +55,31 @@
         custom: { label: 'Custom…', future: true },
     };
 
+    // v0.5.168 (Phase 4) — friendly chain names for the audit "Chain" filter
+    // chip. Runtime prefers enmT('chain_name.<id>'); this is the fallback used
+    // before strings.js loads / in tests. Keys are the real cfg.chains.* ids
+    // (the synthetic 'all'/'spv' selector keys never reach the audit tab).
+    var CHAIN_AUDIT_NAME = {
+        mainchain:    'Main chain',
+        esc:          'Smart Chain',
+        eid:          'Identity Chain',
+        pg:           'PG Chain',
+        'esc-oracle': 'ESC Oracle',
+        'eid-oracle': 'EID Oracle',
+        'pg-oracle':  'PG Oracle',
+        arbiter:      'Arbiter Service',
+    };
+
+    /** Friendly display name for a chainId, preferring strings.js. */
+    function chainAuditName(id) {
+        var t = root.enmTOrFallback || root.enmT;
+        if (typeof t === 'function') {
+            var v = t('chain_name.' + id);
+            if (v && v !== ('chain_name.' + id) && v !== ('[chain_name.' + id + ']')) { return v; }
+        }
+        return CHAIN_AUDIT_NAME[id] || id;
+    }
+
     function AuditTab(opts) {
         if (!opts || !opts.api || !opts.notifications) {
             throw new TypeError('AuditTab: { api, notifications } required');
@@ -67,6 +92,13 @@
         // subscription; destroy() tears it down.
         this.sse = opts.sse || null;
         this._unsubAudit = null;
+
+        // v0.5.168 (Phase 4) — the chain this audit view was mounted for (from
+        // PaneRouter's active chain). Drives the "This chain only" filter chip
+        // (adds chainId= to /audit). The audit tab is torn down + re-mounted on
+        // chain change, so this is always the currently-selected chain. null
+        // when mounted without a chain context (the chip group is then hidden).
+        this.chainId = (opts && opts.chainId) || null;
 
         this.root = document.createElement('section');
         this.root.className = 'enm-audit';
@@ -84,7 +116,7 @@
         // Filter state. `tier` is one of TIER_VALUES or '' (any).
         // `when` is a key of WHEN_PRESETS. `from`/`to` are epoch ms
         // derived from `when` at refresh() time.
-        this._filters = { tier: '', when: 'all' };
+        this._filters = { tier: '', when: 'all', chain: '' };
 
         // Drawer state.
         this._drawer = null;
@@ -264,6 +296,12 @@
         var parts = [];
         if (this._filters.tier) {
             parts.push('tier=' + encodeURIComponent(this._filters.tier));
+        }
+        // v0.5.168 (Phase 4) — scope to one chain when the operator picks the
+        // "This chain only" chip. Backend /audit?chainId= filters server-side
+        // (routes/audit.js:54 → EnmAuditLog.query chain_id = ?).
+        if (this._filters.chain) {
+            parts.push('chainId=' + encodeURIComponent(this._filters.chain));
         }
         var range = this._currentWhenRange();
         if (range.from != null) { parts.push('from=' + encodeURIComponent(range.from)); }
@@ -457,6 +495,34 @@
         });
         bar.appendChild(tierGroup);
 
+        // --- Chain group (v0.5.168 Phase 4) -------------------------
+        // Only when mounted in a real chain context. Lets the operator scope
+        // the global audit feed to just the active chain's rows. Default
+        // "All chains" preserves the pre-0.5.168 global view.
+        if (this.chainId && CHAIN_AUDIT_NAME[this.chainId]) {
+            var chainGroup = el('div', 'enm-audit-filter-group');
+            chainGroup.setAttribute('role', 'group');
+            chainGroup.setAttribute('aria-label', t('audit.filter_chain') || 'Chain');
+            var chainLabel = el('span', 'enm-audit-filter-label');
+            chainLabel.textContent = t('audit.filter_chain') || 'Chain';
+            chainGroup.appendChild(chainLabel);
+            this._chainChips = {};
+
+            var allChainsChip = chipBtn(t('audit.chain_all') || 'All chains', true);
+            allChainsChip.dataset.chain = '';
+            allChainsChip.addEventListener('click', function () { self._onChainChip(''); });
+            this._chainChips[''] = allChainsChip;
+            chainGroup.appendChild(allChainsChip);
+
+            var thisChainChip = chipBtn(chainAuditName(this.chainId), false);
+            thisChainChip.dataset.chain = this.chainId;
+            thisChainChip.addEventListener('click', function () { self._onChainChip(self.chainId); });
+            this._chainChips[this.chainId] = thisChainChip;
+            chainGroup.appendChild(thisChainChip);
+
+            bar.appendChild(chainGroup);
+        }
+
         return bar;
     };
 
@@ -482,6 +548,14 @@
         if (this._filters.tier === tier) { return; }
         this._filters.tier = tier;
         this._syncChipGroup(this._tierChips, tier);
+        this.refresh();
+    };
+
+    /** @private — v0.5.168 (Phase 4) — chain scope chip ('' = all chains). */
+    AuditTab.prototype._onChainChip = function (chain) {
+        if (this._filters.chain === chain) { return; }
+        this._filters.chain = chain;
+        this._syncChipGroup(this._chainChips, chain);
         this.refresh();
     };
 
@@ -1241,12 +1315,15 @@
         // path string.
         'POST /maintenance/status':         'Probed maintenance state',
         'GET /maintenance/status':          'Checked maintenance state',
-        'POST /healing/proposals/:id/approve': 'Approved healing proposal',
-        'POST /healing/proposals/:id/reject':  'Rejected healing proposal',
-        'POST /healing/proposals/:id/ack':      'Acknowledged proposal',
+        'POST /healing/confirm/:id': 'Approved healing proposal',
+        'POST /healing/reject/:id':  'Rejected healing proposal',
     };
     function friendlyAction(e) {
         var rule = e.ruleId || e.rule_id;
+        // Healing confirm/reject are recorded with a concrete proposal id
+        // (the audit middleware normalizes only /chains/:chainId), so collapse
+        // the id segment to the route shape used by the RULE_FRIENDLY keys.
+        if (rule) { rule = String(rule).replace(/\/healing\/(confirm|reject)\/[^/]+/, '/healing/$1/:id'); }
         if (rule && Object.prototype.hasOwnProperty.call(RULE_FRIENDLY, rule)) {
             return RULE_FRIENDLY[rule];
         }

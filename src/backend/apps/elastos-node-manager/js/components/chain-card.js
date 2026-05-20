@@ -875,6 +875,13 @@
         if (this._oracleParentValue && state && state.parentChainId) {
             var parentDisplay = CHAIN_DISPLAY_FALLBACK[state.parentChainId]
                 || state.parentChainId;
+            // v0.5.168 (Phase 1/3) — append the parent EVM chain's current
+            // block height when the backend surfaces it (GET /chains/:id
+            // parentBlockHeight) so the oracle card shows WHAT it relays from,
+            // not just the chain name. Stays just the name until it arrives.
+            if (state.parentBlockHeight != null) {
+                parentDisplay += ' · ' + fmtH(state.parentBlockHeight);
+            }
             this._oracleParentValue.textContent = parentDisplay;
         }
 
