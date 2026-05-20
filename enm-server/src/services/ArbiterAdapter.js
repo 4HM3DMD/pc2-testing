@@ -205,14 +205,33 @@ class ArbiterAdapter extends ChainAdapter {
         if (!cfg || !cfg.ports || !cfg.ports.rpc) {
             throw new Error('arbiter: rpcClient requires cfg.ports.rpc');
         }
-        // No HTTP Basic auth on arbiter RPC by default. If a future
-        // arbiter release enables auth, plumb cfg.rpc.user/password
-        // through here.
+        // v0.5.169/170 — the arbiter RPC DOES require HTTP Basic auth: a bare
+        // request returns "client authenticate failed" even from 127.0.0.1
+        // (the RpcConfiguration.WhiteIPList does not bypass auth). The
+        // user/pass are generated at start() (generateRpcCredentials) and
+        // written ONLY into the arbiter's own config.json
+        // (Configuration.RpcConfiguration.User/Pass) — they are never persisted
+        // into ENM's cfg.chains.arbiter.rpc. So when cfg.rpc carries no creds,
+        // read them back from config.json. Without this, getspvheight /
+        // getsidechainblockheight always 401 → the SPV Module shows "—".
+        let user = (cfg.rpc && cfg.rpc.user) || '';
+        let password = (cfg.rpc && cfg.rpc.password) || '';
+        if (!user && !password) {
+            try {
+                const cfgPath = path.join(chainDir(this.chainId), ARBITER_CONFIG_FILENAME);
+                const parsed = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+                const rpcConf = parsed && parsed.Configuration && parsed.Configuration.RpcConfiguration;
+                if (rpcConf) {
+                    user = rpcConf.User || '';
+                    password = rpcConf.Pass || '';
+                }
+            } catch (_) { /* config not written yet (pre-first-start); fall through */ }
+        }
         return new EnmRpcClient({
             host: '127.0.0.1',
             port: cfg.ports.rpc,
-            user: (cfg.rpc && cfg.rpc.user) || '',
-            password: (cfg.rpc && cfg.rpc.password) || '',
+            user,
+            password,
         });
     }
 
