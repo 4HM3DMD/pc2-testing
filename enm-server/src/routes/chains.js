@@ -71,7 +71,7 @@ function build(extensionHandle) {
                     displayName: c.displayName,
                     enabled: !!(chainCfg && chainCfg.enabled),
                     configured: !!chainCfg,
-                    state: deriveCoarseState(status, chainCfg),
+                    state: deriveCoarseState(status, chainCfg, null, c.chainClass),
                     pid: status.pid,
                 };
             }));
@@ -381,7 +381,7 @@ function build(extensionHandle) {
                 && uptimeSec < STARTUP_GRACE_SEC) {
                 coarseState = 'starting';
             } else {
-                coarseState = deriveCoarseState(status, chainCfg, syncSnapshot);
+                coarseState = deriveCoarseState(status, chainCfg, syncSnapshot, adapter.chainClass);
             }
 
             return res.json(successBody({
@@ -2021,12 +2021,24 @@ function wrapRpc(kind, fn, extensionHandle) {
  * @param {object|null} chainCfg from ConfigStore.load().chains[id]
  * @param {object} [syncSnapshot]  optional sync info — { synced, alive, … }
  */
-function deriveCoarseState(status, chainCfg, syncSnapshot) {
+function deriveCoarseState(status, chainCfg, syncSnapshot, chainClass) {
     if (!chainCfg) {
         return 'unconfigured';
     }
     if (!status.alive) {
         return chainCfg.enabled ? 'stopped' : 'disabled';
+    }
+    // v0.5.177 — Class C (oracles) and Class D (arbiter) are SERVICES, not
+    // chains that sync to a tip: they have no `synced` signal (primaryHeight
+    // returns synced:null), so the generic "synced!==true → syncing" rule
+    // below pinned them to "syncing" FOREVER even while fully operational —
+    // operators read that as "stuck / not syncing". node.sh treats them as
+    // pgrep-alive (esc_oracle/arbiter status = process up = good), so alive is
+    // the right liveness signal here. Their catch-up progress still shows via
+    // the height metric (getspvheight / getsidechainblockheight) on the card +
+    // SPV Module; the coarse state just stops lying about being stuck.
+    if (chainClass === 'C' || chainClass === 'D') {
+        return 'healthy';
     }
     if (syncSnapshot && syncSnapshot.synced === true) {
         return 'healthy';
