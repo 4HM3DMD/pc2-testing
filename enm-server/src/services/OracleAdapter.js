@@ -249,25 +249,30 @@ class OracleAdapter extends ChainAdapter {
     }
 
     /**
-     * Override health() — oracles don't expose getblockcount, so the
-     * base ChainAdapter.health() would always report rpcOk=false. We
-     * probe net_version (cheap geth-style health check) instead since
-     * the oracle responds to that with its own version string.
+     * Override health() — PID-based, mirroring node.sh's <x>-oracle_status
+     * which only checks `pgrep -fx 'node crosschain_<x>.js'` (node.sh:3581).
+     *
+     * BUG-C13 (node.sh parity) — the upstream crosschain_<x>.js oracle is a
+     * PLAIN Express server (it serves `POST /` on a HARD-CODED port, e.g.
+     * 20632/20642/20672) and does NOT speak JSON-RPC. The previous
+     * net_version probe therefore ALWAYS failed → rpcOk=false forever →
+     * HealthChecker F2 (rpc-unreachable-while-alive) restart-looped a
+     * perfectly healthy oracle, and the SIGTERM/respawn churn eventually
+     * exhausted the restart budget and left it stopped (cycle-6 finding).
+     * The probe also targeted cfg.ports.httpRpc, which on testnet was a
+     * fictional `+1000` port the oracle never listens on. For an oracle,
+     * process-alive IS the health signal — exactly node.sh's model. The
+     * `cfg` arg is kept for signature parity with the base adapter.
      *
      * @param {object} cfg
      * @returns {Promise<{ alive: boolean, rpcOk: boolean, pid: number|null }>}
      */
-    async health(cfg) {
+    async health(cfg) {  // eslint-disable-line no-unused-vars
         const procStatus = this.processService.statusSync(this.chainId);
         if (!procStatus.alive) {
             return { alive: false, rpcOk: false, pid: null };
         }
-        let rpcOk = false;
-        try {
-            await this.rpcClient(cfg).getNetVersion();
-            rpcOk = true;
-        } catch (_) { /* rpcOk stays false */ }
-        return { alive: true, rpcOk, pid: procStatus.pid };
+        return { alive: true, rpcOk: true, pid: procStatus.pid };
     }
 }
 

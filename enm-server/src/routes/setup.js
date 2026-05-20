@@ -2360,17 +2360,34 @@ async function runCouncilInstall(args) {
                     ports,
                     pbft: { usesMainchainKeystore: true, ipAddress: null },
                     miner: {
-                        // beta.0.4.5 — sidechain mining off by default.
-                        enabled: false,
+                        // FIX-C12 — Council EVM sidechains MUST run as miners
+                        // (validator parity). node.sh's council path always
+                        // takes the MINER branch of esc_start/eid_start/pg_start
+                        // (node.sh:2133-2169 for esc): --mine --miner.threads 1
+                        // --unlock + --miner.etherbase. Without the miner branch,
+                        // geth has no keep-alive work and exits code=0 within
+                        // minutes. The on-duty council member is expected to
+                        // produce blocks, so mining is on by default for the
+                        // council orchestrator (the per-chain install-class-b
+                        // route still honours the operator's explicit choice).
+                        enabled: true,
                         rewardAddress: inputs.sharedRewardAddress,
                         rewardAddressSource: 'shared',
+                        // evmKeystoreAddr + evmKeystorePasswordEncrypted are
+                        // populated by EvmSidechainAdapter.start()'s EVM
+                        // account-auto-creation preflight (FIX-C12) — it runs
+                        // the geth binary's `account new` (node.sh esc_init:3245)
+                        // the first time a miner-enabled chain starts, then
+                        // persists the resolved 0x address + encrypted password
+                        // back into this cfg block. Left empty here on purpose.
                         evmKeystoreAddr: '',
-                        evmKeystorePasswordEncrypted:
-                            (cfg2.global && cfg2.global.council
-                                && cfg2.global.council.sharedPasswordEncrypted) || '',
+                        evmKeystorePasswordEncrypted: '',
                         threads: 1,
                     },
-                    sync: { mode: 'fast' },
+                    // FIX-C12 — node.sh:2152 uses `--syncmode full` on the
+                    // council miner branch (NOT fast). A miner must have the
+                    // full state to seal blocks.
+                    sync: { mode: 'full' },
                     bootnodes: [],
                     healing: { enabledRules: {} },
                     binarySha256Expected: '',

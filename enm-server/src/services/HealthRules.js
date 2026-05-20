@@ -37,6 +37,19 @@ let HEIGHT_STALL_GRACE_MS      = 10 * 60_000;
 let DISK_CRITICAL_GB           = 5;
 let DISK_WARN_GB               = 20;
 
+// FIX-C15 — initial-start grace. node.sh never restarts a node just for
+// being fresh/at-genesis with no peers; it starts a node and leaves it
+// alone. Our self-heal F2 (RPC unreachable), F3 (peers=0), and F4 (sync
+// stalled) could otherwise restart a chain that is merely still coming up —
+// a freshly-started EVM sidechain or arbiter has no RPC, no peers, and a
+// flat height for the first minutes by definition. Suppress F2/F3/F4 for
+// the first N minutes after the chain process came alive. The per-rule
+// grace timers (RPC ≥2min, peer-zero ≥5min, height-stall ≥10min) overlap
+// with this but key off DIFFERENT first-seen timestamps; this gate keys off
+// the process's own up-since time so the WHOLE early-boot window is quiet
+// regardless of when the individual condition timers first armed.
+const INITIAL_SYNC_GRACE_MS    = 10 * 60_000;
+
 /**
  * beta.3.19 — apply operator-tuned thresholds from
  * cfg.global.notifications.thresholds. Called by HealthChecker on
@@ -73,6 +86,44 @@ function getThresholds() {
         peerZeroGraceMin:   PEER_ZERO_GRACE_MS / 60_000,
         syncStallGraceMin:  HEIGHT_STALL_GRACE_MS / 60_000,
     };
+}
+
+/**
+ * FIX-C15 — resolve the timestamp (ms epoch) at which the chain's current
+ * up-period began, or null when unknown.
+ *
+ * HealthChecker maintains `ruleState._aliveSinceMs`: it is set on the first
+ * tick the process is observed alive, grows monotonically while up, and is
+ * reset to null the moment a dead tick is seen (HealthChecker.js:219-226).
+ * That makes it the contiguous "process start" timestamp for the running
+ * instance — and it re-arms cleanly after a restart, so each fresh up-period
+ * gets its own grace window. It is the only start-time signal reachable from
+ * the snapshot the rules receive (statusSync exposes no startedAt; the meta
+ * sidecar's startedAt is not threaded into snap).
+ *
+ * @param {object} snap
+ * @returns {number|null} ms epoch the process came alive, or null if unknown
+ */
+function processAliveSinceMs(snap) {
+    if (!snap || !snap.ruleState) return null;
+    const t = snap.ruleState._aliveSinceMs;
+    return (typeof t === 'number' && t > 0) ? t : null;
+}
+
+/**
+ * FIX-C15 — true when the chain came alive less than INITIAL_SYNC_GRACE_MS
+ * ago (so restart-on-fresh-start rules F2/F3/F4 must hold their fire). When
+ * the start time is unknown we return false (do NOT suppress) — the existing
+ * per-rule grace timers still apply, so this stays safe rather than silently
+ * disabling healing.
+ *
+ * @param {object} snap
+ * @returns {boolean}
+ */
+function withinInitialStartGrace(snap) {
+    const since = processAliveSinceMs(snap);
+    if (since == null) return false;
+    return (Date.now() - since) < INITIAL_SYNC_GRACE_MS;
 }
 
 // Phase 5 thresholds.
@@ -150,6 +201,11 @@ function detectF2(snap) {
     if (!snap.rpcSummary) return null;
     if (snap.rpcSummary.ok) return null;
 
+    // FIX-C15 — a just-started chain has no RPC yet (geth/ela open the HTTP
+    // endpoint a little after boot). Don't restart it during the initial
+    // start grace; node.sh never restarts a node merely for being fresh.
+    if (withinInitialStartGrace(snap)) return null;
+
     // We need at least RPC_UNREACHABLE_GRACE_MS of continuous failure.
     const firstDown = snap.ruleState && snap.ruleState.firstRpcDownAt;
     if (!firstDown) return null;
@@ -174,6 +230,11 @@ function detectF3(snap) {
     if (!snap.rpcSummary || !snap.rpcSummary.ok) return null;
     if (snap.rpcSummary.peers !== 0) return null;
 
+    // FIX-C15 — a freshly-started node has 0 peers until it dials the DNS
+    // seeds and completes handshakes. Don't restart during the initial start
+    // grace; restarting just resets the same cold-start clock.
+    if (withinInitialStartGrace(snap)) return null;
+
     const firstZero = snap.ruleState && snap.ruleState.firstPeerZeroAt;
     if (!firstZero) return null;
     if (Date.now() - firstZero < PEER_ZERO_GRACE_MS) return null;
@@ -196,6 +257,11 @@ function detectF4(snap) {
     if (!snap.rpcSummary || !snap.rpcSummary.ok) return null;
     if (typeof snap.rpcSummary.height !== 'number') return null;
     if (snap.rpcSummary.peers === 0) return null;  // F3 owns this case
+
+    // FIX-C15 — height legitimately sits flat right after start (a node at
+    // genesis, or one that just restored a snapshot, hasn't begun advancing
+    // yet). Don't treat that as a stall during the initial start grace.
+    if (withinInitialStartGrace(snap)) return null;
 
     const firstStall = snap.ruleState && snap.ruleState.firstHeightStallAt;
     if (!firstStall) return null;
@@ -1149,6 +1215,7 @@ module.exports = {
     PEER_ZERO_GRACE_MS,
     RPC_UNREACHABLE_GRACE_MS,
     HEIGHT_STALL_GRACE_MS,
+    INITIAL_SYNC_GRACE_MS,   // FIX-C15
     DISK_CRITICAL_GB,
     DISK_WARN_GB,
     PEER_ZERO_FALLBACK_MS,

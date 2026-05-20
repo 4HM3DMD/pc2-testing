@@ -71,6 +71,10 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { execFile } = require('node:child_process');
+const { promisify } = require('node:util');
+
+const execFileAsync = promisify(execFile);
 
 const ChainAdapter = require('./ChainAdapter');
 const { EthRpcClient } = require('./EthRpcClient');
@@ -88,6 +92,17 @@ const PBFT_KEYSTORE_RELPATH = 'keystore.dat';          // inside mainchain chain
 const PBFT_PASSWORD_FILENAME = '.pbft-keystore-password';
 const EVM_KEYSTORE_RELPATH = path.join('data', 'keystore'); // inside this chain's chainDir
 const DATA_RELPATH = 'data';
+// FIX-C12 — the EVM keystore account's own password (NOT the mainchain
+// PBFT keystore password). node.sh's *_init writes this to
+// ~/.config/elastos/<chain>.txt (esc_init:3241) and the binary's
+// `account new --password <file>` consumes it (esc_init:3245). We keep
+// it next to the chain's data (0600), encrypt the value into cfg via
+// EnmCrypto, and reuse it on every subsequent start.
+const EVM_ACCOUNT_PASSWORD_FILENAME = '.evm-account-password';
+// `account new` can be slow on a cold box (scrypt KDF + disk). node.sh
+// gives it no explicit timeout; we use a generous one so a busy host
+// doesn't spuriously fail the first miner start.
+const EVM_ACCOUNT_NEW_TIMEOUT_MS = 120_000;
 
 class EvmSidechainAdapter extends ChainAdapter {
     /**
@@ -200,14 +215,20 @@ class EvmSidechainAdapter extends ChainAdapter {
      *     --miner.etherbase <minerAddress>         (only when miner.enabled)
      *     --mine --miner.threads 1                  (only when miner.enabled)
      *     --unlock <evmKeystoreAddress>             (only when miner.enabled)
+     *     --allow-insecure-unlock                   (only when miner.enabled)
+     *     --password <evmAccountPasswordFile>       (only when miner.enabled)
      *
-     * Note we deliberately do NOT pass --allow-insecure-unlock (node.sh
-     * anti-pattern from H25). --unlock requires --rpcaddr=127.0.0.1
-     * which is the default; geth refuses --unlock with external RPC
-     * unless --allow-insecure-unlock is set.
+     * FIX-C12 — the miner branch now passes --allow-insecure-unlock +
+     * --password <file>, matching node.sh's council miner branch
+     * (esc_start:2139,2143). The RPC listener stays bound to 127.0.0.1
+     * (H25): --allow-insecure-unlock only relaxes geth's refusal to unlock
+     * an account when RPC is reachable; it does NOT expose the listener.
+     * geth's password resolution for --unlock reads from --password's
+     * file, so the unlock is fully non-interactive (no stdin race).
      *
      * @param {object} cfg
-     * @param {object} secrets   { mainchainKeystorePath: string, externalIp?: string }
+     * @param {object} secrets   { mainchainKeystorePath: string, externalIp?: string,
+     *                             pbftPasswordFile?: string, evmAccountPasswordFile?: string }
      * @returns {string[]}
      */
     buildSpawnArgs(cfg, secrets) {
@@ -245,7 +266,19 @@ class EvmSidechainAdapter extends ChainAdapter {
             '--rpc',
             '--rpcaddr', '127.0.0.1',
             '--rpcport', String(cfg.ports.rpc),
-            '--rpcapi', cfg.rpcApis || 'eth,net,web3,admin',
+            // FIX-C12 — when mining, the PBFT consensus engine needs the
+            // `pbft` (+ personal/txpool) RPC namespaces enabled so the
+            // miner can drive consensus, mirroring node.sh's council miner
+            // branch (esc_start:2150 uses 'db,eth,net,pbft,personal,txpool,
+            // web3'). We keep our hardened set but add the consensus APIs.
+            // Non-miner chains keep the minimal loopback set. cfg.rpcApis,
+            // if explicitly set by the operator, always wins. The RPC
+            // listener stays bound to 127.0.0.1 (H25) regardless.
+            '--rpcapi',
+            cfg.rpcApis
+                || (cfg.miner.enabled === true
+                    ? 'eth,net,web3,admin,pbft,personal,txpool'
+                    : 'eth,net,web3,admin'),
             // No separate discovery-port flag in this geth fork; UDP discovery
             // shares the TCP --port above (cfg.ports.discovery is reserved for
             // future use / firewall rules, not a geth CLI arg here).
@@ -295,6 +328,24 @@ class EvmSidechainAdapter extends ChainAdapter {
             args.push('--miner.threads', String(cfg.miner.threads || 1));
             if (cfg.miner.evmKeystoreAddr) {
                 args.push('--unlock', cfg.miner.evmKeystoreAddr);
+            }
+            // FIX-C12 — node.sh's council miner branch (esc_start:2139)
+            // sets --allow-insecure-unlock. geth refuses to unlock an
+            // account with a password file unless this is set (the
+            // "Account unlock with HTTP access is forbidden" guard fires
+            // even though our RPC is loopback-only). Required for the
+            // --unlock + --password file combo below to take effect.
+            args.push('--allow-insecure-unlock');
+            // FIX-C12 — node.sh:2143 passes `--password <file>` so geth
+            // can non-interactively unlock the --unlock account. The flag
+            // value is a FILE PATH (same pattern as --pbft.keystore.password
+            // / the H24 anti-pattern). start() writes the EVM account
+            // password to a 0600 file and threads its path here. We pass a
+            // file (NOT stdin) because this geth fork reads --unlock's
+            // password from --password's file when present, and feeding it
+            // on stdin instead is racy at boot.
+            if (secrets.evmAccountPasswordFile) {
+                args.push('--password', secrets.evmAccountPasswordFile);
             }
         }
         // Subclass-provided extras (e.g. EID --spvconfig).
@@ -367,15 +418,18 @@ class EvmSidechainAdapter extends ChainAdapter {
      *      M3.1 we trust cfg.binaryPath since the adapter is base-only
      *      and the install path lands in M3.8).
      *   2. Verify mainchain keystore.dat exists (--pbft.keystore target).
-     *   3. Verify EVM keystore directory exists (--unlock target if
-     *      miner.enabled). Skip when miner.enabled=false.
+     *   3. FIX-C12 — ensure the EVM keystore account exists (auto-create
+     *      via `account new` on first miner start, reuse thereafter); skip
+     *      entirely when miner.enabled=false.
      *   4. Decrypt the mainchain keystore password.
-     *   5. Compute spawn args via buildSpawnArgs.
+     *   5. Compute spawn args via buildSpawnArgs (PBFT + EVM-account
+     *      password files threaded in as --pbft.keystore.password /
+     *      --password).
      *   6. Open UFW for this chain's P2P + discovery ports.
      *   7. Pass cfg.spawnArgs into NativeProcessService.start.
-     *   8. Pipe the decrypted password into child stdin so geth can
-     *      unlock the PBFT keystore (replaces node.sh's --pbft.keystore.
-     *      password file pattern from H24).
+     *   8. No stdin step — both the PBFT keystore password and the EVM
+     *      account unlock password are delivered via --password files
+     *      (FIX-C12 / BUG-C8b), so the unlock is fully non-interactive.
      *
      * Pre-flight failures throw with actionable messages so the route
      * handler can surface them to the operator UI rather than a generic
@@ -397,16 +451,19 @@ class EvmSidechainAdapter extends ChainAdapter {
         // Step 2 — mainchain keystore.dat must exist.
         const mainchainKeystorePath = this.resolveMainchainKeystorePath();
 
-        // Step 3 — EVM keystore dir + unlock address present when miner enabled.
+        // Step 3 — FIX-C12 — EVM account auto-creation. node.sh's *_init
+        // runs the geth binary's `account new` to create the EVM keystore
+        // account (data/keystore/UTC--*) that the miner branch later
+        // --unlocks + uses as --miner.etherbase (esc_init:3245). Pre-FIX-C12
+        // start() simply ERRORED when miner.enabled and the keystore dir was
+        // empty, so a fresh council install could never start its sidechains
+        // as miners. We now create the account on first miner start (and
+        // reuse it on every subsequent start). Mutates cfg.miner in place
+        // (evmKeystoreAddr + evmKeystorePasswordEncrypted) and persists via
+        // ConfigStore so buildSpawnArgs --unlock works.
+        let evmAccountPasswordFile = null;
         if (cfg.miner && cfg.miner.enabled === true) {
-            const evmKeystoreDir = path.join(chainDir(this.chainId), EVM_KEYSTORE_RELPATH);
-            if (!fs.existsSync(evmKeystoreDir)) {
-                throw new Error(
-                    `${this.chainId}: mining is enabled but the EVM keystore directory is `
-                    + `missing (${evmKeystoreDir}). Create or import an EVM account via `
-                    + 'the setup wizard before starting in miner mode.',
-                );
-            }
+            evmAccountPasswordFile = await this._ensureEvmAccount(cfg);
         }
         // Step 4 — mainchain password decryption (raises with friendly message).
         const pbftPassword = await this.readMainchainKeystorePassword();
@@ -423,6 +480,9 @@ class EvmSidechainAdapter extends ChainAdapter {
             mainchainKeystorePath,
             externalIp,
             pbftPasswordFile,
+            // FIX-C12 — path to the EVM account password file (0600) for the
+            // miner branch's --password flag. null when not mining.
+            evmAccountPasswordFile,
         });
 
         // Step 6 — UFW for P2P (TCP) + discovery (UDP) + dpos (TCP).
@@ -458,40 +518,205 @@ class EvmSidechainAdapter extends ChainAdapter {
         // non-signing "common sync node", and crashed EID with code=2). So we
         // no longer feed pbftPassword to stdin.
         //
-        // If miner is enabled, geth prompts (on stdin) for the EVM keystore
-        // password (its --unlock). Per the Layer 1 wizard (M3.4) it comes
-        // from cfg.miner.evmKeystorePasswordEncrypted. Decrypt + pipe.
-        if (cfg.miner && cfg.miner.enabled === true) {
+        // FIX-C12 — the EVM keystore account's --unlock password is now ALSO
+        // delivered via a file (--password <file>, written in
+        // _ensureEvmAccount + threaded into buildSpawnArgs at step 5), exactly
+        // as node.sh does (esc_start:2143). Pre-FIX-C12 we decrypted
+        // evmKeystorePasswordEncrypted and piped it to stdin here, which is
+        // racy at boot (geth may have already passed the unlock prompt). With
+        // --password the unlock is fully non-interactive, so there is no
+        // remaining stdin step for EVM sidechains. We deliberately feed
+        // NOTHING to stdin now.
+        return result;
+    }
+
+    /**
+     * FIX-C12 — ensure an EVM keystore account exists for this chain and
+     * return the path to its (0600) password file for the miner branch's
+     * --password flag. Idempotent:
+     *
+     *   - If a UTC--* keystore file already exists under <dataDir>/keystore/
+     *     AND we have the encrypted password on file, decrypt it, (re)write
+     *     the 0600 password file, ensure cfg.miner.evmKeystoreAddr is set
+     *     from the existing keystore, and return — NO `account new` run.
+     *   - Otherwise generate a strong random password (node.sh gen_pass
+     *     parity), write it to the 0600 file, run `<binary> --datadir
+     *     <dataDir> account new --password <pwFile>` (node.sh esc_init:3245),
+     *     resolve the created 0x address from the new UTC--* JSON, persist
+     *     BOTH the encrypted password and the 0x address back into cfg via
+     *     ConfigStore, and return the password-file path.
+     *
+     * @param {object} cfg  cfg.chains.<id> (mutated in place: miner.evmKeystoreAddr,
+     *                       miner.evmKeystorePasswordEncrypted)
+     * @returns {Promise<string>} absolute path to the 0600 EVM account password file
+     * @throws {Error} loudly on any failure (account new, address parse, persist)
+     */
+    async _ensureEvmAccount(cfg) {
+        const dataDir = path.join(chainDir(this.chainId), DATA_RELPATH);
+        const keystoreDir = path.join(chainDir(this.chainId), EVM_KEYSTORE_RELPATH);
+        const passwordFile = path.join(chainDir(this.chainId), EVM_ACCOUNT_PASSWORD_FILENAME);
+
+        const existingAddr = this._findExistingEvmKeystoreAddress(keystoreDir);
+
+        // ---- Idempotent reuse path: account already on disk ----
+        if (existingAddr) {
             const envelope = cfg.miner && cfg.miner.evmKeystorePasswordEncrypted;
             if (!envelope) {
-                try { await this.processService.stop(this.chainId); }
-                catch (_) { /* best-effort cleanup */ }
+                // The keystore exists but we lost the password we created it
+                // with — geth can't unlock it and we can't regenerate it
+                // (the file is encrypted with the original password). Fail
+                // loudly with an actionable message rather than silently
+                // starting a non-mining node.
                 throw new Error(
-                    `${this.chainId}: miner.enabled=true but EVM keystore password missing. `
-                    + 'Re-enter via Settings → Mining & Rewards.',
+                    `${this.chainId}: an EVM keystore account (${existingAddr}) already exists `
+                    + `at ${keystoreDir} but its password is not on file, so geth cannot unlock `
+                    + 'it for mining. Remove that keystore file to let ENM recreate the account, '
+                    + 'or import the matching password.',
                 );
             }
-            let evmPlaintext;
+            let password;
             try {
-                evmPlaintext = EnmCrypto.decrypt(envelope);
+                password = EnmCrypto.decrypt(envelope);
             } catch (err) {
-                try { await this.processService.stop(this.chainId); }
-                catch (_) { /* best-effort cleanup */ }
                 throw new Error(
-                    `${this.chainId}: cannot decrypt EVM keystore password: ${err.message}. `
-                    + 'Re-enter via Settings → Mining & Rewards.',
+                    `${this.chainId}: cannot decrypt the stored EVM account password: ${err.message}. `
+                    + 'The EVM keystore cannot be unlocked for mining.',
                 );
             }
-            const wrote2 = this.processService.writeStdin(this.chainId, evmPlaintext);
-            if (!wrote2) {
-                try { await this.processService.stop(this.chainId); }
-                catch (_) { /* best-effort cleanup */ }
-                throw new Error(
-                    `${this.chainId}: failed to feed EVM keystore password to child stdin.`,
-                );
+            fs.writeFileSync(passwordFile, password, { mode: 0o600 });
+            // Keep cfg.miner.evmKeystoreAddr authoritative from disk.
+            if (!cfg.miner.evmKeystoreAddr || cfg.miner.evmKeystoreAddr !== existingAddr) {
+                cfg.miner.evmKeystoreAddr = existingAddr;
+                await this._persistMinerAccount(existingAddr, envelope);
             }
+            return passwordFile;
         }
-        return result;
+
+        // ---- Creation path: no account yet → run `account new` ----
+        if (this.extensionHandle && this.extensionHandle.log) {
+            this.extensionHandle.log.info(
+                `${ENM_LOG_PREFIX} ${this.chainId}: no EVM keystore account found — `
+                + 'creating one via `account new` (FIX-C12 miner parity).',
+            );
+        }
+        // Strong random password (node.sh gen_pass parity — 32 chars, all
+        // four complexity classes). This is the EVM account's OWN password,
+        // independent of the mainchain keystore password.
+        const password = EnmCrypto.generatePassword(32);
+        // Ensure the data dir exists so geth can write the keystore subtree.
+        fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+        fs.writeFileSync(passwordFile, password, { mode: 0o600 });
+
+        // node.sh esc_init:3245 — `./esc --datadir <data> account new
+        // --password <file>`. We add --verbosity 0 (esc_init does too) to
+        // keep the keystore-creation output quiet. execFile (no shell) so the
+        // password file path is never shell-interpreted.
+        try {
+            await execFileAsync(
+                cfg.binaryPath,
+                ['--datadir', dataDir, '--verbosity', '0', 'account', 'new', '--password', passwordFile],
+                { timeout: EVM_ACCOUNT_NEW_TIMEOUT_MS },
+            );
+        } catch (err) {
+            // Best-effort: remove the password file we just wrote so a failed
+            // attempt doesn't leave a dangling secret with no matching account.
+            try { fs.unlinkSync(passwordFile); } catch (_) { /* ignore */ }
+            throw new Error(
+                `${this.chainId}: \`account new\` failed: ${err.message}. `
+                + 'Could not create the EVM mining account. Check the binary and disk space.',
+            );
+        }
+
+        // Resolve the freshly-created address from the keystore UTC--* JSON.
+        const createdAddr = this._findExistingEvmKeystoreAddress(keystoreDir);
+        if (!createdAddr) {
+            try { fs.unlinkSync(passwordFile); } catch (_) { /* ignore */ }
+            throw new Error(
+                `${this.chainId}: \`account new\` reported success but no keystore file `
+                + `appeared under ${keystoreDir}. Cannot resolve the EVM mining address.`,
+            );
+        }
+
+        // Persist encrypted password + 0x address back into cfg.
+        const envelope = EnmCrypto.encrypt(password);
+        cfg.miner.evmKeystoreAddr = createdAddr;
+        cfg.miner.evmKeystorePasswordEncrypted = envelope;
+        await this._persistMinerAccount(createdAddr, envelope);
+
+        if (this.extensionHandle && this.extensionHandle.log) {
+            this.extensionHandle.log.info(
+                `${ENM_LOG_PREFIX} ${this.chainId}: created EVM mining account ${createdAddr}.`,
+            );
+        }
+        return passwordFile;
+    }
+
+    /**
+     * FIX-C12 — read the first UTC--* keystore file under keystoreDir and
+     * return its 0x-prefixed address. go-ethereum keystore files are JSON
+     * with a lowercase, un-prefixed `address` field (e.g. "abc123...").
+     *
+     * @param {string} keystoreDir
+     * @returns {string|null} 0x-prefixed checksum-agnostic address, or null
+     *   when no parseable keystore file exists.
+     */
+    _findExistingEvmKeystoreAddress(keystoreDir) {
+        let entries;
+        try {
+            entries = fs.readdirSync(keystoreDir);
+        } catch (err) {
+            if (err && err.code === 'ENOENT') return null;
+            throw err;
+        }
+        // go-ethereum names keystore files "UTC--<timestamp>--<address>".
+        const utc = entries.filter((f) => f.startsWith('UTC--')).sort();
+        if (utc.length === 0) return null;
+        const filePath = path.join(keystoreDir, utc[0]);
+        let parsed;
+        try {
+            parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+        } catch (err) {
+            throw new Error(
+                `${this.chainId}: failed to parse EVM keystore file ${filePath}: ${err.message}`,
+            );
+        }
+        if (!parsed || typeof parsed.address !== 'string' || parsed.address.length === 0) {
+            throw new Error(
+                `${this.chainId}: EVM keystore file ${filePath} has no usable .address field.`,
+            );
+        }
+        const addr = parsed.address.startsWith('0x') ? parsed.address : `0x${parsed.address}`;
+        return addr;
+    }
+
+    /**
+     * FIX-C12 — persist the resolved EVM mining account (0x address +
+     * encrypted password) back into the canonical cfg.chains.<id>.miner
+     * block via ConfigStore, so the next start reuses it without a fresh
+     * `account new`. Reloads cfg to avoid clobbering concurrent edits.
+     *
+     * @param {string} addr            0x-prefixed EVM address
+     * @param {string} passwordEnvelope EnmCrypto.encrypt() envelope string
+     */
+    async _persistMinerAccount(addr, passwordEnvelope) {
+        const full = await ConfigStore.load();
+        if (!full || !full.chains || !full.chains[this.chainId]) {
+            // Chain not in cfg (shouldn't happen at start time) — skip
+            // persistence rather than throw; the in-memory cfg still drives
+            // this start.
+            if (this.extensionHandle && this.extensionHandle.log) {
+                this.extensionHandle.log.warn(
+                    `${ENM_LOG_PREFIX} ${this.chainId}: cfg.chains.${this.chainId} missing at `
+                    + 'EVM-account persist time; skipping save (in-memory cfg still used).',
+                );
+            }
+            return;
+        }
+        const m = full.chains[this.chainId].miner || {};
+        m.evmKeystoreAddr = addr;
+        m.evmKeystorePasswordEncrypted = passwordEnvelope;
+        full.chains[this.chainId].miner = m;
+        await ConfigStore.save(full);
     }
 }
 
