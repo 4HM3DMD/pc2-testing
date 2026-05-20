@@ -188,7 +188,15 @@ function isInstalled(chainId) {
     try {
         const p = scriptPathFor(chainId);
         const st = fs.statSync(p);
-        return st.isFile() && st.size > 0;
+        if (!st.isFile() || st.size === 0) { return false; }
+        // node.sh PARITY (node.sh:4207 <x>-oracle_init) — an oracle is only
+        // "installed" when its node_modules are present too. The upstream
+        // tarball ships SOURCE ONLY (crosschain_<x>.js + helpers), NOT
+        // node_modules, so without `npm install web3 express` the script
+        // crashes code=1 on require('express'). Treat missing deps as
+        // not-installed so downloadOne re-runs (re-fetch + npm install).
+        const expressDir = path.join(scriptDirFor(chainId), 'node_modules', 'express');
+        return fs.existsSync(expressDir);
     } catch (_) {
         return false;
     }
@@ -389,6 +397,78 @@ function extractTar(tarball, targetDir) {
     });
 }
 
+// node.sh PARITY (node.sh:4207 <x>-oracle_init) — pinned oracle deps. The
+// upstream download.elastos.io tarball ships SOURCE ONLY; node.sh installs
+// these in the oracle dir right after fetching the scripts so `node
+// crosschain_<x>.js` can require('express')/('web3'). web3@1.7.3 +
+// express@4.18.1 are the exact pins node.sh uses for all three oracles.
+const ORACLE_NPM_DEPS = Object.freeze(['web3@1.7.3', 'express@4.18.1']);
+const NPM_INSTALL_TIMEOUT_MS = 300_000;
+
+/**
+ * @private — Run `npm install web3@1.7.3 express@4.18.1` inside the oracle's
+ * script dir so it is self-contained + runnable, mirroring node.sh. Uses the
+ * host Node.js runtime PC2 already runs (npm sits next to node in the same
+ * bin dir); prepends that bin dir to PATH so the right node drives npm.
+ * Throws (loud, non-silent) if npm fails or express is still missing.
+ *
+ * @param {string} targetDir  the per-oracle script dir (scriptDirFor result)
+ * @param {string} chainId
+ * @param {object} [opts]  { onProgress, logger }
+ */
+async function installOracleDeps(targetDir, chainId, opts) {
+    const o = opts || {};
+    const onProgress = o.onProgress || (() => {});
+    const logger = o.logger || console;
+
+    // Skip if deps already present (idempotent re-install).
+    if (fs.existsSync(path.join(targetDir, 'node_modules', 'express'))) {
+        onProgress(`${chainId}: oracle deps already present`);
+        return;
+    }
+
+    const NodeJsRuntime = require('./NodeJsRuntime');
+    const rt = await NodeJsRuntime.resolveAny();
+    if (!rt || !rt.path) {
+        throw new Error(
+            `OracleScriptDownloader: no Node.js runtime available to install ${chainId} `
+            + 'oracle deps (web3/express). Ensure Node.js v20+ is on the host.');
+    }
+    const nodeBinDir = path.dirname(rt.path);
+    const npmBin = path.join(nodeBinDir, 'npm');
+
+    onProgress(`${chainId}: installing oracle deps (${ORACLE_NPM_DEPS.join(' ')})...`);
+    await new Promise((resolve, reject) => {
+        execFile(
+            fs.existsSync(npmBin) ? npmBin : 'npm',
+            ['install', ...ORACLE_NPM_DEPS, '--no-audit', '--no-fund', '--loglevel=error'],
+            {
+                cwd: targetDir,
+                timeout: NPM_INSTALL_TIMEOUT_MS,
+                env: { ...process.env, PATH: `${nodeBinDir}:${process.env.PATH || ''}` },
+                maxBuffer: 16 * 1024 * 1024,
+            },
+            (err, _stdout, stderr) => {
+                if (err) {
+                    const tail = stderr ? stderr.trim().split('\n').slice(-3).join(' | ') : err.message;
+                    return reject(new Error(
+                        `npm install (${ORACLE_NPM_DEPS.join(' ')}) failed for ${chainId} in ${targetDir}: ${tail}`));
+                }
+                resolve();
+            },
+        );
+    });
+
+    if (!fs.existsSync(path.join(targetDir, 'node_modules', 'express'))) {
+        throw new Error(
+            `OracleScriptDownloader: ${chainId} npm install completed but `
+            + 'node_modules/express is still missing.');
+    }
+    if (logger && typeof logger.info === 'function') {
+        logger.info(`${ENM_LOG_PREFIX} ${chainId}: oracle deps installed (${ORACLE_NPM_DEPS.join(' ')})`);
+    }
+}
+
 /**
  * @private — Walk a directory tree to find a file by basename.
  * Returns the first match's absolute path, or null. Mirrors
@@ -550,6 +630,12 @@ async function downloadOne(chainId, opts) {
     await fsp.rm(finalDir, { recursive: true, force: true });
     onProgress(`${chainId}: installing to ${finalDir}...`);
     await moveExtractedContents(extractDir, finalDir);
+
+    // 7b. node.sh PARITY (node.sh:4207) — the upstream tarball is source-only,
+    // so install the oracle's runtime deps (web3 + express) in the script dir.
+    // Without this the oracle spawns then crashes code=1 on
+    // require('express'), and self-heal can't fix a missing-module crash.
+    await installOracleDeps(finalDir, chainId, { onProgress, logger });
 
     // 8. Cleanup staging
     await fsp.rm(stagingRoot, { recursive: true, force: true });
