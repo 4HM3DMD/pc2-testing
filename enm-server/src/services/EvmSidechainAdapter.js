@@ -254,6 +254,23 @@ class EvmSidechainAdapter extends ChainAdapter {
         if (secrets.externalIp) {
             args.push('--pbft.net.address', secrets.externalIp);
         }
+        // 0.5.156 — BUG-C8b: this geth fork reads the PBFT keystore password
+        // from the --pbft.keystore.password FLAG, NOT from stdin. The adapter
+        // historically piped it to stdin (start() step 8), but the binary
+        // never consumes that for PBFT, so it logged "create dpos account
+        // error: password wrong" and fell back to a non-signing "common sync
+        // node". For EID (PBFT from block 0) that then escalated to
+        // "Failed to prepare header for mining: wait for recoved states" and
+        // a code=2 exit (confirmed via manual run). Pass the flag so PBFT
+        // signing works on all three EVM sidechains.
+        // SECURITY: the password is visible in `ps`/`/proc/<pid>/cmdline`.
+        // Acceptable for a single-tenant operator node (the same secret is
+        // already in the encrypted cfg + keystore.dat on this host); a future
+        // hardening could switch to a password file if the binary exposes a
+        // --pbft.keystore.password.file option.
+        if (secrets.pbftPassword) {
+            args.push('--pbft.keystore.password', secrets.pbftPassword);
+        }
         // Sync mode: 'fast' / 'full' / 'archive'. node.sh default is 'fast'.
         if (cfg.sync && cfg.sync.mode) {
             args.push('--syncmode', cfg.sync.mode);
@@ -397,6 +414,7 @@ class EvmSidechainAdapter extends ChainAdapter {
         cfg.spawnArgs = this.buildSpawnArgs(cfg, {
             mainchainKeystorePath,
             externalIp,
+            pbftPassword,
         });
 
         // Step 6 — UFW for P2P (TCP) + discovery (UDP) + dpos (TCP).
