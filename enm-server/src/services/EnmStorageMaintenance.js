@@ -200,12 +200,14 @@ class EnmStorageMaintenance {
         // Persist last-backup timestamp + path so the UI can show
         // "last backup: X days ago".
         try {
-            const fresh = await ConfigStore.load();
-            fresh.global = fresh.global || {};
-            fresh.global.backup = fresh.global.backup || {};
-            fresh.global.backup.lastKeystoreBackupAt = Date.now();
-            fresh.global.backup.lastKeystoreBackupPath = dst;
-            await ConfigStore.save(fresh, { logger: this.extensionHandle.log });
+            // P0-7 (v0.5.179) — atomic RMW so this 24h timer's timestamp write
+            // can't clobber a concurrent operator config save.
+            await ConfigStore.update((fresh) => {
+                fresh.global = fresh.global || {};
+                fresh.global.backup = fresh.global.backup || {};
+                fresh.global.backup.lastKeystoreBackupAt = Date.now();
+                fresh.global.backup.lastKeystoreBackupPath = dst;
+            }, { logger: this.extensionHandle.log });
         } catch (err) {
             this._log('warn', `keystore backup: persisting timestamp failed: ${err.message}`);
         }

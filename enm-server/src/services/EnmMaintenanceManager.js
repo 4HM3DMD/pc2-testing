@@ -73,6 +73,7 @@ const { spawn } = require('node:child_process');
 const { ENM_LOG_PREFIX } = require('./EnmConstants');
 const DataDir = require('./DataDir');
 const ChainRegistry = require('./ChainRegistry');
+const ConfigStore = require('./ConfigStore');
 
 const KEYSTORE_FILENAME = 'keystore.dat';
 
@@ -289,6 +290,24 @@ async function chainResync(opts) {
                 { code: 'NO_CHAIN' },
             );
         }
+        // P0-6 (v0.5.179) — DISABLE the chain BEFORE stopping it. HealthChecker
+        // (all 3 tick loops) and AutoStart both skip chains with enabled=false,
+        // so this prevents F1 self-heal or a boot autostart from RESPAWNING the
+        // chain mid-`rm` — which would corrupt the half-deleted leveldb or
+        // silently undo the wipe (ela re-opens the dir before we finish deleting).
+        // The chain stays disabled until the operator completes the re-appearing
+        // bootstrap wizard, which re-enables + starts it.
+        try {
+            await ConfigStore.update((cfg) => {
+                if (cfg.chains && cfg.chains[chainId]) { cfg.chains[chainId].enabled = false; }
+            }, { logger: log });
+        } catch (err) {
+            log.warn(
+                `${ENM_LOG_PREFIX} maintenance.chainResync: could not disable ${chainId} before `
+                + `wipe (${err.message}) — self-heal could race the wipe`,
+            );
+        }
+
         log.info(`${ENM_LOG_PREFIX} maintenance.chainResync(${chainId}) — stopping chain`);
         try {
             await adapter.stop();

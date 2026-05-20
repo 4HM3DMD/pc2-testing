@@ -95,6 +95,13 @@ class SelfHealingEngine {
         // dead chain. Rate-limit per (chain) to STUCK_NOTIFY_COOLDOWN_MS.
         /** @type {Map<string, number>} */
         this._stuckChainNotifiedAt = new Map();
+        // P0-2 (v0.5.179) — per-(chainId,ruleId) timestamp of the last
+        // auto-recovery restart attempted from an OPEN escalation. Lets a chain
+        // that escalated on a TRANSIENT fault recover on its own after a long
+        // backoff instead of staying down until a human clicks Confirm — the
+        // core requirement for an unattended fleet. See _maybeRetryFromEscalation.
+        /** @type {Map<string, number>} */
+        this._lastEscalationRetryAt = new Map();
     }
 
     /**
@@ -336,48 +343,55 @@ class SelfHealingEngine {
             // showed F2 cycling 3 restarts every 10 min for 1+ hour
             // while the chain was actually stuck in arbitrator-state
             // mismatch (restart can't fix). Defer to operator action.
+            let escalationOpen = false;
+            let pendingProp = null;
             try {
                 const db = this.getDb();
                 const pending = await ProposalStore.listPendingByChain(db, chainId);
-                const escalationOpen = pending.some(
-                    (p) => p.rule_id === det.ruleId
-                );
-                if (escalationOpen) {
-                    // No audit row — would itself be spam. Operator
-                    // can see the pending proposal in the dashboard;
-                    // that's the source of truth for "what's blocked".
-                    return;
-                }
+                pendingProp = pending.find((p) => p.rule_id === det.ruleId) || null;
+                escalationOpen = !!pendingProp;
             } catch (err) {
-                // listPendingByChain failure shouldn't block healing —
-                // worst case we proceed to budget check and the
-                // existing escalation path handles things.
+                // listPendingByChain failure shouldn't block healing — worst
+                // case we proceed to the budget check below.
                 this.extensionHandle.log.debug(
                     `${ENM_LOG_PREFIX} ${chainId}/${det.ruleId} pending-proposal probe failed (non-fatal): ${err.message}`,
                 );
             }
 
-            // Note: F1's detectF1 in HealthRules.js already gates on
-            // snap.processExit.manualStop, so a manually-stopped chain
-            // never reaches this path. The audit flagged a defensive
-            // execution-time check too — but statusSync doesn't expose
-            // manualStop, so the only true source is the exit snapshot
-            // F1 already consults. Single source of truth, no double
-            // gate, no risk of drift between the two checks.
-            const allowed = this._consumeRestartBudget(chainId);
-            if (!allowed) {
-                // Escalate: convert this AUTOMATED-SAFE into an OWNER-CONFIRMS.
-                this.extensionHandle.log.warn(
-                    `${ENM_LOG_PREFIX} ${chainId}/${det.ruleId} budget exhausted — escalating to OWNER-CONFIRMS`,
-                );
-                const escalated = {
-                    ...det,
-                    tier: HEALING_TIERS.OWNER_CONFIRMS,
-                    summaryReason:
-                        (det.summaryReason || '') +
-                        ' (escalated after multiple auto-restart attempts)',
-                };
-                return this._applyOwnerConfirms(chainId, escalated);
+            if (escalationOpen) {
+                // P0-2 (v0.5.179) — an open escalation USED to suppress all
+                // further auto-restarts indefinitely (a bare `return`), so a chain
+                // that escalated on a TRANSIENT fault (e.g. a 10-min upstream
+                // outage that burned the 3-restart budget) stayed DOWN until a
+                // human clicked Confirm — unacceptable for an unattended fleet.
+                // Now: after a long backoff, attempt ONE more auto-restart (budget
+                // reset) so a transient fault self-recovers. The proposal stays
+                // open for visibility; a genuinely-broken chain just keeps failing
+                // + re-escalating on this slow cadence instead of staying dead.
+                if (!this._maybeRetryFromEscalation(chainId, det.ruleId, pendingProp)) {
+                    return; // still within the backoff window — defer to operator
+                }
+                // past backoff → fall through to the restart below (the budget was
+                // reset inside _maybeRetryFromEscalation, so skip the consume gate).
+            } else {
+                // Note: F1's detectF1 in HealthRules.js already gates on
+                // snap.processExit.manualStop, so a manually-stopped chain
+                // never reaches this path.
+                const allowed = this._consumeRestartBudget(chainId);
+                if (!allowed) {
+                    // Escalate: convert this AUTOMATED-SAFE into an OWNER-CONFIRMS.
+                    this.extensionHandle.log.warn(
+                        `${ENM_LOG_PREFIX} ${chainId}/${det.ruleId} budget exhausted — escalating to OWNER-CONFIRMS`,
+                    );
+                    const escalated = {
+                        ...det,
+                        tier: HEALING_TIERS.OWNER_CONFIRMS,
+                        summaryReason:
+                            (det.summaryReason || '') +
+                            ' (escalated after multiple auto-restart attempts)',
+                    };
+                    return this._applyOwnerConfirms(chainId, escalated);
+                }
             }
         }
 
@@ -475,6 +489,39 @@ class SelfHealingEngine {
     /** @private */
     _isRestartAction(det) {
         return det && det.payload && det.payload.action === 'restart';
+    }
+
+    /**
+     * P0-2 — decide whether to attempt ONE auto-recovery restart from an OPEN
+     * escalation. Returns true (and resets the restart budget) at most once per
+     * ESCALATION_RETRY_BACKOFF_MS per (chain,rule); false to keep deferring to
+     * the operator. The first eligible retry is gated off the proposal's age, and
+     * subsequent ones off the last retry we attempted.
+     * @private
+     */
+    _maybeRetryFromEscalation(chainId, ruleId, pendingProp) {
+        const ESCALATION_RETRY_BACKOFF_MS = 30 * 60_000; // 30 min
+        const key = `${chainId}:${ruleId}`;
+        const lastRetry = this._lastEscalationRetryAt.get(key);
+        const since = (typeof lastRetry === 'number')
+            ? lastRetry
+            : (pendingProp && Number(pendingProp.created_at)) || 0;
+        if (Date.now() - since < ESCALATION_RETRY_BACKOFF_MS) {
+            return false;
+        }
+        this._lastEscalationRetryAt.set(key, Date.now());
+        this._resetRestartBudget(chainId);
+        this.extensionHandle.log.warn(
+            `${ENM_LOG_PREFIX} ${chainId}/${ruleId} escalated + idle ≥`
+            + `${Math.round(ESCALATION_RETRY_BACKOFF_MS / 60_000)}min — attempting one `
+            + 'auto-recovery restart (proposal stays open for operator visibility)',
+        );
+        return true;
+    }
+
+    /** @private — clear a chain's restart budget so the next consume starts fresh. */
+    _resetRestartBudget(chainId) {
+        this._restartBudget.delete(chainId);
     }
 
     // beta.3.78 — _isStateRestoreAction + _executeStateRestore removed

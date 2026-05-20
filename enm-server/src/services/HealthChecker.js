@@ -959,12 +959,19 @@ class HealthChecker {
                         // Need a save — copy globalRules into mainchain.healing.
                         // ConfigStore is required lazily to avoid the cycle.
                         const ConfigStore = require('./ConfigStore');
-                        const fresh = await ConfigStore.load();
-                        if (fresh && fresh.chains && fresh.chains.mainchain) {
-                            fresh.chains.mainchain.healing = fresh.chains.mainchain.healing || {};
-                            fresh.chains.mainchain.healing.enabledRules =
-                                Object.assign({}, globalRules);
-                            await ConfigStore.save(fresh, { logger: this.extensionHandle.log });
+                        // P0-7 (v0.5.179) — atomic RMW so this background
+                        // migration write can't clobber a concurrent operator
+                        // config save (load→mutate→save under the write lock).
+                        let didMigrate = false;
+                        await ConfigStore.update((fresh) => {
+                            if (fresh && fresh.chains && fresh.chains.mainchain) {
+                                fresh.chains.mainchain.healing = fresh.chains.mainchain.healing || {};
+                                fresh.chains.mainchain.healing.enabledRules =
+                                    Object.assign({}, globalRules);
+                                didMigrate = true;
+                            }
+                        }, { logger: this.extensionHandle.log });
+                        if (didMigrate) {
                             this.extensionHandle.log.info(
                                 `${ENM_LOG_PREFIX} healing-rules migration (Wave M1.3): copied `
                                 + `${Object.keys(globalRules).length} rule(s) from cfg.global.`

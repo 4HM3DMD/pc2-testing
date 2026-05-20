@@ -826,24 +826,25 @@ class EvmSidechainAdapter extends ChainAdapter {
      * @param {string} passwordEnvelope EnmCrypto.encrypt() envelope string
      */
     async _persistMinerAccount(addr, passwordEnvelope) {
-        const full = await ConfigStore.load();
-        if (!full || !full.chains || !full.chains[this.chainId]) {
-            // Chain not in cfg (shouldn't happen at start time) — skip
-            // persistence rather than throw; the in-memory cfg still drives
-            // this start.
-            if (this.extensionHandle && this.extensionHandle.log) {
-                this.extensionHandle.log.warn(
-                    `${ENM_LOG_PREFIX} ${this.chainId}: cfg.chains.${this.chainId} missing at `
-                    + 'EVM-account persist time; skipping save (in-memory cfg still used).',
-                );
+        // P0-7 (v0.5.179) — atomic RMW so persisting the generated EVM mining
+        // account doesn't clobber a concurrent operator/background config save.
+        let missing = false;
+        await ConfigStore.update((full) => {
+            if (!full || !full.chains || !full.chains[this.chainId]) {
+                missing = true; // shouldn't happen at start time — skip below
+                return;
             }
-            return;
+            const m = full.chains[this.chainId].miner || {};
+            m.evmKeystoreAddr = addr;
+            m.evmKeystorePasswordEncrypted = passwordEnvelope;
+            full.chains[this.chainId].miner = m;
+        });
+        if (missing && this.extensionHandle && this.extensionHandle.log) {
+            this.extensionHandle.log.warn(
+                `${ENM_LOG_PREFIX} ${this.chainId}: cfg.chains.${this.chainId} missing at `
+                + 'EVM-account persist time; in-memory cfg still drives this start.',
+            );
         }
-        const m = full.chains[this.chainId].miner || {};
-        m.evmKeystoreAddr = addr;
-        m.evmKeystorePasswordEncrypted = passwordEnvelope;
-        full.chains[this.chainId].miner = m;
-        await ConfigStore.save(full);
     }
 
     /**

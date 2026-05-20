@@ -29,6 +29,22 @@ const { encrypt, decrypt } = require('./EnmEncryption');
 /** @type {{ value: object, mtimeMs: number }|null} */
 let cache = null;
 
+// P0-7 (v0.5.179) — serialize config writes. ~15+ callers across routes AND
+// background timers (HealthChecker, SelfHealingEngine, StorageMaintenance,
+// autostart, adapters) each do load()→mutate→save() with no coordination. A
+// timer's save interleaving an operator's save → last-write-wins → the
+// operator's change silently vanishes. This promise-chain mutex serializes all
+// writes; update() runs the FULL read-modify-write under the lock so concurrent
+// writers each see the prior one's result instead of a stale snapshot.
+let writeChain = Promise.resolve();
+function withConfigWriteLock(fn) {
+    const run = writeChain.then(fn, fn);
+    // Keep the chain alive regardless of this op's outcome (swallow here only;
+    // the real result/rejection is returned to the caller via `run`).
+    writeChain = run.then(() => {}, () => {});
+    return run;
+}
+
 /**
  * Read the config from disk. Returns the default config (with setup.completed
  * = false) if no file exists yet — so the setup wizard can populate it.
@@ -135,6 +151,14 @@ async function _recoverFromBackup(filePath, originalErr) {
  * @returns {Promise<void>}
  */
 async function save(next, opts) {
+    // Serialize the write so two concurrent saves can't interleave their
+    // backup+atomicWrite steps. (Lost-update protection for the FULL
+    // read-modify-write lives in update() below — prefer it for new code.)
+    return withConfigWriteLock(() => _saveInner(next, opts));
+}
+
+/** @private — the actual save, run only while holding withConfigWriteLock. */
+async function _saveInner(next, opts) {
     const filePath = configPath();
     const validated = validate(next);
     const logger = (opts && opts.logger) || SILENT_LOGGER;
@@ -165,6 +189,28 @@ async function save(next, opts) {
 const SILENT_LOGGER = Object.freeze({
     warn() { /* intentionally silent — see save()'s logger param */ },
 });
+
+/**
+ * P0-7 — atomic read-modify-write. Runs load() → mutatorFn(cfg) → save() while
+ * holding the write lock, so concurrent writers serialize and each sees the
+ * prior one's committed state (no lost updates). Prefer this over a bare
+ * load()+save() pair anywhere config is mutated.
+ *
+ * @param {(cfg: object) => void|Promise<void>} mutatorFn  mutates cfg in place
+ * @param {object} [opts]  forwarded to save() (e.g. { logger })
+ * @returns {Promise<object>} the saved (validated) config
+ */
+async function update(mutatorFn, opts) {
+    if (typeof mutatorFn !== 'function') {
+        throw new TypeError('ConfigStore.update: mutatorFn function required');
+    }
+    return withConfigWriteLock(async () => {
+        const cfg = await load();        // fresh under the lock (sees prior saves)
+        await mutatorFn(cfg);            // mutate in place (may be async)
+        await _saveInner(cfg, opts);
+        return cfg;
+    });
+}
 
 /**
  * Rollback to the previous version. Returns the restored config or null if
@@ -243,6 +289,7 @@ function _resetCacheForTests() {
 module.exports = {
     load,
     save,
+    update,
     rollback,
     setRpcPassword,
     getRpcPassword,

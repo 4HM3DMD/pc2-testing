@@ -216,17 +216,51 @@ class NativeProcessService extends EventEmitter {
      */
     signalAll(signal = 'SIGINT') {
         let sent = 0;
+        const signaled = new Set();
+        // 1. Chains we spawned THIS session — signal via the live ChildProcess.
         for (const [chainId, handle] of this.handles.entries()) {
             const child = handle && handle.child;
             if (!child || child.killed || typeof child.pid !== 'number') { continue; }
             try {
                 child.kill(signal);
+                signaled.add(chainId);
                 sent += 1;
             } catch (err) {
                 this.extensionHandle.log.debug(
                     `${ENM_LOG_PREFIX} signalAll: ${chainId} kill(${signal}) failed: ${err.message}`,
                 );
             }
+        }
+        // 2. P0-5 (v0.5.179) — chains that SURVIVED a prior ENM restart were
+        // re-adopted via reattach(), which records NO ChildProcess handle (their
+        // stdio belonged to the dead parent). The loop above misses them, so after
+        // ANY ENM restart the graceful-flush SIGINT reached ZERO children — EVM
+        // geth then got only pc2-node's abrupt kill mid-write → unclean leveldb
+        // shutdown / corruption, the exact thing this flush exists to prevent.
+        // Scan the PID files and signal those PIDs directly. statusSync cross-checks
+        // /proc/<pid>/exe (isOurProcess), so we never signal a recycled-PID stranger.
+        try {
+            for (const fname of fs.readdirSync(runDir())) {
+                const m = fname.match(/^ela-([a-z0-9-]+)\.pid$/);
+                if (!m) { continue; }
+                const chainId = m[1];
+                if (signaled.has(chainId)) { continue; }
+                let status;
+                try { status = this.statusSync(chainId); } catch (_) { continue; }
+                if (!status || !status.alive || typeof status.pid !== 'number') { continue; }
+                try {
+                    process.kill(status.pid, signal);
+                    signaled.add(chainId);
+                    sent += 1;
+                } catch (err) {
+                    this.extensionHandle.log.debug(
+                        `${ENM_LOG_PREFIX} signalAll: ${chainId} (reattached pid=${status.pid}) `
+                        + `kill(${signal}) failed: ${err.message}`,
+                    );
+                }
+            }
+        } catch (_) {
+            /* runDir missing/unreadable — nothing to flush */
         }
         if (sent > 0) {
             this.extensionHandle.log.info(

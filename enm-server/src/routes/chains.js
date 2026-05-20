@@ -1394,21 +1394,45 @@ function build(extensionHandle) {
             const cfg = await ConfigStore.load();
             const chainCfg = cfg.chains && cfg.chains[chainId];
             try {
+                // P0-1b (v0.5.179) — staleness gate using methods THIS ela build
+                // actually serves. The old probe used getblockheader, which this
+                // build answers "method not found" → the gate always 503'd, so
+                // ActivateProducer could never pass even after the P0-1 TDZ fix.
+                // Compare local height (getblockcount) to the max height our peers
+                // report (getnodestate Neighbors[]); refuse only when clearly
+                // behind. Both methods are confirmed served by ela.
                 const rpc = adapter.rpcClient(chainCfg);
-                const bestHashResp = await rpc.getbestblockhash();
-                const bestHash = bestHashResp && bestHashResp.result ? bestHashResp.result : bestHashResp;
-                if (typeof bestHash === 'string' && bestHash.length > 0) {
-                    const headerResp = await rpc.getblockheader(bestHash, 2);
-                    const header = headerResp && headerResp.result ? headerResp.result : headerResp;
-                    if (header && typeof header.time === 'number') {
-                        const ageSec = Math.floor(Date.now() / 1000) - header.time;
-                        // Same 5-min slack used by the /sync route's synced detection.
-                        if (ageSec > 5 * 60) {
-                            return res.status(409).json(errorBody(
-                                `Chain is not yet fully synced (last block is ${Math.floor(ageSec / 60)} min old). Reactivation transactions need a synced node — wait until the dashboard shows "Fully synced", then try again.`,
-                            ));
-                        }
+                const [localResp, nodeStateResp] = await Promise.all([
+                    rpc.getblockcount(),
+                    rpc.getnodestate().catch(() => null),
+                ]);
+                const local = (typeof localResp === 'number') ? localResp
+                    : (localResp && typeof localResp.result === 'number') ? localResp.result : null;
+                if (local == null) {
+                    return res.status(503).json(errorBody(
+                        'Cannot read chain height to verify sync. Refusing reactivation while chain state is unclear.',
+                    ));
+                }
+                let networkHeight = null;
+                const ns = (nodeStateResp && nodeStateResp.result) ? nodeStateResp.result : nodeStateResp;
+                const neighbors = ns && (ns.neighbors || ns.Neighbors);
+                if (Array.isArray(neighbors)) {
+                    for (const n of neighbors) {
+                        const h = (typeof n.height === 'number') ? n.height
+                            : (typeof n.Height === 'number') ? n.Height
+                            : (typeof n.startingheight === 'number') ? n.startingheight : null;
+                        if (h != null && (networkHeight == null || h > networkHeight)) { networkHeight = h; }
                     }
+                }
+                // Only refuse when peers report a height AND we're clearly behind
+                // (>2 blocks). If no peer reports a height we can't prove staleness,
+                // so we allow the operator-initiated activate to proceed.
+                if (networkHeight != null && local < networkHeight - 2) {
+                    const behind = networkHeight - local;
+                    return res.status(409).json(errorBody(
+                        `Chain is not yet fully synced (${behind} blocks behind peers). Reactivation transactions `
+                        + 'need a synced node — wait until the dashboard shows "Fully synced", then try again.',
+                    ));
                 }
             } catch (rpcErr) {
                 // Can't confirm sync — refuse rather than risk a wasted tx.
