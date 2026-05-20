@@ -728,6 +728,31 @@ class EvmSidechainAdapter extends ChainAdapter {
         full.chains[this.chainId].miner = m;
         await ConfigStore.save(full);
     }
+
+    /**
+     * health() — PID-based, mirroring node.sh's `pgrep -f '^\./esc …'` status
+     * check (esc_status, node.sh:2702).
+     *
+     * FIX-C19 — EVM sidechains speak Ethereum JSON-RPC (EthRpcClient:
+     * getBlockNumber/getPeerCount), NOT ELA Bitcoin-style RPC. The base
+     * ChainAdapter.health() (and HealthChecker._pingRpc) probed getblockcount(),
+     * which EthRpcClient does not implement → the probe ALWAYS threw → rpcOk
+     * stayed false → after the C15 initial-start grace, F2 (rpc-unreachable)
+     * restart-looped every HEALTHY EVM sidechain (the durability killer).
+     * node.sh never RPC-probes these chains for its restart decision — it
+     * checks the process with pgrep. So process-alive IS the liveness signal,
+     * exactly as for the oracle (C13). `cfg` kept for signature parity.
+     *
+     * @param {object} cfg
+     * @returns {Promise<{ alive: boolean, rpcOk: boolean, pid: number|null }>}
+     */
+    async health(cfg) {  // eslint-disable-line no-unused-vars
+        const procStatus = this.processService.statusSync(this.chainId);
+        if (!procStatus.alive) {
+            return { alive: false, rpcOk: false, pid: null };
+        }
+        return { alive: true, rpcOk: true, pid: procStatus.pid };
+    }
 }
 
 module.exports = EvmSidechainAdapter;

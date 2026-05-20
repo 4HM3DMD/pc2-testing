@@ -545,6 +545,29 @@ class ArbiterAdapter extends ChainAdapter {
         }
         return result;
     }
+
+    /**
+     * health() — PID-based, mirroring node.sh's `pgrep -x arbiter`
+     * (arbiter_status, node.sh:5046).
+     *
+     * FIX-C19/C20 — the arbiter binary serves getspvheight (node.sh:5060 only
+     * ever calls getspvheight on it), NOT the ELA getblockcount that the base
+     * ChainAdapter.health() / HealthChecker._pingRpc probed → that probe threw
+     * (or hit a method the arbiter doesn't expose) → rpcOk stayed false → F2
+     * restart-looped a healthy arbiter after the grace. node.sh checks arbiter
+     * liveness via pgrep, so process-alive is the signal. `cfg` kept for
+     * signature parity.
+     *
+     * @param {object} cfg
+     * @returns {Promise<{ alive: boolean, rpcOk: boolean, pid: number|null }>}
+     */
+    async health(cfg) {  // eslint-disable-line no-unused-vars
+        const procStatus = this.processService.statusSync(this.chainId);
+        if (!procStatus.alive) {
+            return { alive: false, rpcOk: false, pid: null };
+        }
+        return { alive: true, rpcOk: true, pid: procStatus.pid };
+    }
 }
 
 module.exports = ArbiterAdapter;

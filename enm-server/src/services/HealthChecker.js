@@ -1021,9 +1021,22 @@ class HealthChecker {
             const cfg = await this._loadConfigSafe();
             const chain = cfg && cfg.chains && cfg.chains[chainId];
             if (!chain) return { ok: false, errCode: 'no-config' };
-            const client = adapter.rpcClient(chain);
-            await client.getblockcount();
-            return { ok: true };
+            // FIX-C19 — delegate liveness to the adapter's polymorphic health()
+            // instead of hardcoding client.getblockcount(). getblockcount is an
+            // ELA (Bitcoin-style) RPC method that ONLY the mainchain's
+            // EnmRpcClient implements; EVM sidechains use EthRpcClient
+            // (getBlockNumber/getPeerCount — no getblockcount), oracles are
+            // plain HTTP (no JSON-RPC), and the arbiter serves getspvheight.
+            // The old getblockcount() call therefore THREW for every
+            // non-mainchain chain → rpcSummary.ok=false → once the C15
+            // initial-start grace expired, F2 (rpc-unreachable) restart-LOOPED
+            // 7/8 healthy chains (the durability killer). Each adapter's
+            // health() now does the class-correct probe: mainchain RPC-pings
+            // (getblockcount works), EVM/oracle/arbiter are PID-based exactly
+            // like node.sh's per-chain pgrep status checks.
+            const h = await adapter.health(chain);
+            if (h && h.rpcOk) return { ok: true };
+            return { ok: false, errCode: (h && h.alive) ? 'rpc-unreachable' : 'not-alive' };
         } catch (err) {
             return { ok: false, errCode: err.name || 'RpcError' };
         }
