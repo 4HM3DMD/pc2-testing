@@ -128,35 +128,41 @@ function execCapture(cmd, args, timeoutMs) {
  */
 async function detect() {
     if (os.platform() !== 'linux') {
-        return { tool: null, active: false, allowedTcp: new Set() };
+        return { tool: null, active: false, allowedTcp: new Set(), allowedUdp: new Set() };
     }
     const probe = await execCapture('ufw', ['status', 'verbose']);
     // exit 0 only when UFW is installed AND the user has perms to read state.
     // exit 1 / EACCES → we can't determine. Treat as "not eligible".
     if (probe.code !== 0) {
-        return { tool: null, active: false, allowedTcp: new Set(), raw: probe.stderr };
+        return { tool: null, active: false, allowedTcp: new Set(), allowedUdp: new Set(), raw: probe.stderr };
     }
     const out = probe.stdout || '';
     const active = /Status:\s*active/i.test(out);
     if (!active) {
-        return { tool: 'ufw', active: false, allowedTcp: new Set(), raw: out };
+        return { tool: 'ufw', active: false, allowedTcp: new Set(), allowedUdp: new Set(), raw: out };
     }
     // Parse allowed TCP ports. Match lines like:
     //   22/tcp                     ALLOW IN    Anywhere
     //   20338/tcp                  ALLOW IN    Anywhere                   # ela P2P
     //   80,443/tcp                 ALLOW IN    Anywhere
     // We ignore (v6) duplicates — UFW emits a v4 line and a v6 line per rule.
-    const allowed = new Set();
-    const lineRe = /^([\d,\s]+)\/tcp(?:\s*\([\w]+\))?\s+ALLOW IN\b/i;
+    // P0-15 (v0.5.178) — parse BOTH tcp and udp allow lines. The EVM geth fork
+    // shares its --port for the TCP listener AND UDP discv4 discovery, so the P2P
+    // port needs a /udp rule too or discovery is silently dropped on a default-deny
+    // UFW host (the "stuck at 0 peers" symptom this whole module exists to prevent).
+    const allowedTcp = new Set();
+    const allowedUdp = new Set();
+    const lineRe = /^([\d,\s]+)\/(tcp|udp)(?:\s*\([\w]+\))?\s+ALLOW IN\b/i;
     out.split(/\r?\n/).forEach((line) => {
         const m = lineRe.exec(line.trim());
         if (!m) { return; }
+        const set = m[2].toLowerCase() === 'udp' ? allowedUdp : allowedTcp;
         m[1].split(',').forEach((p) => {
             const n = parseInt(p.trim(), 10);
-            if (Number.isInteger(n) && n > 0 && n < 65536) { allowed.add(n); }
+            if (Number.isInteger(n) && n > 0 && n < 65536) { set.add(n); }
         });
     });
-    return { tool: 'ufw', active: true, allowedTcp: allowed, raw: out };
+    return { tool: 'ufw', active: true, allowedTcp, allowedUdp, raw: out };
 }
 
 /**
@@ -184,58 +190,79 @@ async function detect() {
  *   reason?: string,
  * }>}
  */
+/** Normalize a ports input to a deduped list of valid port numbers. */
+function _normalizePorts(ports) {
+    const seen = new Set();
+    (Array.isArray(ports) ? ports : [])
+        .map((p) => parseInt(p, 10))
+        .filter((p) => Number.isInteger(p) && p > 0 && p < 65536)
+        .forEach((p) => seen.add(p));
+    return Array.from(seen);
+}
+
+/**
+ * Ensure the given ports of ONE protocol are allowed inbound. Adds a
+ * `ufw allow <port>/<proto>` rule for each missing port. Returns the per-proto
+ * add/already/error breakdown. Internal helper for ensureAllowed.
+ */
+async function _ensureProto(allowedSet, ports, proto, comment, logger) {
+    const alreadyAllowed = ports.filter((p) => allowedSet.has(p));
+    const missing = ports.filter((p) => !allowedSet.has(p));
+    const added = [];
+    const errors = [];
+    for (const port of missing) {
+        // argv via spawn — the shell is never involved, so no quoting hazard.
+        const args = ['allow', `${port}/${proto}`, 'comment', `${comment} (port ${port}/${proto})`];
+        const r = await execCapture('ufw', args, 8_000);
+        if (r.code === 0) {
+            added.push(port);
+            logger.info(`${ENM_LOG_PREFIX} ufw allow ${port}/${proto} added (${comment})`);
+        } else {
+            errors.push({
+                port, proto,
+                message: (r.stderr || r.stdout || `exit ${r.code}`).trim().split('\n')[0],
+            });
+            logger.warn(
+                `${ENM_LOG_PREFIX} ufw allow ${port}/${proto} failed: `
+                + ((r.stderr || r.stdout || `exit ${r.code}`).trim()),
+            );
+        }
+    }
+    return { alreadyAllowed, added, errors };
+}
+
 async function ensureAllowed(ports, opts) {
     const logger = (opts && opts.logger) || { info() {}, warn() {}, error() {} };
     const comment = (opts && opts.comment) || 'ENM auto';
-    const portList = (Array.isArray(ports) ? ports : [])
-        .map((p) => parseInt(p, 10))
-        .filter((p) => Number.isInteger(p) && p > 0 && p < 65536);
+    const tcpPorts = _normalizePorts(ports);
+    // P0-15 — opts.udpPorts ALSO get a /udp allow rule. EVM sidechains pass their
+    // p2p port here because geth's discv4 discovery is UDP on the same --port.
+    const udpPorts = _normalizePorts(opts && opts.udpPorts);
 
     const state = await detect();
     if (!state.tool) {
         return {
             tool: null, active: false,
-            alreadyAllowed: [], added: [], errors: [],
+            alreadyAllowed: [], added: [], alreadyAllowedUdp: [], addedUdp: [], errors: [],
             skipped: true, reason: 'ufw not installed / not detectable',
         };
     }
     if (!state.active) {
         return {
             tool: 'ufw', active: false,
-            alreadyAllowed: [], added: [], errors: [],
+            alreadyAllowed: [], added: [], alreadyAllowedUdp: [], addedUdp: [], errors: [],
             skipped: true, reason: 'ufw installed but inactive',
         };
     }
 
-    const alreadyAllowed = portList.filter((p) => state.allowedTcp.has(p));
-    const missing = portList.filter((p) => !state.allowedTcp.has(p));
-    const added = [];
-    const errors = [];
-
-    for (const port of missing) {
-        // `ufw allow <port>/tcp comment '...'` requires the comment to
-        // be a single shell-quoted token. We pass argv directly via
-        // spawn so the shell never gets involved — no quoting hazards.
-        const args = ['allow', `${port}/tcp`, 'comment', `${comment} (port ${port})`];
-        const r = await execCapture('ufw', args, 8_000);
-        if (r.code === 0) {
-            added.push(port);
-            logger.info(`${ENM_LOG_PREFIX} ufw allow ${port}/tcp added (${comment})`);
-        } else {
-            errors.push({
-                port,
-                message: (r.stderr || r.stdout || `exit ${r.code}`).trim().split('\n')[0],
-            });
-            logger.warn(
-                `${ENM_LOG_PREFIX} ufw allow ${port}/tcp failed: `
-                + ((r.stderr || r.stdout || `exit ${r.code}`).trim()),
-            );
-        }
-    }
+    const tcp = await _ensureProto(state.allowedTcp, tcpPorts, 'tcp', comment, logger);
+    const udp = await _ensureProto(state.allowedUdp, udpPorts, 'udp', comment, logger);
 
     return {
         tool: 'ufw', active: true,
-        alreadyAllowed, added, errors,
+        alreadyAllowed: tcp.alreadyAllowed, added: tcp.added,
+        alreadyAllowedUdp: udp.alreadyAllowed, addedUdp: udp.added,
+        errors: tcp.errors.concat(udp.errors),
         skipped: false,
     };
 }

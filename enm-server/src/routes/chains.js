@@ -1386,8 +1386,15 @@ function build(extensionHandle) {
                     'Chain must be running before reactivating. Start the chain and wait for it to fully sync first.',
                 ));
             }
+            // P0-1 (v0.5.178) — load config HERE, before the sync-gate RPC probe.
+            // Both the probe and the keystore-password lookup below reference it; it
+            // was previously declared AFTER this try block → temporal-dead-zone
+            // ReferenceError → every activate threw and 500'd ("Producer
+            // reactivation failed"). ActivateProducer was 100% broken.
+            const cfg = await ConfigStore.load();
+            const chainCfg = cfg.chains && cfg.chains[chainId];
             try {
-                const rpc = adapter.rpcClient(cfg.chains[chainId]);
+                const rpc = adapter.rpcClient(chainCfg);
                 const bestHashResp = await rpc.getbestblockhash();
                 const bestHash = bestHashResp && bestHashResp.result ? bestHashResp.result : bestHashResp;
                 if (typeof bestHash === 'string' && bestHash.length > 0) {
@@ -1409,8 +1416,6 @@ function build(extensionHandle) {
                     `Cannot verify sync status (RPC error: ${rpcErr.message}). Refusing to submit reactivation while chain state is unclear.`,
                 ));
             }
-            const cfg = await ConfigStore.load();
-            const chainCfg = cfg.chains && cfg.chains[chainId];
             const envelope = chainCfg && chainCfg.dpos && chainCfg.dpos.keystorePasswordEncrypted;
             if (!envelope) {
                 return res.status(400).json(errorBody(

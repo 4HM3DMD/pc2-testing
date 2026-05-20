@@ -27,6 +27,7 @@
 const path = require('node:path');
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
+const crypto = require('node:crypto');
 
 const { ENM_NAME } = require('./EnmConstants');
 
@@ -173,14 +174,49 @@ function configBackupPath() {
  */
 async function atomicWrite(target, contents, opts) {
     const mode = (opts && typeof opts.mode === 'number') ? opts.mode : 0o600;
-    const tmp = `${target}.tmp.${process.pid}.${Date.now()}`;
-    // Ensure the parent dir exists. Most callers go through helpers like
-    // pidFilePath() / configPath() that pre-create their dirs, but anything
-    // routing through atomicWrite directly (or future callers) gets a clear
-    // error path instead of an opaque ENOENT from writeFile.
-    await fsp.mkdir(path.dirname(target), { recursive: true, mode: 0o700 }).catch(() => {});
-    await fsp.writeFile(tmp, contents, { mode });
+    // P0-9 (v0.5.178) — collision-safe temp name. `pid + Date.now()` alone
+    // collides when two writes to the SAME target land in the same millisecond
+    // (one truncates the other; the loser's rename then ENOENTs). Random entropy
+    // makes the temp path unique per call.
+    const tmp = `${target}.tmp.${process.pid}.${Date.now()}.${crypto.randomBytes(6).toString('hex')}`;
+    const dir = path.dirname(target);
+    // Ensure the parent dir exists. Only swallow EEXIST — masking EACCES/ENOSPC
+    // here turns a real failure into an opaque ENOENT from the write below.
+    try {
+        await fsp.mkdir(dir, { recursive: true, mode: 0o700 });
+    } catch (err) {
+        if (err.code !== 'EEXIST') { throw err; }
+    }
+    // P0-9 — fsync the temp file's DATA before the rename. POSIX rename is atomic
+    // w.r.t. ordering but NOT durability: on power loss the rename can be journaled
+    // while the temp's data blocks are not yet flushed → a zero-length/truncated
+    // file at the target (a bricked config.json). Sync the fd, rename, then sync the
+    // parent dir so the rename (directory entry) is itself durable.
+    let fh;
+    try {
+        fh = await fsp.open(tmp, 'w', mode);
+        await fh.writeFile(contents);
+        await fh.sync();
+    } finally {
+        if (fh) { await fh.close(); }
+    }
     await fsp.rename(tmp, target);
+    // Enforce mode even when the target pre-existed with looser perms — the temp's
+    // mode only governs the new inode, so a previously world-readable secret would
+    // otherwise keep its perms. Cheap + idempotent.
+    await fsp.chmod(target, mode).catch(() => {});
+    // Durably persist the directory entry created by the rename. Best-effort: some
+    // platforms reject O_RDONLY dir fsync; the temp-fd fsync above already covers
+    // the file contents, so this only further hardens the rename's durability.
+    let dh;
+    try {
+        dh = await fsp.open(dir, 'r');
+        await dh.sync();
+    } catch (_) {
+        /* dir fsync unsupported here — acceptable */
+    } finally {
+        if (dh) { await dh.close().catch(() => {}); }
+    }
 }
 
 module.exports = {

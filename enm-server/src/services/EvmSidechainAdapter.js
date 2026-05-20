@@ -614,6 +614,10 @@ class EvmSidechainAdapter extends ChainAdapter {
             await EnmFirewallManager.ensureAllowed(
                 [cfg.ports.p2p, cfg.ports.dpos],
                 {
+                    // P0-15 — the p2p port ALSO needs UDP: geth's discv4 peer
+                    // discovery runs over UDP on the same --port. Without this,
+                    // a default-deny UFW host drops discovery → stuck at 0 peers.
+                    udpPorts: [cfg.ports.p2p],
                     comment: `${this.chainId} P2P/DPoS (ENM auto)`,
                     logger: this.extensionHandle && this.extensionHandle.log,
                 },

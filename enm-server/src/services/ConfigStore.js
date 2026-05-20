@@ -52,15 +52,73 @@ async function load() {
     }
 
     const raw = await fsp.readFile(filePath, 'utf8');
-    let parsed;
+    let validated;
     try {
-        parsed = JSON.parse(raw);
+        validated = validate(JSON.parse(raw));
     } catch (err) {
-        throw new Error(`${ENM_LOG_PREFIX} ConfigStore.load: corrupted JSON at ${filePath}: ${err.message}`);
+        // P0-8 (v0.5.178) — the main config is unreadable (corrupt JSON or fails
+        // schema validation). Throwing here bricks startup: the server can't read
+        // its config → won't boot → manual file repair on every affected node.
+        // Instead recover from the last-good `.bak` that save() keeps. Only throw
+        // if the backup is also unusable.
+        return _recoverFromBackup(filePath, err);
     }
-
-    const validated = validate(parsed);
     cache = { value: validated, mtimeMs: stat.mtimeMs };
+    return validated;
+}
+
+/**
+ * P0-8 — restore config from the `.bak` when the main file is corrupt/invalid.
+ * Returns the recovered (validated) config or throws if the backup is also
+ * unusable. Rewrites the main file from the good backup so subsequent boots
+ * don't re-trigger recovery.
+ *
+ * @param {string} filePath  the (corrupt) main config path
+ * @param {Error}  originalErr  why the main file failed
+ * @returns {Promise<object>}
+ */
+async function _recoverFromBackup(filePath, originalErr) {
+    const bakPath = configBackupPath();
+    let bakRaw;
+    try {
+        bakRaw = await fsp.readFile(bakPath, 'utf8');
+    } catch (bakErr) {
+        throw new Error(
+            `${ENM_LOG_PREFIX} ConfigStore.load: ${filePath} is corrupt (${originalErr.message}) `
+            + `and no usable backup exists at ${bakPath} (${bakErr.code || bakErr.message}). `
+            + 'Manual recovery required.',
+        );
+    }
+    let validated;
+    try {
+        validated = validate(JSON.parse(bakRaw));
+    } catch (bakErr) {
+        throw new Error(
+            `${ENM_LOG_PREFIX} ConfigStore.load: ${filePath} is corrupt (${originalErr.message}) AND `
+            + `the backup ${bakPath} is also unusable (${bakErr.message}). Manual recovery required.`,
+        );
+    }
+    // Loud, because this is a brick-avoidance event operators/logs must see.
+    // eslint-disable-next-line no-console
+    console.error(
+        `${ENM_LOG_PREFIX} ConfigStore.load: ${filePath} was corrupt (${originalErr.message}); `
+        + `recovered from backup ${bakPath}.`,
+    );
+    try {
+        await atomicWrite(filePath, JSON.stringify(validated, null, 2));
+    } catch (writeErr) {
+        // Could not rewrite the main file (e.g. read-only fs). Still run on the
+        // recovered config in memory rather than refusing to boot.
+        // eslint-disable-next-line no-console
+        console.error(
+            `${ENM_LOG_PREFIX} ConfigStore.load: recovered from backup but could not rewrite `
+            + `${filePath} (${writeErr.message}); running on backup contents in memory.`,
+        );
+        cache = null;
+        return validated;
+    }
+    const newStat = await fsp.stat(filePath).catch(() => null);
+    cache = newStat ? { value: validated, mtimeMs: newStat.mtimeMs } : null;
     return validated;
 }
 

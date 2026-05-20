@@ -349,7 +349,30 @@ async function runFullDiagnose(deps) {
     }
 
     // 8. RPC reachability + sync state
-    if (status.alive) {
+    // P0-14 (v0.5.178) — class-aware. Only Class A (ela) speaks the Bitcoin-style
+    // getblockcount/getconnectioncount this probe uses; EVM (B) speaks eth_*,
+    // arbiter (D) only getspvheight, oracles (C) have no RPC. Running these verbs
+    // on B/C/D threw → false "RPC unreachable (F2)" with a RESTART_CHAIN autofix →
+    // restart-looped healthy non-mainchain chains (the C19 bug, in the diagnose
+    // path). For non-A, liveness IS process-alive (node.sh pgrep model); surface
+    // the class-correct primaryHeight() metric with no destructive autofix.
+    if (status.alive && adapter.chainClass !== 'A') {
+        let metric = '';
+        try {
+            const ph = await adapter.primaryHeight(chainConfig);
+            if (ph && typeof ph.height === 'number') {
+                metric = ' — height ' + ph.height
+                    + (typeof ph.peers === 'number' ? ', ' + ph.peers + ' peers' : '');
+            }
+        } catch (_) { /* metric is best-effort; its absence is not a failure */ }
+        findings.push({
+            id: 'rpc-reachable',
+            status: STATUS.OK,
+            title: 'Process running (class ' + adapter.chainClass + ')' + metric,
+            detail: 'Liveness is process-alive, matching node.sh. This chain class '
+                + 'does not expose the ELA-style RPC this probe checks.',
+        });
+    } else if (status.alive) {
         try {
             const rpc = adapter.rpcClient(chainConfig);
             const t0 = Date.now();
