@@ -71,9 +71,19 @@ const ConfigStore = require('./ConfigStore');
 const EnmCrypto = require('./EnmCrypto');
 const { ENM_LOG_PREFIX } = require('./EnmConstants');
 const EnmFirewallManager = require('./EnmFirewallManager');
+const { sleep } = require('./processUtils'); // FIX-C18 — bounded start-retry delay
 
 const ARBITER_CONFIG_FILENAME = 'config.json';
 const MAINCHAIN_KEYSTORE_FILENAME = 'keystore.dat';
+
+// FIX-C18 — node.sh starts the arbiter in a loop that respawns it every ~5s
+// `until pgrep -x arbiter` succeeds (node.sh:4961-4969), because the arbiter
+// exits early at cold boot if the mainchain RPC / oracles aren't reachable
+// yet. We replicate that INTENT with a BOUNDED retry so it can never hang the
+// install orchestrator: after each spawn we wait ARBITER_START_PROBE_MS, check
+// liveness, and respawn up to ARBITER_START_MAX_ATTEMPTS times.
+const ARBITER_START_MAX_ATTEMPTS = 5;
+const ARBITER_START_PROBE_MS = 4000;
 
 // The four sidechains Arbiter expects in its SideNodeList. Order
 // matters for some upstream tooling; we ship the canonical mainchain
@@ -511,38 +521,88 @@ class ArbiterAdapter extends ChainAdapter {
         // it the instant the child exists (minimizing the prompt race below).
         const pbftPassword = await this.readMainchainKeystorePassword();
 
-        // Spawn.
-        const result = await this.processService.start(this.chainId, cfg);
-        if (result.alreadyRunning) {
-            return result;
+        // FIX-C18 — bounded start-retry. node.sh respawns the arbiter every
+        // ~5s `until pgrep -x arbiter` succeeds (node.sh:4961-4969), because
+        // the arbiter exits early at cold boot if the mainchain RPC / oracles
+        // aren't reachable yet. We reproduce that intent but CAP the attempts
+        // so a permanently-failing arbiter can never hang the install
+        // orchestrator. Each attempt: spawn → feed password → wait → check
+        // liveness. The keystore copy + config write above are idempotent and
+        // already done once; re-spawning via processService.start() cleans up
+        // any stale PID file from the prior early exit before respawning.
+        const log = this.extensionHandle && this.extensionHandle.log;
+        let result = null;
+        for (let attempt = 1; attempt <= ARBITER_START_MAX_ATTEMPTS; attempt += 1) {
+            // Spawn (idempotent — returns alreadyRunning if a live arbiter
+            // is already attached).
+            // eslint-disable-next-line no-await-in-loop
+            result = await this.processService.start(this.chainId, cfg);
+            if (result.alreadyRunning) {
+                return result;
+            }
+
+            // FIX-C14 — feed the mainchain keystore password to the arbiter's
+            // stdin. node.sh launches the arbiter as `cat ela.txt | nohup
+            // ./arbiter` (node.sh:4963), i.e. the password is on stdin AT
+            // spawn. Our NativeProcessService primitive has no at-spawn stdin
+            // hook — it only exposes writeStdin() POST-spawn (which writes
+            // then closes the stream). We therefore write immediately after
+            // start() resolves; in practice this lands within microseconds of
+            // spawn while the arbiter is still initializing, before it reaches
+            // the keystore-unlock prompt. This mirrors how ElaMainChainAdapter
+            // feeds the same password. The residual race (child prompts before
+            // our write arrives) is theoretical at these timescales but noted
+            // here; a true at-spawn stdin primitive would be the fully
+            // race-free fix. We re-pipe on every retry because each respawn is
+            // a fresh child with its own stdin.
+            //
+            // Unlike pre-FIX-C14 (which swallowed a failed pipe as a
+            // debug-level non-event), a failed write means the arbiter will
+            // hang on the unlock prompt and never sign — so we treat it as
+            // fatal: stop the half-started process and throw so the operator
+            // sees the problem.
+            const wrote = this.processService.writeStdin(this.chainId, pbftPassword);
+            if (!wrote) {
+                // eslint-disable-next-line no-await-in-loop
+                try { await this.processService.stop(this.chainId); }
+                catch (_) { /* best-effort cleanup */ }
+                throw new Error(
+                    'arbiter: failed to feed the keystore password to the process at startup. '
+                    + 'The arbiter cannot unlock its wallet to sign cross-chain payloads.',
+                );
+            }
+
+            // Give the arbiter a moment to either settle or exit early (it
+            // aborts fast when the mainchain RPC / oracles aren't up yet),
+            // then probe liveness — node.sh's `pgrep -x arbiter` equivalent.
+            // eslint-disable-next-line no-await-in-loop
+            await sleep(ARBITER_START_PROBE_MS);
+            const procStatus = this.processService.statusSync(this.chainId);
+            if (procStatus.alive) {
+                if (attempt > 1 && log) {
+                    log.info(
+                        `${ENM_LOG_PREFIX} arbiter: came up on start attempt ${attempt}/${ARBITER_START_MAX_ATTEMPTS} (pid ${procStatus.pid})`,
+                    );
+                }
+                return result;
+            }
+
+            // Dead — the arbiter exited early. Log and (if attempts remain)
+            // loop to respawn.
+            if (log) {
+                log.warn(
+                    `${ENM_LOG_PREFIX} arbiter: process exited within ${ARBITER_START_PROBE_MS}ms on start attempt ${attempt}/${ARBITER_START_MAX_ATTEMPTS}`
+                    + ' (mainchain RPC / oracles may not be reachable yet) —'
+                    + (attempt < ARBITER_START_MAX_ATTEMPTS ? ' respawning.' : ' giving up; self-heal will retry.'),
+                );
+            }
         }
 
-        // FIX-C14 — feed the mainchain keystore password to the arbiter's
-        // stdin. node.sh launches the arbiter as `cat ela.txt | nohup
-        // ./arbiter` (node.sh:4963), i.e. the password is on stdin AT spawn.
-        // Our NativeProcessService primitive has no at-spawn stdin hook — it
-        // only exposes writeStdin() POST-spawn (which writes then closes the
-        // stream). We therefore write immediately after start() resolves; in
-        // practice this lands within microseconds of spawn while the arbiter
-        // is still initializing, before it reaches the keystore-unlock prompt.
-        // This mirrors how ElaMainChainAdapter feeds the same password. The
-        // residual race (child prompts before our write arrives) is
-        // theoretical at these timescales but noted here; a true at-spawn
-        // stdin primitive would be the fully race-free fix.
-        //
-        // Unlike pre-FIX-C14 (which swallowed a failed pipe as a debug-level
-        // non-event), a failed write means the arbiter will hang on the
-        // unlock prompt and never sign — so we treat it as fatal: stop the
-        // half-started process and throw so the operator sees the problem.
-        const wrote = this.processService.writeStdin(this.chainId, pbftPassword);
-        if (!wrote) {
-            try { await this.processService.stop(this.chainId); }
-            catch (_) { /* best-effort cleanup */ }
-            throw new Error(
-                'arbiter: failed to feed the keystore password to the process at startup. '
-                + 'The arbiter cannot unlock its wallet to sign cross-chain payloads.',
-            );
-        }
+        // Exhausted attempts and the arbiter is still not alive. Do NOT throw —
+        // node.sh would keep looping; we instead hand off to self-heal (F-rules
+        // restart the arbiter once the mainchain/oracles come up) rather than
+        // crash the whole install orchestrator. Return the last spawn result so
+        // the caller still has the PID metadata.
         return result;
     }
 

@@ -104,6 +104,26 @@ const EVM_ACCOUNT_PASSWORD_FILENAME = '.evm-account-password';
 // doesn't spuriously fail the first miner start.
 const EVM_ACCOUNT_NEW_TIMEOUT_MS = 120_000;
 
+// FIX-C17 — ESC's frozen account list. These 11 addresses are frozen at
+// the ESC consensus layer; an ESC validator that produces blocks WITHOUT
+// them would diverge from the network. node.sh passes them to esc's geth
+// as a REPEATED `--frozen.account.list <addr>` flag (one flag per address,
+// NOT comma-separated) in the council miner branch — verbatim from
+// node.sh:2156-2166. This applies to esc ONLY (NOT eid, NOT pg).
+const ESC_FROZEN_ACCOUNTS = Object.freeze([
+    '0xD3651037F719CC3f38ef819f919972e04A0762d4',
+    '0xd5300C4091C4C45787C1BcB2b3d089F6a6094498',
+    '0xE4F50ec2E5E75d28647ce11Fd249f1Bf44be4269',
+    '0x1562996a963fBaff40E23C6Fc544Cc048Bc89E4d',
+    '0x1A94cCFBAcf5DE728f3429A775bF1889082C96F3',
+    '0x6eAB6c04A7a418e3968B44356F0C15FB9ec275db',
+    '0x415dC0F88C5e8236EE1fC7970bDf5805e717645F',
+    '0x0D28dC303d1f665B441E5486E152260a805D4857',
+    '0x9b4f4E09375bd0F9D6385E9d0a39605a073DD01E',
+    '0xB7f7f0C40aBb51589A8074665c6c5f5565F5780a',
+    '0xA7cDb922183f826489707E1E41b68174BFdDbdDC',
+]);
+
 class EvmSidechainAdapter extends ChainAdapter {
     /**
      * @param {object} deps  forwarded to ChainAdapter base
@@ -145,6 +165,15 @@ class EvmSidechainAdapter extends ChainAdapter {
     get chainClass() { return 'B'; }
     /** Class B chains have no parent in the dependency DAG. */
     get parentChainId() { return null; }
+    /**
+     * FIX-C16 — stop the geth EVM sidechains with SIGINT, not SIGTERM.
+     * These binaries are an old go-ethereum fork whose clean-shutdown
+     * handler (flushes leveldb) is keyed to SIGINT; node.sh stops esc/eid/pg
+     * with `kill -s SIGINT` (node.sh:2412/4416). A SIGTERM stop risks a
+     * less-clean shutdown and leveldb corruption. The base ChainAdapter.stop()
+     * threads this signal into NativeProcessService.stop.
+     */
+    get stopSignal() { return 'SIGINT'; }
 
     /**
      * Build an EthRpcClient pointing at this chain's HTTP-RPC port.
@@ -356,6 +385,17 @@ class EvmSidechainAdapter extends ChainAdapter {
             // on stdin instead is racy at boot.
             if (secrets.evmAccountPasswordFile) {
                 args.push('--password', secrets.evmAccountPasswordFile);
+            }
+            // FIX-C17 — ESC consensus-layer frozen accounts. node.sh passes
+            // these in esc's council miner branch as a repeated
+            // `--frozen.account.list <addr>` flag (node.sh:2156-2166). esc
+            // ONLY — eid/pg get no frozen list. Omitting them on a producing
+            // ESC validator would create blocks without the network's account
+            // freezes (consensus divergence).
+            if (this.chainId === 'esc') {
+                for (const frozenAddr of ESC_FROZEN_ACCOUNTS) {
+                    args.push('--frozen.account.list', frozenAddr);
+                }
             }
         }
         // Subclass-provided extras (e.g. EID --spvconfig).

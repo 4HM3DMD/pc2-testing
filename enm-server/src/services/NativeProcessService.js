@@ -183,13 +183,21 @@ class NativeProcessService extends EventEmitter {
     }
 
     /**
-     * Stop the chain. SIGTERM → wait grace → SIGKILL. Marks as user-initiated
-     * so F1 honors the stop and doesn't try to restart. Locked per chainId.
+     * Stop the chain. <stopSignal> → wait grace → SIGKILL. Marks as
+     * user-initiated so F1 honors the stop and doesn't try to restart.
+     * Locked per chainId.
+     *
+     * FIX-C16 — `opts.signal` selects the initial stop signal so the geth EVM
+     * sidechains can be stopped with SIGINT (clean leveldb flush), matching
+     * node.sh. Defaults to 'SIGTERM' so all existing callers are unchanged.
      *
      * @param {string} chainId
+     * @param {object} [opts]
+     * @param {string} [opts.signal='SIGTERM'] initial stop signal
      * @returns {Promise<{ exitCode: number|null, signal: string|null, killed?: boolean }>}
      */
-    stop(chainId) {
+    stop(chainId, opts = {}) {
+        const stopSignal = (opts && opts.signal) || 'SIGTERM';
         return withChainLock(chainId, async () => {
             const handle = this.handles.get(chainId);
             const pidPath = pidFilePath(chainId);
@@ -206,11 +214,11 @@ class NativeProcessService extends EventEmitter {
                     await this._unlinkSilent(pidPath);
                     return { exitCode: null, signal: null };
                 }
-                return this._signalAndWait(pid, chainId);
+                return this._signalAndWait(pid, chainId, stopSignal);
             }
 
             handle.manualStop = true;
-            const result = await this._signalAndWait(handle.meta.pid, chainId);
+            const result = await this._signalAndWait(handle.meta.pid, chainId, stopSignal);
             this.handles.delete(chainId);
             await this._unlinkSilent(pidPath);
             await this._unlinkSilent(metaFilePath(chainId));
@@ -548,21 +556,29 @@ class NativeProcessService extends EventEmitter {
 
     /**
      * @private
-     * Send SIGTERM, wait up to PROCESS_STOP_GRACE_MS, then SIGKILL.
+     * Send the stop signal (default SIGTERM), wait up to
+     * PROCESS_STOP_GRACE_MS, then escalate to SIGKILL.
+     *
+     * FIX-C16 — `stopSignal` lets the caller choose the initial signal. The
+     * geth-based EVM sidechains (esc/eid/pg) must be stopped with SIGINT
+     * because their clean-shutdown handler (leveldb flush) is keyed to
+     * SIGINT — node.sh stops them with `kill -s SIGINT` (node.sh:2412/4416),
+     * while ela/arbiter/oracles use a plain `kill` = SIGTERM. Defaults to
+     * 'SIGTERM' so existing callers are unchanged.
      */
-    async _signalAndWait(pid, chainId) {
+    async _signalAndWait(pid, chainId, stopSignal = 'SIGTERM') {
         if (!isPidAlive(pid)) {
             return { exitCode: null, signal: null };
         }
 
         try {
-            process.kill(pid, 'SIGTERM');
+            process.kill(pid, stopSignal);
         } catch (err) {
             // ESRCH = no such process; already dead — treat as success.
             if (err.code !== 'ESRCH') {
                 throw err;
             }
-            return { exitCode: null, signal: 'SIGTERM' };
+            return { exitCode: null, signal: stopSignal };
         }
 
         const start = Date.now();
@@ -572,7 +588,7 @@ class NativeProcessService extends EventEmitter {
             if (!isPidAlive(pid)) {
                 return {
                     exitCode: handle && handle.child && handle.child.exitCode != null ? handle.child.exitCode : null,
-                    signal: handle && handle.child && handle.child.signalCode ? handle.child.signalCode : 'SIGTERM',
+                    signal: handle && handle.child && handle.child.signalCode ? handle.child.signalCode : stopSignal,
                 };
             }
             // eslint-disable-next-line no-await-in-loop

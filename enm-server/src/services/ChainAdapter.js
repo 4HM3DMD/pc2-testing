@@ -130,6 +130,18 @@ class ChainAdapter {
     }
 
     /**
+     * FIX-C16 — the OS signal used to begin a graceful stop. Default
+     * 'SIGTERM' matches node.sh's plain `kill` for ela / arbiter / oracles.
+     * EvmSidechainAdapter overrides this to 'SIGINT' because the geth EVM
+     * sidechains (esc/eid/pg) key their clean-shutdown (leveldb flush) to
+     * SIGINT (node.sh stops them with `kill -s SIGINT`). stop() threads this
+     * into NativeProcessService.stop.
+     */
+    get stopSignal() {
+        return 'SIGTERM';
+    }
+
+    /**
      * Generate the chain's `config.json` contents from our extension config.
      *
      * @param {object} chainConfig from EnmConfigSchema (e.g. config.chains.mainchain)
@@ -165,11 +177,13 @@ class ChainAdapter {
 
     /**
      * Stop the chain process gracefully. Default: SIGTERM, wait 60s, SIGKILL.
+     * FIX-C16 — pass this adapter's stopSignal (SIGINT for EVM sidechains)
+     * down to NativeProcessService so the right shutdown handler fires.
      *
      * @returns {Promise<{ exitCode: number|null, signal: string|null }>}
      */
     async stop() {
-        return this.processService.stop(this.chainId);
+        return this.processService.stop(this.chainId, { signal: this.stopSignal });
     }
 
     /**
