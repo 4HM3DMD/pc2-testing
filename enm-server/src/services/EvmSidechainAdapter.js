@@ -83,6 +83,9 @@ const EnmFirewallManager = require('./EnmFirewallManager');
 // Standard subdirectory layout matching node.sh's per-chain conventions
 // (build/skeleton/node.sh paths).
 const PBFT_KEYSTORE_RELPATH = 'keystore.dat';          // inside mainchain chainDir
+// 0.5.157 — BUG-C8b: geth's --pbft.keystore.password takes a FILE PATH; we
+// write the decrypted password here (0600) inside this chain's dir.
+const PBFT_PASSWORD_FILENAME = '.pbft-keystore-password';
 const EVM_KEYSTORE_RELPATH = path.join('data', 'keystore'); // inside this chain's chainDir
 const DATA_RELPATH = 'data';
 
@@ -254,22 +257,21 @@ class EvmSidechainAdapter extends ChainAdapter {
         if (secrets.externalIp) {
             args.push('--pbft.net.address', secrets.externalIp);
         }
-        // 0.5.156 — BUG-C8b: this geth fork reads the PBFT keystore password
-        // from the --pbft.keystore.password FLAG, NOT from stdin. The adapter
-        // historically piped it to stdin (start() step 8), but the binary
-        // never consumes that for PBFT, so it logged "create dpos account
-        // error: password wrong" and fell back to a non-signing "common sync
-        // node". For EID (PBFT from block 0) that then escalated to
-        // "Failed to prepare header for mining: wait for recoved states" and
-        // a code=2 exit (confirmed via manual run). Pass the flag so PBFT
-        // signing works on all three EVM sidechains.
-        // SECURITY: the password is visible in `ps`/`/proc/<pid>/cmdline`.
-        // Acceptable for a single-tenant operator node (the same secret is
-        // already in the encrypted cfg + keystore.dat on this host); a future
-        // hardening could switch to a password file if the binary exposes a
-        // --pbft.keystore.password.file option.
-        if (secrets.pbftPassword) {
-            args.push('--pbft.keystore.password', secrets.pbftPassword);
+        // 0.5.157 — BUG-C8b: this geth fork reads the PBFT keystore password
+        // from the --pbft.keystore.password flag, whose value is a FILE PATH
+        // (NOT the literal password — verified: passing the value fatals
+        // "Failed to read password file: open <value>: no such file"). The
+        // adapter previously piped the password to stdin (start() step 8),
+        // which the binary ignored for PBFT → it logged "create dpos account
+        // error: password wrong", fell back to a non-signing "common sync
+        // node", and for EID (PBFT from block 0) escalated to "Failed to
+        // prepare header for mining: wait for recoved states" → code=2 exit.
+        // Fix: start() writes the password to a 0600 file and passes its path
+        // here (node.sh's H24 pattern). Verified end-to-end: eid then unlocks
+        // PBFT + enters consensus (onDuty list), no "password wrong". Bonus:
+        // the password stays OUT of `ps`/`/proc/<pid>/cmdline`.
+        if (secrets.pbftPasswordFile) {
+            args.push('--pbft.keystore.password', secrets.pbftPasswordFile);
         }
         // Sync mode: 'fast' / 'full' / 'archive'. node.sh default is 'fast'.
         if (cfg.sync && cfg.sync.mode) {
@@ -411,10 +413,16 @@ class EvmSidechainAdapter extends ChainAdapter {
 
         // Step 5 — spawn args.
         const externalIp = (cfg.pbft && cfg.pbft.ipAddress) || null;
+        // 0.5.157 — BUG-C8b: write the decrypted PBFT keystore password to a
+        // 0600 file and hand its PATH to geth via --pbft.keystore.password
+        // (the flag expects a file path, not the literal value). Overwritten
+        // each start; sits next to keystore.dat (same 0600 sensitivity).
+        const pbftPasswordFile = path.join(chainDir(this.chainId), PBFT_PASSWORD_FILENAME);
+        fs.writeFileSync(pbftPasswordFile, pbftPassword, { mode: 0o600 });
         cfg.spawnArgs = this.buildSpawnArgs(cfg, {
             mainchainKeystorePath,
             externalIp,
-            pbftPassword,
+            pbftPasswordFile,
         });
 
         // Step 6 — UFW for P2P (TCP) + discovery (UDP) + dpos (TCP).
@@ -443,28 +451,16 @@ class EvmSidechainAdapter extends ChainAdapter {
             return result;
         }
 
-        // Step 8 — stdin password feed. geth reads the --pbft.keystore
-        // password from stdin in our adapter's invocation (because we
-        // didn't pass --pbft.keystore.password <file>). Two consecutive
-        // newlines because geth's prompts emit "password:\n" twice when
-        // unlock is also enabled (once for PBFT, once for the EVM
-        // keystore — they MUST match per H24 password-strategy).
-        const wrote = this.processService.writeStdin(this.chainId, pbftPassword);
-        if (!wrote) {
-            // Kill the orphan so the operator doesn't see a "healthy"
-            // chain hanging forever on a password prompt — same shape
-            // as ElaMainChainAdapter's beta.3.50 fix.
-            try { await this.processService.stop(this.chainId); }
-            catch (_) { /* best-effort cleanup */ }
-            throw new Error(
-                `${this.chainId}: failed to feed PBFT keystore password to child stdin. `
-                + 'Try Restart on the chain card; if it persists, file an issue with the most recent enm-server logs.',
-            );
-        }
-        // If miner is enabled, geth will prompt a SECOND time for the
-        // EVM keystore password. Per the Layer 1 wizard (M3.4) we use
-        // either a shared password or per-chain — both surface through
-        // cfg.miner.evmKeystorePasswordEncrypted. Decrypt + pipe.
+        // Step 8 — 0.5.157 (BUG-C8b): the PBFT keystore is unlocked via the
+        // --pbft.keystore.password <file> flag (written in step 5), NOT
+        // stdin. This geth fork ignores stdin for the PBFT password (it
+        // logged "create dpos account error: password wrong", ran as a
+        // non-signing "common sync node", and crashed EID with code=2). So we
+        // no longer feed pbftPassword to stdin.
+        //
+        // If miner is enabled, geth prompts (on stdin) for the EVM keystore
+        // password (its --unlock). Per the Layer 1 wizard (M3.4) it comes
+        // from cfg.miner.evmKeystorePasswordEncrypted. Decrypt + pipe.
         if (cfg.miner && cfg.miner.enabled === true) {
             const envelope = cfg.miner && cfg.miner.evmKeystorePasswordEncrypted;
             if (!envelope) {
