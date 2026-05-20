@@ -536,6 +536,19 @@ class ArbiterAdapter extends ChainAdapter {
             }
         }
 
+        // FIX-A (v0.5.173) — WAIT for the mainchain RPC to actually answer
+        // before spawning. The arbiter dials ela's RPC (20336) at startup and
+        // aborts with code=1 ("Get active dpos peers error ... connection
+        // refused") if it isn't up yet. node.sh absorbs this by respawning the
+        // arbiter in an UNBOUNDED `until pgrep -x arbiter; sleep 5` loop
+        // (node.sh:4961-4969) until ela + the oracles are reachable. ENM
+        // previously started the arbiter as soon as ela's PROCESS existed (not
+        // its RPC) and capped respawns at ~20s, so cold boots → code=1 crash
+        // loop → F1 budget exhausted → OWNER-CONFIRMS quarantine. Polling ela's
+        // RPC here (bounded to a generous deadline so it can't hang forever)
+        // means we spawn only when the arbiter will actually succeed.
+        await this._waitForMainchainRpc(allChainsCfg, mainchainRpcUser, mainchainRpcPass);
+
         // Decrypt the mainchain keystore password BEFORE spawn so we can feed
         // it the instant the child exists (minimizing the prompt race below).
         const pbftPassword = await this.readMainchainKeystorePassword();
@@ -623,6 +636,60 @@ class ArbiterAdapter extends ChainAdapter {
         // crash the whole install orchestrator. Return the last spawn result so
         // the caller still has the PID metadata.
         return result;
+    }
+
+    /**
+     * FIX-A (v0.5.173) — poll the mainchain (ela) RPC until it answers, BEFORE
+     * spawning the arbiter. The arbiter dials ela:20336 at startup and aborts
+     * with code=1 ("Get active dpos peers error ... connection refused") if ela
+     * isn't up yet. node.sh tolerates this via an UNBOUNDED respawn loop
+     * (node.sh:4961-4969 `until pgrep -x arbiter; sleep 5`). We instead wait for
+     * ela's RPC to actually answer (bounded to a generous deadline so it can
+     * never hang the orchestrator), then spawn once — so the arbiter succeeds on
+     * the first try instead of crash-looping into the F1 budget → quarantine.
+     * Returns true if RPC became reachable, false on timeout (caller proceeds;
+     * the bounded spawn-retry + self-heal still cover that case).
+     *
+     * @param {object} allChainsCfg  cfg.chains
+     * @param {string} user          mainchain RPC user (may be '')
+     * @param {string} password      mainchain RPC password (may be '')
+     * @param {object} [opts]        { timeoutMs=300000, intervalMs=5000 }
+     * @returns {Promise<boolean>}
+     */
+    async _waitForMainchainRpc(allChainsCfg, user, password, opts) {
+        const log = this.extensionHandle && this.extensionHandle.log;
+        const main = allChainsCfg && allChainsCfg.mainchain;
+        const isTestnet = !!(main && main.activeNet === 'testnet');
+        const port = (main && main.ports && main.ports.rpc)
+            || (isTestnet ? ELA_RPC_PORT_TESTNET : ELA_RPC_PORT_MAINNET);
+        const timeoutMs = (opts && opts.timeoutMs) || 300000;   // 5 min (node.sh waits indefinitely)
+        const intervalMs = (opts && opts.intervalMs) || 5000;   // node.sh sleeps 5s between respawns
+        const client = new EnmRpcClient({
+            host: '127.0.0.1', port, user: user || '', password: password || '',
+        });
+        const deadline = Date.now() + timeoutMs;
+        let logged = false;
+        while (Date.now() < deadline) {
+            try {
+                const v = await client.getblockcount();
+                if (typeof v === 'number' || (v && typeof v.result === 'number')) {
+                    if (logged && log) {
+                        log.info(`${ENM_LOG_PREFIX} arbiter: mainchain RPC reachable (127.0.0.1:${port}) — proceeding to start`);
+                    }
+                    return true;
+                }
+            } catch (_) { /* ela RPC not up yet */ }
+            if (!logged && log) {
+                log.info(`${ENM_LOG_PREFIX} arbiter: waiting for mainchain RPC (127.0.0.1:${port}) before start — the arbiter dials ela at startup and would abort otherwise`);
+                logged = true;
+            }
+            // eslint-disable-next-line no-await-in-loop
+            await sleep(intervalMs);
+        }
+        if (log) {
+            log.warn(`${ENM_LOG_PREFIX} arbiter: mainchain RPC still unreachable after ${timeoutMs}ms — attempting start anyway (bounded spawn-retry + self-heal will cover it)`);
+        }
+        return false;
     }
 
     /**

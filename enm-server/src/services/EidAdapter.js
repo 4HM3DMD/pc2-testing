@@ -67,13 +67,10 @@ const SPVCONFIG_FILENAME = 'spvconfig.json';
 // snapshot here so EID can resolve cross-chain transactions against
 // the testnet ELA mainchain even when the operator hasn't installed
 // our own mainchain in testnet mode.
-const ELA_TESTNET_MAGIC = 2018201;
-const ELA_TESTNET_FOUNDATION = 'EJMzC16Eorq9CuFCGtyMrFV3bGdSmTUUVj';
-const ELA_TESTNET_SEEDS = [
-    'node-testnet-002.elastos.org:21338',
-    'node-testnet-003.elastos.org:21338',
-    'node-testnet-004.elastos.org:21338',
-];
+// FIX-E (v0.5.173) — node.sh writes ela TESTNET magic 2018101 (node.sh:4361),
+// NOT 2018201. 2018201 is ela's RegNet magic — a spvconfig with that magic
+// points EID's mainchain-watch SPV at the wrong network and never handshakes.
+const ELA_TESTNET_MAGIC = 2018101;
 
 class EidAdapter extends EvmSidechainAdapter {
     get chainId()        { return 'eid'; }
@@ -92,18 +89,19 @@ class EidAdapter extends EvmSidechainAdapter {
      */
     generateSpvConfig(cfg) {
         if (!cfg || cfg.activeNet !== 'testnet') { return null; }
+        // FIX-E (v0.5.173) — match node.sh EXACTLY: it writes only
+        // {"Configuration":{"Magic":2018101}} (node.sh:4358-4364). The EID
+        // binary unmarshals into PreferParams{ Config Configuration
+        // `json:"Configuration"` } (spv/spv_config.go), so the top-level
+        // "Configuration" WRAPPER is REQUIRED — pre-0.5.173 ENM emitted a flat
+        // {Magic,Foundation,ChainID,SeedList} object that the parser dropped
+        // entirely (no wrapper) and whose Foundation/ChainID/SeedList match no
+        // field on the struct anyway. EID inherits DNSSeeds/Foundation from the
+        // binary's built-in testnet defaults.
         return {
-            // Capitalised keys to match the Go struct tag conventions
-            // in ela-spv (Configuration struct in spvwrapper/config.go).
-            Magic: ELA_TESTNET_MAGIC,
-            Foundation: ELA_TESTNET_FOUNDATION,
-            ChainID: this.chainIdValue,  // 22 for EID
-            // SeedList per node.sh:4356-4366 — testnet seeds for the
-            // mainchain SPV-light-client EID embeds.
-            SeedList: ELA_TESTNET_SEEDS.slice(),
-            // Additional fields can be layered here as upstream EID
-            // adds features; conservative for now to match upstream
-            // contract.
+            Configuration: {
+                Magic: ELA_TESTNET_MAGIC,
+            },
         };
     }
 
@@ -169,6 +167,4 @@ module.exports = EidAdapter;
 module.exports._internal = {
     SPVCONFIG_FILENAME,
     ELA_TESTNET_MAGIC,
-    ELA_TESTNET_FOUNDATION,
-    ELA_TESTNET_SEEDS,
 };

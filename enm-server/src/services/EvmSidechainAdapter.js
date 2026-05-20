@@ -83,6 +83,7 @@ const { chainDir } = require('./DataDir');
 const ConfigStore = require('./ConfigStore');
 const EnmCrypto = require('./EnmCrypto');
 const EnmFirewallManager = require('./EnmFirewallManager');
+const ExtIpResolver = require('./ExtIpResolver');
 
 // Standard subdirectory layout matching node.sh's per-chain conventions
 // (build/skeleton/node.sh paths).
@@ -328,6 +329,15 @@ class EvmSidechainAdapter extends ChainAdapter {
             '--pbft.keystore', secrets.mainchainKeystorePath,
             '--pbft.net.port', String(cfg.ports.dpos),
         ];
+        // FIX-D (v0.5.173) — node.sh selects testnet purely with --testnet
+        // (esc_start:2117 `ESC_OPTS=--testnet`); mainnet passes nothing. ENM
+        // dropped --networkid (correct) but had NO testnet selector, so
+        // activeNet:'testnet' silently produced a MAINNET node (wrong genesis →
+        // 0 peers on testnet). The binary's genesis still selects the network;
+        // --testnet is what flips it to the testnet genesis.
+        if (cfg.activeNet === 'testnet') {
+            args.push('--testnet');
+        }
         if (secrets.externalIp) {
             args.push('--pbft.net.address', secrets.externalIp);
         }
@@ -397,6 +407,14 @@ class EvmSidechainAdapter extends ChainAdapter {
             // on stdin instead is racy at boot.
             if (secrets.evmAccountPasswordFile) {
                 args.push('--password', secrets.evmAccountPasswordFile);
+            }
+            // FIX-C (v0.5.173) — operator's PBFT block-reward address (FILE
+            // path), node.sh esc_start:2134-2135. DISTINCT from --miner.etherbase
+            // (the local EVM account above): on the PBFT engine the block reward
+            // routes to --pbft.miner.address. Only set when the operator
+            // configured a reward address (start() wrote the file).
+            if (secrets.minerAddressFile) {
+                args.push('--pbft.miner.address', secrets.minerAddressFile);
             }
             // FIX-C17 — ESC consensus-layer frozen accounts. node.sh passes
             // these in esc's council miner branch as a repeated
@@ -531,7 +549,32 @@ class EvmSidechainAdapter extends ChainAdapter {
         const pbftPassword = await this.readMainchainKeystorePassword();
 
         // Step 5 — spawn args.
-        const externalIp = (cfg.pbft && cfg.pbft.ipAddress) || null;
+        // FIX-B (v0.5.173) — node.sh ALWAYS advertises the node's external IP to
+        // the PBFT/DPoS layer via `--pbft.net.address $(extip)` (esc_start:2146).
+        // ENM only passed it when cfg.pbft.ipAddress was set (usually null), so
+        // the sidechain never advertised a DPoS consensus address. Fall back to
+        // the auto-resolved external IP (the same ExtIpResolver the mainchain
+        // uses) when no manual address is configured. Best-effort: geth still
+        // runs without it (just won't advertise for inbound DPoS peers).
+        let externalIp = (cfg.pbft && cfg.pbft.ipAddress) || null;
+        if (!externalIp) {
+            try {
+                const ext = await ExtIpResolver.resolve();
+                if (ext && ext.ok) { externalIp = ext.ip; }
+            } catch (_) { /* best-effort */ }
+        }
+        // FIX-C (v0.5.173) — node.sh writes the operator's PBFT block-reward
+        // address to <chain>/data/miner_address.txt and passes
+        // `--pbft.miner.address <file>` (esc_start:2134-2135). ENM collected +
+        // validated cfg.miner.rewardAddress but NEVER passed it → PBFT block
+        // rewards silently fell back to the local etherbase. Materialize the
+        // file + thread its path into buildSpawnArgs.
+        let minerAddressFile = null;
+        if (cfg.miner && cfg.miner.enabled === true && cfg.miner.rewardAddress) {
+            minerAddressFile = path.join(chainDir(this.chainId), DATA_RELPATH, 'miner_address.txt');
+            await fs.promises.mkdir(path.dirname(minerAddressFile), { recursive: true });
+            fs.writeFileSync(minerAddressFile, String(cfg.miner.rewardAddress), { mode: 0o600 });
+        }
         // 0.5.157 — BUG-C8b: write the decrypted PBFT keystore password to a
         // 0600 file and hand its PATH to geth via --pbft.keystore.password
         // (the flag expects a file path, not the literal value). Overwritten
@@ -545,6 +588,8 @@ class EvmSidechainAdapter extends ChainAdapter {
             // FIX-C12 — path to the EVM account password file (0600) for the
             // miner branch's --password flag. null when not mining.
             evmAccountPasswordFile,
+            // FIX-C — path to miner_address.txt (operator's PBFT reward address).
+            minerAddressFile,
         });
 
         // Step 6 — UFW for P2P (TCP) + discovery (UDP) + dpos (TCP).
