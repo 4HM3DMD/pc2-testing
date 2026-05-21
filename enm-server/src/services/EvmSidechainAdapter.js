@@ -423,10 +423,11 @@ class EvmSidechainAdapter extends ChainAdapter {
             // No separate discovery-port flag in this geth fork; UDP discovery
             // shares the TCP --port above (cfg.ports.discovery is reserved for
             // future use / firewall rules, not a geth CLI arg here).
-            // PBFT keystore: ALWAYS points at the mainchain keystore.dat
-            // (H23 / node.sh:2144). Subclasses cannot override this.
-            '--pbft.keystore', secrets.mainchainKeystorePath,
-            '--pbft.net.port', String(cfg.ports.dpos),
+            // v0.5.189 — PBFT signing flags (--pbft.keystore / --pbft.net.* /
+            // --pbft.keystore.password) are added below ONLY in miner mode, matching
+            // node.sh's follower branch which omits them entirely (a follower syncs
+            // over devp2p and never signs). start() has already reconciled
+            // cfg.miner.enabled to real on-chain on-duty status before this runs.
         ];
         // FIX-D (v0.5.173) — node.sh selects testnet purely with --testnet
         // (esc_start:2117 `ESC_OPTS=--testnet`); mainnet passes nothing. ENM
@@ -438,13 +439,14 @@ class EvmSidechainAdapter extends ChainAdapter {
             args.push('--testnet');
         }
         if (secrets.externalIp) {
-            args.push('--pbft.net.address', secrets.externalIp);
-            // FIX-B2 (v0.5.174) — advertise the external IP at the ETH layer too
-            // (--nat extip:<ip>). Without it, geth's default --nat=any auto-detect
-            // falls back to 127.0.0.1 on a VPS → the node's enode advertises
-            // loopback → peers can't dial back → outbound-only peering → very few
-            // peers on a thin network (esp. EID). Verified the fork supports
-            // `--nat extip:<IP>` (eid --help: any|none|upnp|pmp|extip:<IP>).
+            // FIX-B2 (v0.5.174) — advertise the external IP at the ETH layer
+            // (--nat extip:<ip>) for ALL chains incl. followers. Without it, geth's
+            // default --nat=any auto-detect falls back to 127.0.0.1 on a VPS → the
+            // node's enode advertises loopback → peers can't dial back → outbound-only
+            // peering → very few peers on a thin network (esp. EID). Verified the fork
+            // supports `--nat extip:<IP>` (eid --help: any|none|upnp|pmp|extip:<IP>).
+            // (--pbft.net.address — the CONSENSUS bind — moved to the miner block,
+            // v0.5.189: a follower doesn't join the PBFT consensus net.)
             args.push('--nat', `extip:${secrets.externalIp}`);
         }
         // FIX-B2 (v0.5.174) — discv4 bootnodes from cfg.bootnodes. node.sh relies
@@ -469,8 +471,19 @@ class EvmSidechainAdapter extends ChainAdapter {
         // here (node.sh's H24 pattern). Verified end-to-end: eid then unlocks
         // PBFT + enters consensus (onDuty list), no "password wrong". Bonus:
         // the password stays OUT of `ps`/`/proc/<pid>/cmdline`.
-        if (secrets.pbftPasswordFile) {
-            args.push('--pbft.keystore.password', secrets.pbftPasswordFile);
+        // v0.5.189 — PBFT signing flags ONLY in miner mode (node.sh's follower omits
+        // --pbft.keystore / --pbft.net.* / --pbft.keystore.password). cfg.miner.enabled
+        // was reconciled to real on-chain on-duty status by start() before this.
+        if (cfg.miner.enabled === true) {
+            // ALWAYS the mainchain keystore.dat (H23 / node.sh:2144).
+            args.push('--pbft.keystore', secrets.mainchainKeystorePath);
+            args.push('--pbft.net.port', String(cfg.ports.dpos));
+            if (secrets.externalIp) {
+                args.push('--pbft.net.address', secrets.externalIp);
+            }
+            if (secrets.pbftPasswordFile) {
+                args.push('--pbft.keystore.password', secrets.pbftPasswordFile);
+            }
         }
         // Sync mode: 'fast' / 'full' / 'archive'.
         if (cfg.sync && cfg.sync.mode) {
@@ -661,42 +674,53 @@ class EvmSidechainAdapter extends ChainAdapter {
         // (from miner.enabled=true) re-executes block 166410's DID tx and fails
         // its PreviousTxid check; a fast-sync follower never full-executes it.
         //
-        // We only DEMOTE on a DEFINITIVE "not in the arbiter slate" answer. When
-        // the main chain RPC is unavailable (e.g. still syncing) detectProducerRole
-        // returns isProducer:null and we keep the configured mode, so a genuine
-        // producer isn't demoted by a transient outage. Auto-PROMOTION of a
-        // newly-on-duty node (which needs EVM-account setup) is a deliberate
-        // follow-up, intentionally not done here.
+        // v0.5.189 — derive mining from REAL on-chain on-duty status at EVERY boot,
+        // both directions. shouldMine ONLY when detectProducerRole CONFIRMS the node's
+        // DPoS key is in the arbiter slate (getarbitersinfo). DEFINITIVE-false AND
+        // UNKNOWN (isProducer:null — main chain still syncing / RPC down) both →
+        // FOLLOWER (no --mine, fast sync). This is safe for every case: the side
+        // chain's PBFT engine self-gates production at SEAL time (a non-on-duty node
+        // cannot seal even with --mine — Pbft.Seal returns errUnauthorizedSigner /
+        // ErrSignerNotOnduty), and fast-sync avoids the forced-full-sync EID DID
+        // wedge. A CONFIRMED on-duty node is PROMOTED to miner (full sync); the
+        // EVM-account preflight below (_ensureEvmAccount, gated on miner.enabled)
+        // then provisions its signing account. Mutated in-memory for this spawn and
+        // re-derived on every start (idempotent), so a node that goes on/off duty is
+        // reconciled at its next (re)start.
         const _roleLog = (this.extensionHandle && this.extensionHandle.log) || null;
         try {
             const allCfg = await ConfigStore.load();
             const role = await this.detectProducerRole(allCfg);
-            if (role.isProducer === false && cfg.miner && cfg.miner.enabled === true) {
-                cfg.miner.enabled = false;
-                // Match node.sh's follower branch: no forced full sync. Clear a
-                // persisted 'full' so the follower fast-syncs (and avoids the
-                // full-execution wedge); leave any non-full mode untouched.
-                if (cfg.sync && cfg.sync.mode === 'full') { cfg.sync.mode = 'fast'; }
-                if (_roleLog) {
-                    _roleLog.info(
-                        `${ENM_LOG_PREFIX} ${this.chainId}: DPoS node key is NOT in the on-chain `
-                        + `arbiter slate (getarbitersinfo: ${role.arbiterCount} arbiters) — starting as `
-                        + 'FOLLOWER (no --mine, fast sync). Mining is on-chain producer state, not an '
-                        + 'ENM toggle.',
-                    );
-                }
-            } else if (_roleLog) {
+            const shouldMine = (role.isProducer === true);
+            const wasMiner = !!(cfg.miner && cfg.miner.enabled);
+            if (cfg.miner) { cfg.miner.enabled = shouldMine; }
+            if (shouldMine) {
+                // Confirmed on-duty → miner: node.sh's council branch uses full sync.
+                if (!cfg.sync) { cfg.sync = {}; }
+                if (cfg.sync.mode !== 'full') { cfg.sync.mode = 'full'; }
+            } else if (cfg.sync && cfg.sync.mode === 'full') {
+                // Follower → drop forced full so it fast-syncs (avoids the DID wedge);
+                // leave any explicit non-full mode untouched.
+                cfg.sync.mode = 'fast';
+            }
+            if (_roleLog) {
                 _roleLog.info(
                     `${ENM_LOG_PREFIX} ${this.chainId}: producer-role check → isProducer=${role.isProducer} `
-                    + `(source=${role.source}, inCurrent=${role.inCurrent}, inNext=${role.inNext}); `
-                    + `miner.enabled stays ${!!(cfg.miner && cfg.miner.enabled)}.`,
+                    + `(source=${role.source}, inCurrent=${role.inCurrent}, inNext=${role.inNext}) → `
+                    + `${shouldMine ? 'MINER (full sync)' : 'FOLLOWER (no --mine, fast sync)'}`
+                    + `${wasMiner !== shouldMine ? (shouldMine ? ' [PROMOTED]' : ' [demoted]') : ''}. `
+                    + 'Mining is on-chain producer state, not an ENM toggle.',
                 );
             }
         } catch (err) {
+            // Fail-safe: on an unexpected detection error, run as FOLLOWER (never mine
+            // on an unknown role — the chain self-gates anyway and fast-sync is safe).
+            if (cfg.miner) { cfg.miner.enabled = false; }
+            if (cfg.sync && cfg.sync.mode === 'full') { cfg.sync.mode = 'fast'; }
             if (_roleLog) {
                 _roleLog.warn(
                     `${ENM_LOG_PREFIX} ${this.chainId}: producer-role detection failed `
-                    + `(${err && err.message ? err.message : err}) — keeping configured miner mode.`,
+                    + `(${err && err.message ? err.message : err}) — running as FOLLOWER (fail-safe).`,
                 );
             }
         }

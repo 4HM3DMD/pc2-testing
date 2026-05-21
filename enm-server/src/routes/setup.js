@@ -2468,17 +2468,22 @@ async function runCouncilInstall(args) {
                         ports,
                         pbft: { usesMainchainKeystore: true, ipAddress: null },
                         miner: {
-                            // FIX-C12 — Council EVM sidechains MUST run as miners
-                            // (validator parity). node.sh's council path always
-                            // takes the MINER branch of esc_start/eid_start/pg_start
-                            // (node.sh:2133-2169 for esc): --mine --miner.threads 1
-                            // --unlock + --miner.etherbase. Without the miner branch,
-                            // geth has no keep-alive work and exits code=0 within
-                            // minutes. The on-duty council member is expected to
-                            // produce blocks, so mining is on by default for the
-                            // council orchestrator (the per-chain install-class-b
-                            // route still honours the operator's explicit choice).
-                            enabled: true,
+                            // v0.5.189 — DEFAULT FOLLOWER. Mining is on-chain
+                            // producer state, NOT an install-time decision. An
+                            // Elastos EVM sidechain's producers ARE the main chain's
+                            // rotating arbiters; a node mines only when its DPoS key
+                            // is confirmed in the on-chain arbiter slate. So we install
+                            // every sidechain as a FOLLOWER (node.sh's else branch:
+                            // no --mine, fast sync) and let EvmSidechainAdapter.start()
+                            // PROMOTE it to a miner at boot IF detectProducerRole
+                            // (getarbitersinfo) finds the node key on-duty. This also
+                            // structurally avoids the forced-full-sync DID wedge: a
+                            // non-producer (e.g. a fresh/never-registered node) never
+                            // full-executes, so it can't wedge like eid did. (Earlier
+                            // FIX-C12 forced miner+full here — wrong for non-producers,
+                            // and harmless even for real producers since the PBFT layer
+                            // self-gates production at seal time regardless.)
+                            enabled: false,
                             rewardAddress: inputs.sharedRewardAddress,
                             rewardAddressSource: 'shared',
                             // evmKeystoreAddr + evmKeystorePasswordEncrypted are
@@ -2492,10 +2497,11 @@ async function runCouncilInstall(args) {
                             evmKeystorePasswordEncrypted: '',
                             threads: 1,
                         },
-                        // FIX-C12 — node.sh:2152 uses `--syncmode full` on the
-                        // council miner branch (NOT fast). A miner must have the
-                        // full state to seal blocks.
-                        sync: { mode: 'full' },
+                        // v0.5.189 — install as a FOLLOWER on fast sync (node.sh's
+                        // else branch). start() flips this to 'full' when it PROMOTES
+                        // a confirmed on-duty node to miner. Fast sync also dodges the
+                        // EID full-execution DID wedge for non-producers.
+                        sync: { mode: 'fast' },
                         bootnodes: [],
                         healing: { enabledRules: {} },
                         binarySha256Expected: '',
