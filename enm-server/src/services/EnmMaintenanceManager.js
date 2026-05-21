@@ -334,18 +334,55 @@ async function chainResync(opts) {
         // resync. Confirmed against the bootstrap-apply code at the
         // top of EnmBootstrapDownloader._run.
         const cdir = DataDir.chainDir(chainId);
-        const elastosDir = path.join(cdir, 'elastos');
         const removed = [];
-        const candidates = [
-            path.join(elastosDir, 'data'),
-            path.join(elastosDir, 'peers.json'),
-            path.join(elastosDir, 'dpos'),
-            path.join(elastosDir, 'logs', 'node'),  // chain logs from ela
-            // Also nuke the .tmp/bootstrap/<chainId>/ partial download
-            // dir so a resync forces the next bootstrap to start fresh
-            // instead of resuming from a possibly-corrupt .partial.
-            path.join(DataDir.enmDataDir(), '.tmp', 'bootstrap', chainId),
-        ];
+        // P1-7 (v0.5.180) — class-aware resync targets. The wipe list used to be
+        // ELA-only (elastos/*), so for EVM sidechains (esc/eid/pg) it silently
+        // NO-OP'd — the UI "Chain Resync" couldn't repair a forked/corrupt EVM
+        // chain (e.g. pg wedged on a dead fork where every peer returns "retrieved
+        // hash chain is invalid"). EVM chain data lives under <chainDir>/data/geth;
+        // the MINING KEYSTORE is the sibling <chainDir>/data/keystore and MUST
+        // survive — so we target data/geth PRECISELY (never data/) plus the stale
+        // peer cache. data/keystore, data/miner_address.txt, and the SPV
+        // mainchain-watch state (data/header, data/store, data/spv_transaction_info.db)
+        // are intentionally NOT in the list and are preserved.
+        let candidates;
+        if (adapter.chainClass === 'B') {
+            const dataDir = path.join(cdir, 'data');
+            candidates = [
+                path.join(dataDir, 'geth'),        // EVM blockchain DB (the fork)
+                path.join(dataDir, 'peers.json'),  // stale geth peer cache
+                path.join(DataDir.enmDataDir(), '.tmp', 'bootstrap', chainId),
+            ];
+        } else {
+            // beta.3.42 — Class A (ela): working dir is <chainDir>/elastos/.
+            const elastosDir = path.join(cdir, 'elastos');
+            candidates = [
+                path.join(elastosDir, 'data'),
+                path.join(elastosDir, 'peers.json'),
+                path.join(elastosDir, 'dpos'),
+                path.join(elastosDir, 'logs', 'node'),  // chain logs from ela
+                // Also nuke the .tmp/bootstrap/<chainId>/ partial download dir so a
+                // resync forces a fresh bootstrap instead of resuming a corrupt .partial.
+                path.join(DataDir.enmDataDir(), '.tmp', 'bootstrap', chainId),
+            ];
+        }
+        // P1-7 hard safety net — NEVER delete the mining keystore, even if a
+        // future edit mistakenly adds data/ or data/keystore to the candidates.
+        // Identity loss is permanent + unrecoverable, so this guard is absolute.
+        const keystoreDir = path.join(cdir, 'data', 'keystore');
+        candidates = candidates.filter((p) => {
+            const rel = path.relative(p, keystoreDir);
+            const wouldHitKeystore = (p === keystoreDir)
+                || (rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel));
+            if (wouldHitKeystore) {
+                log.warn(
+                    `${ENM_LOG_PREFIX} maintenance.chainResync: REFUSING to delete ${p} — `
+                    + 'it is or contains the mining keystore',
+                );
+                return false;
+            }
+            return true;
+        });
         for (const p of candidates) {
             try {
                 await fsp.rm(p, { recursive: true, force: true });
