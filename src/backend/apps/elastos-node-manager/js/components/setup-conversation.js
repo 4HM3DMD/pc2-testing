@@ -481,6 +481,19 @@
         var heading = t('friendly.setup.card_2.title');
         var sub = t('friendly.setup.card_2.sub', { path: pathName });
         this.root.setAttribute('aria-label', heading);
+        // v0.5.188 — Council-only staged-sync note. Council brings up 8 chains;
+        // on modest hardware they sync slowly when started together. The Main
+        // chain comes up first and the sidechains + Arbiter depend on it (node.sh
+        // all_start order: ela → sidechains → arbiter; the Arbiter dials Main-chain
+        // RPC at startup and the sidechains learn their producer set from the Main
+        // chain over SPV). So on a constrained server it is normal — and may be
+        // necessary — to let the Main chain (and a sidechain) fully sync before the
+        // rest catch up. Verified safe against node.sh (its per-chain model is
+        // inherently staged). BPoS (single chain) doesn't need this.
+        var perfNote = (pathName === 'council')
+            ? '<p class="enm-wiz-footnote enm-syscheck-perf-note">'
+                + escapeHtml(t('friendly.setup.card_2.perf_note')) + '</p>'
+            : '';
         this._body.innerHTML = ''
             + '<h2 class="enm-wiz-heading" id="enm-wiz-heading-2">'
             +   escapeHtml(heading) + '</h2>'
@@ -497,7 +510,8 @@
             +   '<button type="button" class="enm-btn enm-btn-secondary" '
             +     'data-action="rerun">'
             +     escapeHtml(t('friendly.setup.card_2.rerun')) + '</button>'
-            + '</div>';
+            + '</div>'
+            + perfNote;
 
         var self = this;
         var listEl = this._body.querySelector('.enm-syscheck-list');

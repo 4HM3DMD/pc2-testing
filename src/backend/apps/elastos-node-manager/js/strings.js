@@ -311,6 +311,13 @@
                     rerun:           'Re-run checks',
                     cta:             'Continue',
                     running:         'Running system checks…',
+                    // v0.5.188 — staged-sync guidance for constrained servers (Council
+                    // installs 8 chains). Verified safe + consistent with node.sh.
+                    perf_note:       'Heads-up for modest hardware: Council runs 8 chains, and they sync '
+                                   + 'slowly when they all start together. The Main chain comes up first '
+                                   + 'and the sidechains + Arbiter depend on it — so if a chain looks stuck, '
+                                   + 'let the Main chain (and one sidechain) finish syncing before the rest '
+                                   + 'catch up. Staging the sync like this is normal on limited servers.',
                     blocked_help:    'Fix the blocker, then press Re-run checks. Your host needs to meet '
                                    + 'the required thresholds before setup can proceed.',
                     add_swap_label:  'Your server has exactly 8 GB RAM. ENM can create a 4 GB swapfile '

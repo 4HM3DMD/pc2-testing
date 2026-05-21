@@ -185,6 +185,97 @@ class EvmSidechainAdapter extends ChainAdapter {
     get stopSignal() { return 'SIGINT'; }
 
     /**
+     * v0.5.188 — Recognize whether THIS node is an on-chain producer for the
+     * EVM sidechains, by asking the MAIN CHAIN (getarbitersinfo) and checking
+     * our DPoS node public key against the active + next arbiter slates.
+     *
+     * WHY (operator directive 2026-05-21 + verified against chain source):
+     * mining is NOT an ENM toggle. An Elastos EVM sidechain's block producers
+     * ARE the main chain's arbiters (CR-Council CRC arbiters + elected DPoS
+     * arbiters), announced by the main chain (NextTurnDPOSInfo) and learned by
+     * the sidechain over SPV — SideChain.ESC/spv/nextturn_dposinfo.go
+     * GetProducers() -> SpvService.GetArbiters(elaHeight). The set ROTATES per
+     * turn. The PBFT layer self-elects; a node only produces when its key is in
+     * the slate. ENM must READ this, never store a `miner.enabled` flag.
+     *
+     * FAIL-SAFE: returns isProducer:null when the main-chain RPC is unavailable
+     * or our pubkey isn't configured. Callers MUST treat null (and false) as
+     * "do not mine" — mining while NOT a producer entrenches a chain fork
+     * (the eid block-166410 wedge); merely missing a turn while genuinely
+     * on-duty is harmless and self-recovers on the next re-check.
+     *
+     * Pure read (no side effects); accepts the full ConfigStore cfg OR a bare
+     * chains-map so it is callable from start(), routes, and unit tests alike.
+     *
+     * @param {object} allChainsCfg  ConfigStore cfg ({chains:{mainchain}}) or chains-map ({mainchain})
+     * @returns {Promise<{isProducer: boolean|null, inCurrent: boolean, inNext: boolean, arbiterCount: number, source: string, error?: string}>}
+     */
+    async detectProducerRole(allChainsCfg) {
+        const out = {
+            isProducer: null, inCurrent: false, inNext: false, arbiterCount: 0, source: 'unavailable',
+        };
+        try {
+            // Tolerate either shape: full cfg ({chains:{mainchain}}) or chains-map ({mainchain}).
+            const root = (allChainsCfg && allChainsCfg.chains) || allChainsCfg || {};
+            const mainCfg = root.mainchain;
+            const nodePubkeyRaw = mainCfg && mainCfg.dpos && mainCfg.dpos.nodePublicKey;
+            if (!nodePubkeyRaw) { out.source = 'no-node-pubkey'; return out; }
+            const mainRpc = mainCfg.rpc;
+            if (!mainRpc || !mainRpc.user) { out.source = 'no-mainchain-rpc'; return out; }
+
+            // Lazy require (matches the codebase's adapter pattern; keeps the
+            // import block untouched and unit tests light).
+            const EnmCrypto = require('./EnmCrypto');
+            const EnmRpcClient = require('./EnmRpcClient');
+
+            let password = '';
+            if (mainRpc.passwordEncrypted) {
+                try {
+                    password = EnmCrypto.decrypt(mainRpc.passwordEncrypted);
+                } catch (e) {
+                    out.source = 'rpc-password-undecryptable';
+                    out.error = e && e.message ? e.message : String(e);
+                    return out;
+                }
+            }
+            const client = new EnmRpcClient({
+                host: mainRpc.host || '127.0.0.1',
+                port: mainRpc.port || 20336,
+                user: mainRpc.user,
+                password,
+                timeoutMs: 5000,
+            });
+            const info = await client.getarbitersinfo();
+            const norm = (s) => String(s || '').toLowerCase().replace(/^0x/, '');
+            const me = norm(nodePubkeyRaw);
+            const current = Array.isArray(info && info.currentarbiters)
+                ? info.currentarbiters.map(norm) : [];
+            const next = Array.isArray(info && info.nextarbiters)
+                ? info.nextarbiters.map(norm) : [];
+            out.inCurrent = current.includes(me);
+            out.inNext = next.includes(me);
+            out.arbiterCount = current.length;
+            // A synced main chain ALWAYS has a non-empty arbiter slate. An empty
+            // slate means the main chain isn't returning real data yet (still
+            // syncing / RPC not ready) — treat as UNKNOWN (isProducer stays null),
+            // never a definitive "not a producer", so a genuine producer is not
+            // demoted on a transient/unsynced read.
+            if (current.length === 0 && next.length === 0) {
+                out.source = 'empty-slate';
+                return out;
+            }
+            out.isProducer = out.inCurrent || out.inNext;
+            out.source = 'getarbitersinfo';
+            return out;
+        } catch (err) {
+            // Fail-safe: unknown role. Callers treat null as "do not mine".
+            out.source = 'error';
+            out.error = err && err.message ? err.message : String(err);
+            return out;
+        }
+    }
+
+    /**
      * Build an EthRpcClient pointing at this chain's HTTP-RPC port.
      * No HTTP Basic auth — geth doesn't use it; access control is
      * loopback-bind + UFW.
@@ -559,6 +650,57 @@ class EvmSidechainAdapter extends ChainAdapter {
                 + 'Run the install step in the setup wizard.',
             );
         }
+        // v0.5.188 — Derive mining from REAL on-chain producer status, not the
+        // stored miner.enabled flag (operator directive: "the chain should know
+        // if it's a miner; it shouldn't be something we decide"). An Elastos EVM
+        // sidechain's producers ARE the main chain's rotating arbiters; a node
+        // mines only when its DPoS key is in the slate, and the PBFT layer
+        // self-elects. A NON-producer must run as a FOLLOWER — node.sh's else
+        // branch: no --mine, no forced --syncmode full, default fast sync. That
+        // is ALSO the structural fix for this node's eid wedge: forced full-sync
+        // (from miner.enabled=true) re-executes block 166410's DID tx and fails
+        // its PreviousTxid check; a fast-sync follower never full-executes it.
+        //
+        // We only DEMOTE on a DEFINITIVE "not in the arbiter slate" answer. When
+        // the main chain RPC is unavailable (e.g. still syncing) detectProducerRole
+        // returns isProducer:null and we keep the configured mode, so a genuine
+        // producer isn't demoted by a transient outage. Auto-PROMOTION of a
+        // newly-on-duty node (which needs EVM-account setup) is a deliberate
+        // follow-up, intentionally not done here.
+        const _roleLog = (this.extensionHandle && this.extensionHandle.log) || null;
+        try {
+            const allCfg = await ConfigStore.load();
+            const role = await this.detectProducerRole(allCfg);
+            if (role.isProducer === false && cfg.miner && cfg.miner.enabled === true) {
+                cfg.miner.enabled = false;
+                // Match node.sh's follower branch: no forced full sync. Clear a
+                // persisted 'full' so the follower fast-syncs (and avoids the
+                // full-execution wedge); leave any non-full mode untouched.
+                if (cfg.sync && cfg.sync.mode === 'full') { cfg.sync.mode = 'fast'; }
+                if (_roleLog) {
+                    _roleLog.info(
+                        `${ENM_LOG_PREFIX} ${this.chainId}: DPoS node key is NOT in the on-chain `
+                        + `arbiter slate (getarbitersinfo: ${role.arbiterCount} arbiters) — starting as `
+                        + 'FOLLOWER (no --mine, fast sync). Mining is on-chain producer state, not an '
+                        + 'ENM toggle.',
+                    );
+                }
+            } else if (_roleLog) {
+                _roleLog.info(
+                    `${ENM_LOG_PREFIX} ${this.chainId}: producer-role check → isProducer=${role.isProducer} `
+                    + `(source=${role.source}, inCurrent=${role.inCurrent}, inNext=${role.inNext}); `
+                    + `miner.enabled stays ${!!(cfg.miner && cfg.miner.enabled)}.`,
+                );
+            }
+        } catch (err) {
+            if (_roleLog) {
+                _roleLog.warn(
+                    `${ENM_LOG_PREFIX} ${this.chainId}: producer-role detection failed `
+                    + `(${err && err.message ? err.message : err}) — keeping configured miner mode.`,
+                );
+            }
+        }
+
         // Step 2 — mainchain keystore.dat must exist.
         const mainchainKeystorePath = this.resolveMainchainKeystorePath();
 
