@@ -348,9 +348,18 @@ async function chainResync(opts) {
         let candidates;
         if (adapter.chainClass === 'B') {
             const dataDir = path.join(cdir, 'data');
+            // The EVM chaindata dir is named after the geth fork's instance:
+            // esc/eid use "geth", but the PG fork uses "pgp" (verified on disk:
+            // chains/pg/data/pgp/chaindata). Each chain has exactly ONE of these,
+            // so listing both is safe — the absent one is a no-op rm. The mining
+            // keystore (data/keystore) and SPV mainchain-watch state (data/header,
+            // data/store, data/spv_transaction_info.db, data/logs-spv) are NOT
+            // listed and are preserved.
             candidates = [
-                path.join(dataDir, 'geth'),        // EVM blockchain DB (the fork)
-                path.join(dataDir, 'peers.json'),  // stale geth peer cache
+                path.join(dataDir, 'geth'),        // esc/eid EVM blockchain DB
+                path.join(dataDir, 'pgp'),         // pg EVM blockchain DB
+                path.join(dataDir, 'geth.ipc'),    // stale ipc socket
+                path.join(dataDir, 'peers.json'),  // stale peer cache
                 path.join(DataDir.enmDataDir(), '.tmp', 'bootstrap', chainId),
             ];
         } else {
