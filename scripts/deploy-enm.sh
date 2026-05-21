@@ -288,6 +288,41 @@ if [ "$MODE" = "upgrade" ]; then
 fi
 
 # =============================================================================
+# override_sweep_cid — make the install survive pc2-node's boot sweeper.
+#
+# pc2-node's boot sweeper (pc2-node/src/api/index.ts) deletes the bundle dir +
+# installed_apps row of any app whose cid starts with 'local:' and isn't a
+# role:"system" test-apps bundle — on EVERY pc2-node (re)start. install-local
+# always sets cid='local:<name>' (AppInstallService.ts), so a plain pc2-node
+# restart (it crashes + systemd-restarts periodically — observed NRestarts=7 on
+# pc2new) reaps ENM and takes ALL chains down until a manual redeploy. We
+# rewrite the cid to 'manual:<tag>' after a healthy install so the sweeper
+# skips ENM. Chain data lives in externalDataDirs, which the sweeper's
+# uninstall() never touches — so this protects only the management layer.
+#
+# This was verified on the old server (srv832310) but lost in the pc2new
+# migration because it was a server-local edit; keeping it in the repo'd
+# script makes it migration-proof. Idempotent + non-fatal.
+# =============================================================================
+override_sweep_cid() {
+    local DB="${PC2_DB_PATH:-/var/lib/pc2/data/pc2-node.sqlite}"
+    local NAME="${APP_NAME:-elastos-node-manager}"
+    if [ ! -f "$DB" ]; then
+        log "override_sweep_cid: pc2-node DB not found at $DB — SKIPPED (ENM may be reaped on the next pc2-node restart)"
+        return 0
+    fi
+    if ! command -v sqlite3 >/dev/null 2>&1; then
+        log "override_sweep_cid: sqlite3 not installed — SKIPPED (ENM may be reaped on the next pc2-node restart)"
+        return 0
+    fi
+    if sqlite3 "$DB" "UPDATE installed_apps SET cid='manual:${TAG}' WHERE app_name='${NAME}' AND cid LIKE 'local:%';" 2>/dev/null; then
+        log "override_sweep_cid: installed_apps.cid set to 'manual:${TAG}' for ${NAME} — survives pc2-node boot sweeper"
+    else
+        log "override_sweep_cid: UPDATE failed (non-fatal) — ENM may be reaped on the next pc2-node restart"
+    fi
+}
+
+# =============================================================================
 # Smoke test (both modes).
 # =============================================================================
 log "waiting for ENM to come up on :$ENM_PORT..."
@@ -295,6 +330,8 @@ for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
     sleep 2
     if curl -fsS "http://localhost:${ENM_PORT}/api/enm/health" >/dev/null 2>&1; then
         log "health OK after ${i}x2s"
+        # Protect this install from pc2-node's boot sweeper (see fn comment).
+        override_sweep_cid
         log "deployed: $TARBALL_NAME ($MODE mode)"
         if [ "$MODE" = "upgrade" ]; then
             log "rollback: tar -C $BUNDLE_DIR -xzf $BACKUP_PATH && kill \$(pgrep -f 'elastos-node-manager.*server.js')"
