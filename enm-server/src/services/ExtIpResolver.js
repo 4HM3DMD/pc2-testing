@@ -18,7 +18,17 @@
 
 'use strict';
 
-const DEFAULT_ENDPOINT = 'https://checkip.amazonaws.com';
+// P1 (v0.5.182) — rotate over several echo-IP services. A single hardcoded
+// endpoint is a fleet-wide SPOF: if it rate-limits the shared egress IP or has
+// an outage, EVERY operator loses its advertised external IP at once → inbound-
+// peer collapse across the fleet. First valid IPv4 wins.
+const DEFAULT_ENDPOINTS = Object.freeze([
+    'https://checkip.amazonaws.com',
+    'https://api.ipify.org',
+    'https://ifconfig.me/ip',
+    'https://icanhazip.com',
+]);
+const DEFAULT_ENDPOINT = DEFAULT_ENDPOINTS[0]; // back-compat for existing callers/tests
 const DEFAULT_TIMEOUT_MS = 10_000;
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
@@ -50,16 +60,39 @@ async function resolve(opts) {
         return { ok: true, ip: cache.ip, source: 'cache' };
     }
 
-    const endpoint = o.endpoint || DEFAULT_ENDPOINT;
     const timeoutMs = Number.isInteger(o.timeoutMs) ? o.timeoutMs : DEFAULT_TIMEOUT_MS;
+    // Honor a single explicit override; otherwise try the fallback list in order.
+    const endpoints = o.endpoint ? [o.endpoint] : DEFAULT_ENDPOINTS;
 
+    let lastReason = 'External IP probe failed (network unreachable, DNS, or TLS error).';
+    for (const ep of endpoints) {
+        // eslint-disable-next-line no-await-in-loop — sequential by design: first success wins
+        const r = await probeEndpoint(ep, timeoutMs);
+        if (r.ok) {
+            cache = { ip: r.ip, fetchedAt: Date.now() };
+            return { ok: true, ip: r.ip, source: 'endpoint' };
+        }
+        lastReason = r.reason || lastReason;
+    }
+    return {
+        ok: false,
+        source: 'endpoint',
+        reason: `${lastReason} You can paste your IP manually in Settings → Network.`,
+    };
+}
+
+/**
+ * @private — probe ONE echo-IP endpoint. Returns { ok, ip } or { ok:false, reason }.
+ * Never throws. (0.5.115: keep the operator-facing reason generic — the recovery
+ * is identical regardless of which network failure mode tripped.)
+ */
+async function probeEndpoint(endpoint, timeoutMs) {
     let controller;
     let timer;
     if (typeof AbortController !== 'undefined') {
         controller = new AbortController();
         timer = setTimeout(() => controller.abort(), timeoutMs);
     }
-
     let response;
     try {
         response = await fetch(endpoint, {
@@ -69,47 +102,19 @@ async function resolve(opts) {
             headers: { 'Accept': 'text/plain' },
         });
     } catch (_) {
-        if (timer) {
-            clearTimeout(timer);
-        }
-        // 0.5.115 audit Session 115 — replaced err.message interpolation
-        // with a static fallback. Pre-0.5.115 we surfaced Node fetch
-        // errno strings ("fetch failed", "getaddrinfo ENOTFOUND ...",
-        // certificate errors) verbatim — the operator-actionable
-        // recovery is the same regardless of which network-level
-        // failure mode tripped, so the verbose errno added noise
-        // without changing what the operator should do. Matches
-        // Sessions 64/67/79/81-84 + 107-112 leak-sweep pattern.
-        return {
-            ok: false,
-            source: 'endpoint',
-            reason: 'External IP probe failed (network unreachable, DNS, or TLS error). '
-                  + 'You can paste your IP manually in Settings → Network.',
-        };
+        if (timer) { clearTimeout(timer); }
+        return { ok: false, reason: 'External IP probe failed (network unreachable, DNS, or TLS error).' };
     }
-    if (timer) {
-        clearTimeout(timer);
-    }
+    if (timer) { clearTimeout(timer); }
 
     if (!response.ok) {
-        return {
-            ok: false,
-            source: 'endpoint',
-            reason: `External IP probe returned HTTP ${response.status} from ${endpoint}.`,
-        };
+        return { ok: false, reason: `External IP probe returned HTTP ${response.status}.` };
     }
-
     const text = (await response.text()).trim();
     if (!IPV4_REGEX.test(text)) {
-        return {
-            ok: false,
-            source: 'endpoint',
-            reason: `External IP probe returned a non-IPv4 string (${truncate(text, 64)}).`,
-        };
+        return { ok: false, reason: `External IP probe returned a non-IPv4 string (${truncate(text, 64)}).` };
     }
-
-    cache = { ip: text, fetchedAt: Date.now() };
-    return { ok: true, ip: text, source: 'endpoint' };
+    return { ok: true, ip: text };
 }
 
 /**

@@ -34,6 +34,8 @@ const http = require('node:http');
 const { URL } = require('node:url');
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+// P1 (v0.5.182) — hard ceiling on a single RPC response body (anti-OOM).
+const MAX_RPC_RESPONSE_BYTES = 16 * 1024 * 1024;
 
 /**
  * @typedef {object} RpcClientConfig
@@ -95,8 +97,23 @@ class EnmRpcClient {
                 timeout: this.timeoutMs,
             }, (res) => {
                 let chunks = '';
+                let size = 0;
                 res.setEncoding('utf8');
-                res.on('data', (c) => { chunks += c; });
+                res.on('data', (c) => {
+                    // P1 (v0.5.182) — cap response size. A misbehaving RPC (or an
+                    // HTML error page from a proxy in front of the port) returning a
+                    // multi-MB body would otherwise be buffered fully in memory →
+                    // GC pressure / OOM at fleet scale. 16 MB is far above any
+                    // legitimate ela/arbiter JSON-RPC reply.
+                    size += c.length;
+                    if (size > MAX_RPC_RESPONSE_BYTES) {
+                        req.destroy(new RpcTransportError(
+                            `RPC response too large (>${MAX_RPC_RESPONSE_BYTES} bytes) from ${this.host}:${this.port}`,
+                        ));
+                        return;
+                    }
+                    chunks += c;
+                });
                 res.on('end', () => {
                     if (res.statusCode === 401 || res.statusCode === 403) {
                         return reject(new RpcAuthError(

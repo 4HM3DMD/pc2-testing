@@ -32,6 +32,11 @@ function openDb(dbPath) {
     // WAL gives us concurrent readers (the routes can hit the DB simultaneously).
     raw.pragma('journal_mode = WAL');
     raw.pragma('synchronous = NORMAL');
+    // P1 (v0.5.182) — better-sqlite3 defaults busy_timeout to 0ms, so a WAL
+    // auto-checkpoint colliding with a batched DELETE (audit cleanup) or a long
+    // read throws SQLITE_BUSY straight to the route/health tick. Wait+retry for
+    // up to 5s instead of failing the request.
+    raw.pragma('busy_timeout = 5000');
 
     return {
         raw,

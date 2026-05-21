@@ -585,9 +585,51 @@ class SelfHealingEngine {
                     runCfg = cfg.chains[chainId];
                 }
             } catch (_) { /* fall back to the passed chainConfig */ }
+            // P0-3 (v0.5.182) — ensure the binary is on disk before restarting. A
+            // vanished binary (interrupted download, manual delete, disk issue)
+            // otherwise makes adapter.start() throw with no recovery → crash-loop →
+            // quarantine → manual SSH. Auto-redownload first. Only binary-downloader
+            // chains (A=ela, B=EVM, D=arbiter); oracles (C) use the Node runtime.
+            if (adapter.chainClass === 'A' || adapter.chainClass === 'B' || adapter.chainClass === 'D') {
+                await this._ensureBinaryPresent(chainId);
+            }
             return adapter.restart(runCfg);
         }
         return this.processService.restart(chainId, chainConfig);
+    }
+
+    /**
+     * P0-3 — if a chain's binary is missing from disk, auto-redownload it before
+     * the (re)start so a vanished binary self-heals instead of crash-looping into
+     * quarantine. Best-effort + never throws: on any failure we log and let the
+     * subsequent start surface the real error (no worse than before).
+     *
+     * @param {string} chainId
+     * @private
+     */
+    async _ensureBinaryPresent(chainId) {
+        let dl;
+        try { dl = require('./ChainRegistry').getBinaryDownloader(); } catch (_) { return; }
+        if (!dl || typeof dl.resolveOnDisk !== 'function') { return; }
+        let onDisk = null;
+        try { onDisk = await dl.resolveOnDisk(chainId); } catch (_) { return; }
+        // resolveOnDisk only returns a path it actually located on disk, so a
+        // non-null binaryPath means the binary is present. null = missing.
+        if (onDisk && onDisk.binaryPath) { return; }
+        try {
+            this.extensionHandle.log.warn(
+                `${ENM_LOG_PREFIX} ${chainId}: binary missing on disk — auto-redownloading before restart (P0-3)`,
+            );
+            await dl.start(chainId);
+            this.extensionHandle.log.info(
+                `${ENM_LOG_PREFIX} ${chainId}: binary redownload complete — proceeding with restart`,
+            );
+        } catch (err) {
+            this.extensionHandle.log.warn(
+                `${ENM_LOG_PREFIX} ${chainId}: binary redownload failed (${err && err.message ? err.message : err}) `
+                + '— proceeding; the restart will surface the underlying error',
+            );
+        }
     }
 
     // ========================================================================

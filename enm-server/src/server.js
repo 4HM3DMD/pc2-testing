@@ -492,6 +492,22 @@ async function main() {
         };
         process.on('SIGTERM', () => onShutdown('SIGTERM'));
         process.on('SIGINT',  () => onShutdown('SIGINT'));
+        // P1 (v0.5.182) — without these, an uncaught throw/rejection crashes the
+        // whole sidecar with Node's default behavior, SKIPPING markAllManualStop →
+        // the detached children's eventual exits misclassify as external → spurious
+        // F1 self-heal storm on the next boot. uncaughtException = genuine
+        // unknown state: flush chains (so exits classify manual) then exit(1) and
+        // let pc2-node respawn us. unhandledRejection = log loudly but DON'T crash
+        // the management plane over one stray rejection (the chains run detached;
+        // ENM must stay up to heal them).
+        process.on('uncaughtException', (err) => {
+            log('error', `uncaughtException: ${err && err.stack ? err.stack : err} — flushing chains + exiting`);
+            try { onShutdown('uncaughtException'); } catch (_) { /* best-effort */ }
+            process.exit(1);
+        });
+        process.on('unhandledRejection', (reason) => {
+            log('error', `unhandledRejection: ${reason && reason.stack ? reason.stack : reason}`);
+        });
     }
 }
 

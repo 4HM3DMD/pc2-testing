@@ -104,6 +104,9 @@ async function initSchema(db) {
     `, []);
 }
 
+// P1 (v0.5.182) — hard ceiling on audit-log rows (disk-fill backstop).
+const AUDIT_LOG_MAX_ROWS = 100_000;
+
 /**
  * Delete audit rows older than retention window. Called from boot + 24h interval.
  * Batched so a 365 → 30 day reduction doesn't lock the DB.
@@ -113,29 +116,48 @@ async function initSchema(db) {
  * @returns {Promise<number>} rows deleted
  */
 async function cleanupOldAuditLogs(db, olderThanDays) {
-    if (!Number.isInteger(olderThanDays) || olderThanDays <= 0) {
-        return 0;
-    }
-    const cutoff = Date.now() - (olderThanDays * 24 * 60 * 60 * 1000);
     const BATCH = 10_000;
     let total = 0;
-    // SQLite doesn't support DELETE ... LIMIT by default in better-sqlite3 unless
-    // SQLITE_ENABLE_UPDATE_DELETE_LIMIT was compiled in. Use rowid-bounded delete instead.
-    while (true) {
-        // eslint-disable-next-line no-await-in-loop
-        const res = await db.write(
-            `DELETE FROM enm_audit_logs WHERE rowid IN (
-                 SELECT rowid FROM enm_audit_logs WHERE ts < ? LIMIT ?
-             )`,
-            [cutoff, BATCH],
-        );
-        const changes = (res && typeof res.changes === 'number') ? res.changes : 0;
-        total += changes;
-        if (changes < BATCH) {
-            break;
+    // Time-based pruning. Skipped when olderThanDays<=0 ("keep forever").
+    if (Number.isInteger(olderThanDays) && olderThanDays > 0) {
+        const cutoff = Date.now() - (olderThanDays * 24 * 60 * 60 * 1000);
+        // SQLite doesn't support DELETE ... LIMIT by default in better-sqlite3 unless
+        // SQLITE_ENABLE_UPDATE_DELETE_LIMIT was compiled in. Use rowid-bounded delete instead.
+        while (true) {
+            // eslint-disable-next-line no-await-in-loop
+            const res = await db.write(
+                `DELETE FROM enm_audit_logs WHERE rowid IN (
+                     SELECT rowid FROM enm_audit_logs WHERE ts < ? LIMIT ?
+                 )`,
+                [cutoff, BATCH],
+            );
+            const changes = (res && typeof res.changes === 'number') ? res.changes : 0;
+            total += changes;
+            if (changes < BATCH) {
+                break;
+            }
         }
     }
+    // P1 (v0.5.182) — absolute row-count backstop, applied REGARDLESS of the time
+    // setting. retentionDays=0 ("keep forever", an operator-settable value) +
+    // any nonzero write rate grows the table unbounded over months → disk fill.
+    // Trim the oldest rows beyond AUDIT_LOG_MAX_ROWS so there's always a ceiling.
+    total += await capAuditRows(db, AUDIT_LOG_MAX_ROWS);
     return total;
+}
+
+/** @private — delete oldest rows so the table never exceeds maxRows. */
+async function capAuditRows(db, maxRows) {
+    const countRes = await db.read('SELECT COUNT(*) AS n FROM enm_audit_logs', []);
+    const n = (countRes && countRes[0]) ? Number(countRes[0].n) : 0;
+    if (n <= maxRows) { return 0; }
+    const res = await db.write(
+        `DELETE FROM enm_audit_logs WHERE rowid IN (
+             SELECT rowid FROM enm_audit_logs ORDER BY rowid ASC LIMIT ?
+         )`,
+        [n - maxRows],
+    );
+    return (res && typeof res.changes === 'number') ? res.changes : 0;
 }
 
 module.exports = {

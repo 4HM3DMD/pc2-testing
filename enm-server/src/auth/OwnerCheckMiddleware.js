@@ -67,8 +67,35 @@ function getDb() {
     return dbHandle;
 }
 
+/** P1 (v0.5.182) — drop the cached read-only handle so the next getDb() reopens.
+ *  Called when a query errors because pc2-node rotated/replaced pc2.db. */
+function _closeDb() {
+    if (dbHandle) {
+        try { dbHandle.close(); } catch (_) { /* already gone */ }
+        dbHandle = null;
+    }
+}
+
 /** @type {Map<string, { wallet: string|null, fetchedAt: number }>} */
 const sessionCache = new Map();
+// P1 (v0.5.182) — cap the session cache. It's keyed by raw token (incl. every
+// invalid/garbage token, cached as null), so without a bound it grows forever
+// under token rotation or a token-spray → memory leak. 5k entries × 5s TTL is
+// plenty for a real fleet's working set.
+const MAX_SESSION_CACHE = 5000;
+function _sessionCacheSet(token, wallet, now) {
+    if (sessionCache.size >= MAX_SESSION_CACHE) {
+        for (const [k, v] of sessionCache) {
+            if (now - v.fetchedAt >= SESSION_CACHE_TTL_MS) { sessionCache.delete(k); }
+        }
+        while (sessionCache.size >= MAX_SESSION_CACHE) {
+            const oldest = sessionCache.keys().next().value; // insertion order = oldest
+            if (oldest === undefined) { break; }
+            sessionCache.delete(oldest);
+        }
+    }
+    sessionCache.set(token, { wallet, fetchedAt: now });
+}
 
 /**
  * Extract Bearer token, look up session in pc2-node's DB, return wallet.
@@ -109,21 +136,30 @@ function resolveWalletFromToken(token) {
     }
 
     let wallet = null;
-    try {
-        const db = getDb();
-        const row = db.prepare(
-            'SELECT wallet_address, expires_at FROM sessions WHERE token = ?'
-        ).get(token);
-        if (row && row.expires_at > now) {
-            wallet = row.wallet_address;
+    // P1 (v0.5.182) — retry once with a fresh handle. The cached read-only handle
+    // goes stale if pc2-node rotates/replaces pc2.db (restart, vacuum, restore);
+    // without a reopen, EVERY operator gets 401'd until enm-server restarts
+    // (node-wide auth outage). Drop + reopen on error, retry once.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+            const db = getDb();
+            const row = db.prepare(
+                'SELECT wallet_address, expires_at FROM sessions WHERE token = ?'
+            ).get(token);
+            if (row && row.expires_at > now) {
+                wallet = row.wallet_address;
+            }
+            break; // success
+        } catch (err) {
+            _closeDb();
+            if (attempt === 0) { continue; } // reopen + retry once
+            // Cache the null result briefly so we don't hammer the DB on a known-bad path.
+            _sessionCacheSet(token, null, now);
+            throw err;
         }
-    } catch (err) {
-        // Cache the null result briefly so we don't hammer the DB on a known-bad path.
-        sessionCache.set(token, { wallet: null, fetchedAt: now });
-        throw err;
     }
 
-    sessionCache.set(token, { wallet, fetchedAt: now });
+    _sessionCacheSet(token, wallet, now);
     return wallet;
 }
 
