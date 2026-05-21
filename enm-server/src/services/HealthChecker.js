@@ -469,6 +469,21 @@ class HealthChecker {
                 dposDesyncDetected = await this._probeDposDesyncSignal(chainId);
             }
 
+            // v0.5.184 — F26 probe. On a Class B (EVM) chain that is alive AND
+            // already height-stalled, tail the node log for the wedged-fork
+            // signature ("retrieved hash chain is invalid"). Same cheap bounded
+            // read as the DPoS probe and gated on an in-progress stall so it
+            // never runs on the hot path of a healthy, advancing chain. The
+            // class gate avoids wasted reads on ela / oracle / arbiter logs.
+            let evmForkDetected = false;
+            if (status.alive && s.firstHeightStallAt) {
+                let isEvm = false;
+                try { isEvm = this.getAdapter(chainId).chainClass === 'B'; } catch (_) { isEvm = false; }
+                if (isEvm) {
+                    evmForkDetected = await this._probeEvmForkSignal(chainId);
+                }
+            }
+
             const snap = {
                 chainId,
                 processStatus: status,
@@ -480,6 +495,7 @@ class HealthChecker {
                 chainConfig: chainCfg,
                 ruleState: s,
                 dposDesyncDetected,
+                evmForkDetected,
             };
             this._enrichOracleSnap(snap, chainCfg);
             this._enrichArbiterSnap(snap);
@@ -487,7 +503,8 @@ class HealthChecker {
             const dets = HealthRules.runAll(snap).filter((d) =>
                 d.ruleId === 'F3' || d.ruleId === 'F4' || d.ruleId === 'F9'
                 || d.ruleId === 'F10' || d.ruleId === 'F16' || d.ruleId === 'F18'
-                || d.ruleId === 'F22' || d.ruleId === 'F24' || d.ruleId === 'F23');
+                || d.ruleId === 'F22' || d.ruleId === 'F24' || d.ruleId === 'F23'
+                || d.ruleId === 'F26');
             if (dets.length > 0) {
                 await this.engine.apply(chainId, dets, chainCfg);
             }
@@ -1269,6 +1286,56 @@ class HealthChecker {
         } catch (err) {
             this.extensionHandle.log.debug(
                 `${ENM_LOG_PREFIX} _probeDposDesyncSignal(${chainId}) failed (non-fatal): ${err.message}`,
+            );
+            return false;
+        }
+    }
+
+    /**
+     * v0.5.184 — F26 probe. Read the tail of the most recent EVM node log and
+     * detect the wedged-fork signature: geth dropping peers with "retrieved
+     * hash chain is invalid" because the local chain has diverged onto a
+     * minority fork (so every canonical peer's header chain fails to connect
+     * to the local head). A SINGLE occurrence can be a transient bad peer, so
+     * we require >= EVM_FORK_MIN_HITS in the tail — a genuinely wedged node
+     * logs it continuously (once per peer it cycles through and drops),
+     * whereas a healthy node that hit one bad peer recovers and stops.
+     *
+     * The EVM node log lives at <chainDir>/logs/<chainId>.log (verified on
+     * disk: chains/pg/logs/pg.log) — distinct from ela's elastos/logs/node/.
+     * Only the last ~64KB of the newest log is read (bounded cost), matching
+     * _probeDposDesyncSignal. Skipped silently on filesystem errors.
+     *
+     * @param {string} chainId
+     * @returns {Promise<boolean>}
+     */
+    async _probeEvmForkSignal(chainId) {
+        const PROBE_MAX_BYTES = 64 * 1024;
+        const EVM_FORK_MIN_HITS = 3;
+        const PATTERN = /retrieved hash chain is invalid/gi;
+        try {
+            const logDir = path.join(chainDir(chainId), 'logs');
+            const entries = await fsp.readdir(logDir).catch(() => []);
+            const logFiles = entries.filter((n) => /\.log$/.test(n));
+            if (logFiles.length === 0) return false;
+            logFiles.sort();
+            const newest = logFiles[logFiles.length - 1];
+            const full = path.join(logDir, newest);
+            const stat = await fsp.stat(full).catch(() => null);
+            if (!stat) return false;
+            const startOffset = Math.max(0, stat.size - PROBE_MAX_BYTES);
+            const fd = await fsp.open(full, 'r');
+            try {
+                const buf = Buffer.alloc(stat.size - startOffset);
+                await fd.read(buf, 0, buf.length, startOffset);
+                const matches = buf.toString('utf8').match(PATTERN);
+                return Array.isArray(matches) && matches.length >= EVM_FORK_MIN_HITS;
+            } finally {
+                await fd.close().catch(() => {});
+            }
+        } catch (err) {
+            this.extensionHandle.log.debug(
+                `${ENM_LOG_PREFIX} _probeEvmForkSignal(${chainId}) failed (non-fatal): ${err.message}`,
             );
             return false;
         }

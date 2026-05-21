@@ -402,6 +402,55 @@ async function chainResync(opts) {
             }
         }
 
+        // v0.5.184 — F26 auto-heal path. The operator-driven resync (default)
+        // resets the wizard + leaves the chain DISABLED so the operator walks
+        // Card B2. For an UNATTENDED self-heal that would strand the chain off
+        // forever — defeating the "no manual step" goal. With autoRestart we
+        // instead RE-ENABLE the chain and start it so it re-syncs clean from
+        // peers automatically. The wipe already removed the forked chaindata;
+        // the mining keystore is preserved (filter above), so the chain comes
+        // back with the same identity on a fresh, canonical chain.
+        if (opts && opts.autoRestart) {
+            try {
+                await ConfigStore.update((cfg) => {
+                    if (cfg.chains && cfg.chains[chainId]) { cfg.chains[chainId].enabled = true; }
+                }, { logger: log });
+            } catch (err) {
+                log.warn(
+                    `${ENM_LOG_PREFIX} maintenance.chainResync(autoRestart): re-enable ${chainId} `
+                    + `failed: ${err.message} — chain may stay disabled`,
+                );
+            }
+            let autoRestarted = false;
+            try {
+                // cfg.chains[chainId] is the runnable shape adapter.start expects
+                // (binaryPath/ports/miner/pbft) — same shape the engine's restart
+                // path loads. Reload AFTER the re-enable so enabled=true is seen.
+                const cfg = await ConfigStore.load();
+                const runCfg = cfg && cfg.chains && cfg.chains[chainId];
+                if (!runCfg) { throw new Error(`no config for ${chainId} after wipe`); }
+                await adapter.start(runCfg);
+                autoRestarted = true;
+                log.info(
+                    `${ENM_LOG_PREFIX} maintenance.chainResync(${chainId}) — data wiped + chain `
+                    + 're-enabled and restarted (auto-resync); re-syncing clean from peers',
+                );
+            } catch (err) {
+                log.error(
+                    `${ENM_LOG_PREFIX} maintenance.chainResync(autoRestart): start ${chainId} `
+                    + `failed: ${err.message} — chain wiped but not running`,
+                );
+            }
+            return {
+                action: 'chain-resync',
+                chainId,
+                removedPaths: removed,
+                keystoreBackup,
+                autoRestarted,
+                wizardReturns: false,
+            };
+        }
+
         // beta.3.42 — instead of auto-restarting the chain (which would
         // just begin a silent re-sync), reset the setup_state so the
         // wizard re-appears at Card B2 (bootstrap-vs-genesis). Keystore

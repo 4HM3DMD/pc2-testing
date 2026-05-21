@@ -102,6 +102,24 @@ const PROCESS_MAX_RESTART_ATTEMPTS = 3;     // before escalating to OWNER_CONFIR
 // a deeper layer than restart can heal.
 const PROCESS_RESTART_BUDGET_WINDOW_MS = 10 * 60 * 1000;
 
+// v0.5.184 — graceful-drain budget on ENM shutdown. The per-chain stop path
+// (NativeProcessService._signalAndWait) already waits PROCESS_STOP_GRACE_MS for
+// a clean flush, but ENM's OWN shutdown (server.js onShutdown + /teardown) used
+// to fire SIGINT to the children fire-and-forget then exit within ms — so geth
+// (which needs tens of seconds to flush leveldb) got SIGKILLed mid-write by the
+// process-group teardown → dirty DB → rewind on restart → (for a mining EVM
+// node) fork. We now AWAIT the children's clean exit up to this budget before
+// letting ENM exit. Bounded below PROCESS_STOP_GRACE_MS so it fits inside a
+// typical supervisor SIGTERM→SIGKILL window (systemd default 90s).
+const SHUTDOWN_DRAIN_GRACE_MS = 45_000;
+
+// v0.5.184 — F26 auto-resync rate limit. Wiping + re-syncing an EVM chain is
+// destructive (drops to genesis, hours to rebuild) though recoverable (keystore
+// always preserved). We allow AT MOST one automatic resync per chain per this
+// window; if the chain re-forks again inside it, F26 escalates to OWNER_CONFIRMS
+// instead of wiping in a loop. Persisted via the audit log (survives restart).
+const EVM_RESYNC_MIN_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
 // Audit log tier labels (matches HEALING_TIERS but flat strings for SQL).
 const AUDIT_DECISION = Object.freeze({
     PROPOSED: 'proposed',
@@ -155,6 +173,8 @@ module.exports = {
     CHAIN_STATES,
     HEALTH_TICK_MS,
     PROCESS_STOP_GRACE_MS,
+    SHUTDOWN_DRAIN_GRACE_MS,
+    EVM_RESYNC_MIN_INTERVAL_MS,
     PROCESS_RESTART_COOLDOWN_MS,
     PROCESS_MAX_RESTART_ATTEMPTS,
     PROCESS_RESTART_BUDGET_WINDOW_MS,

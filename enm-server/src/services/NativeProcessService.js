@@ -271,6 +271,66 @@ class NativeProcessService extends EventEmitter {
     }
 
     /**
+     * v0.5.184 — wait until every tracked/reattached chain process has exited,
+     * or until graceMs elapses. Used by ENM's OWN shutdown path (server.js
+     * onShutdown + /teardown): after signalAll('SIGINT'), the children — esp.
+     * EVM geth — need tens of seconds to flush leveldb cleanly. Pre-v0.5.184
+     * ENM fired the SIGINT then exited within ms, so the process-group teardown
+     * SIGKILLed geth mid-write → dirty DB → rewind on restart → (mining node)
+     * fork. Awaiting their clean exit here lets the flush finish. Bounded by
+     * graceMs so a wedged child can't hang shutdown forever; on timeout we log
+     * who's still alive and proceed (no worse than the old fire-and-forget).
+     *
+     * Watches the union of (a) chains spawned this session and (b) reattached
+     * chains with a live PID file — statusSync covers both cohorts, exactly
+     * like signalAll. Never throws.
+     *
+     * @param {number} graceMs  max time to wait for all children to exit
+     * @returns {Promise<{stopped:number, total:number, stillAlive:string[]}>}
+     */
+    async awaitAllStopped(graceMs) {
+        const POLL_MS = 1_000;
+        const deadline = Date.now() + Math.max(0, Number(graceMs) || 0);
+        const watch = new Set(this.handles.keys());
+        try {
+            for (const fname of fs.readdirSync(runDir())) {
+                const m = fname.match(/^ela-([a-z0-9-]+)\.pid$/);
+                if (m) { watch.add(m[1]); }
+            }
+        } catch (_) { /* runDir missing — only the live handles to watch */ }
+
+        const stillAliveIds = () => {
+            const alive = [];
+            for (const chainId of watch) {
+                let st;
+                try { st = this.statusSync(chainId); } catch (_) { continue; }
+                if (st && st.alive) { alive.push(chainId); }
+            }
+            return alive;
+        };
+
+        const total = watch.size;
+        let alive = stillAliveIds();
+        while (alive.length > 0 && Date.now() < deadline) {
+            // eslint-disable-next-line no-await-in-loop — bounded poll by design
+            await new Promise((r) => setTimeout(r, POLL_MS));
+            alive = stillAliveIds();
+        }
+        if (alive.length > 0) {
+            this.extensionHandle.log.warn(
+                `${ENM_LOG_PREFIX} awaitAllStopped: ${alive.length}/${total} chain(s) still alive after `
+                + `${Math.round((Number(graceMs) || 0) / 1000)}s grace: ${alive.join(', ')} — proceeding `
+                + 'with shutdown (the supervisor may SIGKILL them)',
+            );
+        } else if (total > 0) {
+            this.extensionHandle.log.info(
+                `${ENM_LOG_PREFIX} awaitAllStopped: all ${total} child(ren) exited cleanly within grace`,
+            );
+        }
+        return { stopped: total - alive.length, total, stillAlive: alive };
+    }
+
+    /**
      * Stop the chain. <stopSignal> → wait grace → SIGKILL. Marks as
      * user-initiated so F1 honors the stop and doesn't try to restart.
      * Locked per chainId.

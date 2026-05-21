@@ -29,6 +29,7 @@ const {
     ENM_LOG_PREFIX,
     PROCESS_MAX_RESTART_ATTEMPTS,
     PROCESS_RESTART_BUDGET_WINDOW_MS,
+    EVM_RESYNC_MIN_INTERVAL_MS,
 } = require('./EnmConstants');
 
 const ProposalStore = require('./EnmProposalStore');
@@ -405,11 +406,60 @@ class SelfHealingEngine {
             }
         }
 
+        // v0.5.184 — F26 resync budget. The resync is DESTRUCTIVE (wipe +
+        // re-sync from genesis), so unlike the restart budget (3 / 10 min) we
+        // allow AT MOST ONE automatic resync per chain per
+        // EVM_RESYNC_MIN_INTERVAL_MS (24h). If the chain re-forked inside that
+        // window the resync didn't durably help — escalate to OWNER_CONFIRMS
+        // rather than wiping in a destructive loop. The "did we resync
+        // recently?" lookup is the audit log (persisted; survives an ENM
+        // restart) so a deploy bounce can't reset the guard.
+        if (this._isResyncAction(det)) {
+            let recentResync = false;
+            try {
+                const adb = this.getDb();
+                const since = Date.now() - EVM_RESYNC_MIN_INTERVAL_MS;
+                const rows = await AuditLog.query(adb, { chainId, fromTs: since, limit: 100 });
+                recentResync = Array.isArray(rows) && rows.some((r) =>
+                    r.rule_id === 'F26' && r.decision === AUDIT_DECISION.EXECUTED);
+            } catch (err) {
+                // Fail SAFE: on an unknown budget state, do NOT auto-wipe —
+                // escalate to the operator instead of risking a wipe loop.
+                this.extensionHandle.log.warn(
+                    `${ENM_LOG_PREFIX} ${chainId}/F26 resync-budget lookup failed (${err.message}) `
+                    + '— escalating to OWNER_CONFIRMS to be safe',
+                );
+                recentResync = true;
+            }
+            if (recentResync) {
+                this.extensionHandle.log.warn(
+                    `${ENM_LOG_PREFIX} ${chainId}/F26 already auto-resynced within `
+                    + `${Math.round(EVM_RESYNC_MIN_INTERVAL_MS / 3_600_000)}h — escalating to `
+                    + 'OWNER_CONFIRMS (chain re-forked; not wiping again automatically)',
+                );
+                const escalated = {
+                    ...det,
+                    tier: HEALING_TIERS.OWNER_CONFIRMS,
+                    summaryReason:
+                        (det.summaryReason || '')
+                        + ' NOTE: this chain was already auto-resynced once in the last 24h and '
+                        + 'forked again — confirm to resync once more, or check the peer set / '
+                        + 'bootnodes (a wipe alone may not durably fix a recurring fork).',
+                };
+                return this._applyOwnerConfirms(chainId, escalated);
+            }
+        }
+
         const startedAt = Date.now();
         const db = this.getDb();
         let outcome = 'success';
         let success = true;
         try {
+            // v0.5.184 — branch the executor by action. F26 wipes+resyncs;
+            // every other AUTOMATED_SAFE detection is a restart.
+            if (this._isResyncAction(det)) {
+                await this._executeChainResync(chainId);
+            } else
             // beta.3.54 — DROPPED outer withChainLock. _executeRestart calls
             // processService.restart, which already wraps itself in
             // withChainLock(chainId). Nested locks on the SAME chainId deadlock
@@ -499,6 +549,11 @@ class SelfHealingEngine {
     /** @private */
     _isRestartAction(det) {
         return det && det.payload && det.payload.action === 'restart';
+    }
+
+    /** @private — v0.5.184 — F26's wipe+resync action (Class B wedged fork). */
+    _isResyncAction(det) {
+        return det && det.payload && det.payload.action === 'evm-fork-resync';
     }
 
     /**
@@ -692,6 +747,38 @@ class SelfHealingEngine {
             return adapter.restart(runCfg);
         }
         return this.processService.restart(chainId, chainConfig);
+    }
+
+    /**
+     * v0.5.184 — F26 executor. Wipe the forked EVM chaindata (mining keystore
+     * preserved) and re-sync clean from peers, via EnmMaintenanceManager's
+     * autoRestart path. That manager acquires its OWN maintenance lock and
+     * drives adapter.stop()/start() (each per-chain locked internally) — so we
+     * deliberately do NOT wrap an outer withChainLock here (the same nested-
+     * lock deadlock hazard _executeRestart documents). Throws on failure so the
+     * caller records a FAILED audit row.
+     *
+     * @param {string} chainId
+     * @private
+     */
+    async _executeChainResync(chainId) {
+        const MaintenanceManager = require('./EnmMaintenanceManager');
+        const result = await MaintenanceManager.chainResync({
+            chainId,
+            autoRestart: true,
+            log: this.extensionHandle.log,
+        });
+        // chainResync swallows a failed restart (logs + returns autoRestarted
+        // false) so the wipe isn't lost; surface it here as a FAILED heal so
+        // the operator sees the chain is wiped-but-down and the next autostart
+        // (or a manual start) brings it up.
+        if (!result || result.autoRestarted !== true) {
+            throw new Error(
+                `chain-resync wiped ${chainId} but the chain did not restart — `
+                + 'it will come up on the next autostart or a manual start',
+            );
+        }
+        return result;
     }
 
     /**
@@ -1043,6 +1130,17 @@ class SelfHealingEngine {
         switch (action) {
             case 'restart':
                 return this._actRestart(proposal.chain_id);
+
+            case 'evm-fork-resync':
+                // v0.5.184 — F26 escalated to OWNER_CONFIRMS (the chain
+                // re-forked inside the 24h auto-resync budget) and the
+                // operator confirmed. Perform the wipe + resync now.
+                try {
+                    await this._executeChainResync(proposal.chain_id);
+                    return { success: true, outcome: 'chain-resync (operator-confirmed) complete — re-syncing from peers' };
+                } catch (err) {
+                    return { success: false, outcome: err.message };
+                }
 
             case 'config-rollback':
                 // Implemented in routes/config.js (Phase 5). Mark as deferred

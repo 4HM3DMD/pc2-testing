@@ -133,6 +133,14 @@ const CLOCK_SKEW_WARN_MS         = 2_000;             // F13 — well below ELA'
 const PRODUCER_INACTIVE_WARN     = 720;               // F12 — inactiveRounds approaching MAX_INACTIVE_ROUNDS/2
 const PRODUCER_INACTIVE_CRITICAL = 1300;              // F12 — close to forced-inactive at 1440
 
+// v0.5.184 — F26 wedged-EVM-fork grace. Deliberately LONGER than F4's 10-min
+// height-stall grace: F26's action is a destructive resync (wipe + re-sync from
+// genesis), so we want extra certainty the chain is genuinely wedged — not just
+// in a slow snap-sync batch or a brief peer churn — before triggering it. The
+// fork log-signature (≥3 "retrieved hash chain is invalid" in HealthChecker's
+// probe) is the definitive marker; this grace ensures the wedge has persisted.
+const EVM_FORK_STALL_GRACE_MS    = 20 * 60_000;
+
 /**
  * @typedef {object} HealthSnapshot
  * @property {string} chainId
@@ -257,6 +265,14 @@ function detectF4(snap) {
     if (!snap.rpcSummary || !snap.rpcSummary.ok) return null;
     if (typeof snap.rpcSummary.height !== 'number') return null;
     if (snap.rpcSummary.peers === 0) return null;  // F3 owns this case
+
+    // v0.5.184 — F26 owns the wedged-EVM-fork case. When the log probe has
+    // confirmed the "retrieved hash chain is invalid" fork signature, a plain
+    // restart (F4's action) does NOT help — geth comes back on the same
+    // forked head and re-wedges. F26 (which runs before F4 and wipes+resyncs)
+    // handles it. Yield here so the operator doesn't also get F4's useless
+    // restart proposal for the same condition.
+    if (snap.evmForkDetected) return null;
 
     // FIX-C15 — height legitimately sits flat right after start (a node at
     // genesis, or one that just restored a snapshot, hasn't begun advancing
@@ -881,6 +897,65 @@ function detectF25(snap) {
 }
 
 /**
+ * F26 — wedged EVM sidechain fork (Class B, v0.5.184).
+ *
+ * Fires when ALL of:
+ *   - process alive
+ *   - RPC reachable + peers > 0          (so it's NOT a connectivity / peer-zero
+ *                                          problem — F3/F16 own that)
+ *   - height stalled past EVM_FORK_STALL_GRACE_MS (20 min)
+ *   - HealthChecker's medium-tick log probe set snap.evmForkDetected (≥3
+ *     "retrieved hash chain is invalid" lines in the recent EVM node-log tail)
+ *
+ * What it means: the local chaindata has diverged onto a minority fork, so geth
+ * rejects every canonical peer's header chain ("retrieved hash chain is
+ * invalid") and can never advance. A restart does NOT help — geth comes back on
+ * the same forked head (and a mining node re-mines the fork). The only recovery
+ * is to wipe the EVM chaindata (mining keystore preserved) and re-sync clean
+ * from peers.
+ *
+ * Tier AUTOMATED_SAFE: the engine auto-resyncs, but gated by a dedicated
+ * once-per-EVM_RESYNC_MIN_INTERVAL_MS budget (SelfHealingEngine) — a chain that
+ * re-forks inside that window escalates to OWNER_CONFIRMS instead of wiping in a
+ * loop. Destructive but recoverable (the chain re-syncs; keystore is always
+ * preserved), and the alternative is an indefinite silent outage. Honours the
+ * master autoExecuteSafe toggle like every AUTOMATED_SAFE rule.
+ *
+ * Runs BEFORE F4 in the detector queue; detectF4 also yields on
+ * snap.evmForkDetected so only F26 owns the fork case (no duplicate restart
+ * proposal).
+ */
+function detectF26(snap) {
+    if (!snap || !snap.processStatus || !snap.processStatus.alive) return null;
+    if (!snap.rpcSummary || !snap.rpcSummary.ok) return null;
+    // Require a positive peer count: the fork diagnosis is "we have peers but
+    // reject all their chains". A peerless node is F3/F16's domain, not F26's.
+    if (!(snap.rpcSummary.peers > 0)) return null;
+    // The definitive marker — set only by HealthChecker._probeEvmForkSignal.
+    if (!snap.evmForkDetected) return null;
+    // A freshly-started node may log transient sync errors before it settles;
+    // don't wipe it during the initial start grace.
+    if (withinInitialStartGrace(snap)) return null;
+    const firstStall = snap.ruleState && snap.ruleState.firstHeightStallAt;
+    if (!firstStall) return null;
+    if (Date.now() - firstStall < EVM_FORK_STALL_GRACE_MS) return null;
+
+    return {
+        ruleId: 'F26',
+        tier: HEALING_TIERS.AUTOMATED_SAFE,
+        summaryAction: `Auto-resync ${snap.chainId} (forked off the network)`,
+        summaryReason:
+            `${snap.chainId} has been stuck at block ${snap.rpcSummary.height} for >20 min and its `
+            + 'node log shows it rejecting every peer with "retrieved hash chain is invalid" — its '
+            + 'local chain data forked off the network and cannot recover by restarting. Auto-resync '
+            + 'wipes the chain data (mining keystore preserved) and re-syncs from peers.',
+        // stuckHeight lets the engine's auto-resolve sweep tell "still forked"
+        // from "recovered" (height climbed past it), mirroring F4's payload.
+        payload: { action: 'evm-fork-resync', chainId: snap.chainId, stuckHeight: snap.rpcSummary.height },
+    };
+}
+
+/**
  * Per-rule enable defaults. Per Architectural Invariant #7, healing ships
  * with F1 (auto-restart on unexpected exit) only. F2-F19 are off until
  * the operator opts in via /api/enm/healing/rules/:ruleId/enable.
@@ -961,6 +1036,9 @@ const RULE_METADATA = Object.freeze({
     // RPC unreachable (any of mainchain/esc/eid/pg).
     F23: { tier: 'CRITICAL_NOTIFY', title: 'Arbiter cross-chain unreachable',
            description: 'The Arbiter signs multisig payloads across all 4 chains. If any cross-chain RPC becomes unreachable, the Arbiter cannot validate or produce cross-chain signatures for that chain. Operator must investigate the affected chain; alert auto-clears when all 4 RPCs respond.' },
+    // v0.5.184 — Class B-only. EVM sidechain wedged on a minority fork.
+    F26: { tier: 'AUTOMATED_SAFE', title: 'Auto-resync wedged EVM fork',
+           description: 'On an EVM sidechain (ESC/EID/PG) that has been stuck for >20 min while its node log rejects every peer with "retrieved hash chain is invalid", the local chain data has forked off the network and a restart cannot recover it. Auto-resync wipes the chain data (mining keystore preserved) and re-syncs from peers. Rate-limited to once per chain per 24h; a chain that re-forks inside that window escalates to operator confirmation instead of wiping again.' },
 });
 
 // beta.3.22 — every rule is enabled by default. The operator-facing
@@ -995,6 +1073,7 @@ const DEFAULT_ENABLED = Object.freeze({
     F25: true,  // beta.4.00 — Class B miner address unset (alert-only)
     F24: true,  // beta.0.3.5 — Class C oracle parent offline (alert-only)
     F23: true,  // beta.0.3.14 — Class D arbiter cross-chain unreachable
+    F26: true,  // v0.5.184 — Class B wedged-fork auto-resync (rate-limited)
 });
 
 // Global rule overrides (apply to all chains). Pre-3.87 this was the only
@@ -1109,6 +1188,10 @@ function runAll(snap) {
         // alert with manual recovery steps; F4 stays suppressed by the
         // "one detection per rule per chain per tick" gate.
         ['F22', detectF22],
+        // v0.5.184 — F26 (Class B wedged-fork resync) also evaluates BEFORE
+        // F4: a forked EVM chain needs a wipe+resync, NOT a restart. detectF4
+        // additionally yields on snap.evmForkDetected so F26 owns the case.
+        ['F26', detectF26],
         ['F4',  detectF4],  ['F5',  detectF5],  ['F6',  detectF6],
         ['F7',  detectF7],  ['F8',  detectF8],  ['F9',  detectF9],
         ['F10', detectF10], ['F11', detectF11], ['F12', detectF12],
@@ -1146,7 +1229,8 @@ function runAll(snap) {
     // beta.4.00 (Wave M3.6) — Class B-only rules. F25 is mining-address
     // semantics that only apply to EVM sidechains; for mainchain (Class A)
     // or oracles (Class C) etc., the rule is silently skipped.
-    const CLASS_B_ONLY_RULES = new Set(['F25']);
+    // v0.5.184 — F26 (wedged-fork auto-resync) is EVM-sidechain-only.
+    const CLASS_B_ONLY_RULES = new Set(['F25', 'F26']);
     // beta.0.3.5 (Wave M4.5) — Class C-only rules. F24 fires only for
     // oracles (esc-oracle/eid-oracle/pg-oracle) where the parent-
     // chain abstraction exists.
@@ -1212,6 +1296,8 @@ module.exports = {
     detectF25,  // beta.4.00 (Wave M3.6)
     detectF24,  // beta.0.3.5 (Wave M4.5)
     detectF23,  // beta.0.3.14 (Wave M6.5)
+    detectF26,  // v0.5.184 — Class B wedged-fork auto-resync
+    EVM_FORK_STALL_GRACE_MS,
     PEER_ZERO_GRACE_MS,
     RPC_UNREACHABLE_GRACE_MS,
     HEIGHT_STALL_GRACE_MS,

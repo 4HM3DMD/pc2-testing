@@ -65,7 +65,7 @@ function backupKeystoreForTeardown() {
 const { openDb } = require('./db');
 
 // Services
-const { ENM_LOG_PREFIX, ENM_API_PREFIX, errorBody, successBody } = require('./services/EnmConstants');
+const { ENM_LOG_PREFIX, ENM_API_PREFIX, errorBody, successBody, SHUTDOWN_DRAIN_GRACE_MS } = require('./services/EnmConstants');
 const enmAuditMiddleware = require('./services/EnmAuditMiddleware');
 const ChainRegistry = require('./services/ChainRegistry');
 const { initSchema } = require('./services/EnmDb');
@@ -199,7 +199,7 @@ async function main() {
     //
     // Loopback-only — pc2-node calls us at 127.0.0.1; rejecting non-local
     // callers means a stray request can't trigger keystore copy operations.
-    api.post('/teardown', (req, res) => {
+    api.post('/teardown', async (req, res) => {
         const ip = req.ip || req.socket.remoteAddress || '';
         if (!ip.startsWith('127.') && ip !== '::1' && ip !== '::ffff:127.0.0.1') {
             return res.status(403).json(errorBody('teardown is loopback-only'));
@@ -219,6 +219,15 @@ async function main() {
                 // (clean leveldb flush for EVM geth, matching node.sh's SIGINT).
                 const flushed = ps.signalAll('SIGINT');
                 if (flushed > 0) { log('info', `teardown: sent SIGINT flush to ${flushed} child(ren)`); }
+                // v0.5.184 — AWAIT the children's clean exit before responding.
+                // pc2-node waits for this HTTP response before it SIGTERMs us,
+                // so blocking here gives EVM geth the tens of seconds it needs
+                // to flush leveldb. Without it the children were SIGKILLed
+                // mid-write by the teardown → dirty DB → fork on next boot.
+                if (flushed > 0 && typeof ps.awaitAllStopped === 'function') {
+                    const drain = await ps.awaitAllStopped(SHUTDOWN_DRAIN_GRACE_MS);
+                    log('info', `teardown: drain complete — ${drain.stopped}/${drain.total} stopped cleanly`);
+                }
             } catch (markErr) {
                 log('warn', `teardown: chain handling failed (non-fatal): ${markErr.message}`);
             }
@@ -487,7 +496,7 @@ async function main() {
     // safe even if init() is re-called (pre-deploy or hot-reload).
     if (!global.__enmSignalHandlersInstalled) {
         global.__enmSignalHandlersInstalled = true;
-        const onShutdown = (signal) => {
+        const onShutdown = async (signal) => {
             log('info', `received ${signal} — pre-marking running chains as manualStop`);
             try {
                 const ps = ChainRegistry.getProcessService();
@@ -500,6 +509,19 @@ async function main() {
                 // manual FIRST keeps the resulting exits classified manual.
                 const flushed = ps.signalAll('SIGINT');
                 if (flushed > 0) { log('info', `${signal}: sent SIGINT flush to ${flushed} child(ren)`); }
+                // v0.5.184 — AWAIT the children's clean exit (bounded) so EVM
+                // geth finishes its leveldb flush before the process tree is
+                // torn down. Once a signal listener is attached Node no longer
+                // auto-exits, so the poll timers inside awaitAllStopped keep the
+                // loop alive until the children are down (or the grace expires).
+                // This is the deploy-bounce re-fork fix: pre-v0.5.184 ENM fired
+                // SIGINT then exited within ms → geth SIGKILLed mid-write.
+                // (uncaughtException path calls process.exit(1) right after this
+                // returns, so it intentionally skips the wait — crash = exit fast.)
+                if (flushed > 0 && typeof ps.awaitAllStopped === 'function') {
+                    const drain = await ps.awaitAllStopped(SHUTDOWN_DRAIN_GRACE_MS);
+                    log('info', `${signal}: drain complete — ${drain.stopped}/${drain.total} stopped cleanly`);
+                }
             } catch (err) {
                 log('warn', `${signal}: shutdown chain handling failed (non-fatal): ${err.message}`);
             }
