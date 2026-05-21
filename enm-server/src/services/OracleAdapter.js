@@ -518,6 +518,89 @@ class OracleAdapter extends ChainAdapter {
         } catch (_) { /* parent RPC unreachable; parentBlockHeight stays null */ }
         return out;
     }
+
+    /**
+     * v0.5.186 (Council Node UX P1.2) — real, truthful status for the Oracle
+     * view. The oracle dashboard previously showed almost nothing because the
+     * backend exposed only PID + parentBlockHeight. This surfaces what we CAN
+     * honestly know without fabricating:
+     *   - parentReachable / parentBlockHeight: can the oracle reach the EVM
+     *     sidechain it relays FROM (it's useless if not)? Real eth_blockNumber probe.
+     *   - lastLogAt: the oracle log file's mtime = the last time the relayer
+     *     actually produced output (a real liveness/activity signal, not a guess).
+     *   - lastError: the most recent error-shaped line in the log tail, or null.
+     * Everything stays null when genuinely unknown — the UI renders "—" rather
+     * than inventing a value. Best-effort; never throws.
+     *
+     * @param {object} cfg  this oracle's chain config (unused; parent from full cfg)
+     * @returns {Promise<{parentChainId:string|null, parentReachable:boolean|null,
+     *   parentBlockHeight:number|null, lastLogAt:number|null, lastError:string|null}>}
+     */
+    async oracleStatus(cfg) {  // eslint-disable-line no-unused-vars
+        const out = {
+            parentChainId: this.parentChainId || null,
+            parentReachable: null,
+            parentBlockHeight: null,
+            lastLogAt: null,
+            lastError: null,
+        };
+        try {
+            const full = await ConfigStore.load();
+            const parent = full && full.chains && full.chains[this.parentChainId];
+            if (parent && parent.ports && parent.ports.rpc) {
+                const rpc = new EthRpcClient({ host: '127.0.0.1', port: parent.ports.rpc });
+                const v = await rpc.getBlockNumber();
+                if (typeof v === 'number') {
+                    out.parentReachable = true;
+                    out.parentBlockHeight = v;
+                } else {
+                    out.parentReachable = false;
+                }
+            }
+        } catch (_) { out.parentReachable = false; }
+        try {
+            const probe = await this._probeOracleLog();
+            out.lastLogAt = probe.lastLogAt;
+            out.lastError = probe.lastError;
+        } catch (_) { /* log unreadable — fields stay null */ }
+        return out;
+    }
+
+    /**
+     * @private — tail the oracle's node log for liveness + last error. Returns
+     * { lastLogAt (file mtime ms), lastError (recent error-shaped line | null) }.
+     * Bounded 32KB read; never throws.
+     */
+    async _probeOracleLog() {
+        const out = { lastLogAt: null, lastError: null };
+        const MAX = 32 * 1024;
+        const ERROR_RE = /\b(error|failed|failure|econnrefused|exception|cannot|unhandled)\b/i;
+        const logDir = path.join(chainDir(this.chainId), 'logs');
+        const entries = await fs.promises.readdir(logDir).catch(() => []);
+        const logs = entries.filter((n) => /\.log$/.test(n)).sort();
+        if (logs.length === 0) return out;
+        const full = path.join(logDir, logs[logs.length - 1]);
+        const stat = await fs.promises.stat(full).catch(() => null);
+        if (!stat) return out;
+        out.lastLogAt = stat.mtimeMs;
+        const start = Math.max(0, stat.size - MAX);
+        const fd = await fs.promises.open(full, 'r');
+        try {
+            const buf = Buffer.alloc(stat.size - start);
+            await fd.read(buf, 0, buf.length, start);
+            const lines = buf.toString('utf8').split('\n');
+            for (let i = lines.length - 1; i >= 0; i--) {
+                const line = lines[i].trim();
+                if (line && ERROR_RE.test(line)) {
+                    out.lastError = line.slice(0, 200);
+                    break;
+                }
+            }
+        } finally {
+            await fd.close().catch(() => {});
+        }
+        return out;
+    }
 }
 
 module.exports = OracleAdapter;

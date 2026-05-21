@@ -40,6 +40,15 @@ const HostConflictScanner = require('../services/HostConflictScanner');
 const ChainRegistry = require('../services/ChainRegistry');
 
 /**
+ * Sentinel thrown from inside a ConfigStore.update mutator to abort the atomic
+ * write when a cfg-dependent precondition fails (e.g. Council strategy not yet
+ * set, chain already configured). update() runs the mutator before _saveInner,
+ * so throwing here guarantees nothing is persisted; the caller stashes the HTTP
+ * status/body in a closure and maps the abort back to that response.
+ */
+class SetupAbort extends Error {}
+
+/**
  * @param {object} extensionHandle
  * @returns {import('express').Router}
  */
@@ -383,14 +392,20 @@ function build(extensionHandle) {
                     if (s.phase === 'done' && s.binaryPath) {
                         clearInterval(onPhase);
                         try {
-                            const cfg = await ConfigStore.load();
-                            if (cfg.chains && cfg.chains[chainId]) {
-                                cfg.chains[chainId].binaryPath = s.binaryPath;
-                                cfg.chains[chainId].binaryVersion = s.version || '';
-                                // beta.0.5.0 — stamp install time so F8
-                                // suppresses version-drift for 1h after install.
-                                cfg.chains[chainId].binaryInstalledAt = Date.now();
-                                await ConfigStore.save(cfg);
+                            // Atomic read-modify-write (P0-7) — this runs in a
+                            // background timer that can race operator saves.
+                            let wrote = false;
+                            await ConfigStore.update((cfg) => {
+                                if (cfg.chains && cfg.chains[chainId]) {
+                                    cfg.chains[chainId].binaryPath = s.binaryPath;
+                                    cfg.chains[chainId].binaryVersion = s.version || '';
+                                    // beta.0.5.0 — stamp install time so F8
+                                    // suppresses version-drift for 1h after install.
+                                    cfg.chains[chainId].binaryInstalledAt = Date.now();
+                                    wrote = true;
+                                }
+                            });
+                            if (wrote) {
                                 extensionHandle.log.info(
                                     `${ENM_LOG_PREFIX} install ${chainId} (Class B): wrote `
                                     + `binaryPath=${s.binaryPath} version=${s.version || 'unknown'} into cfg`,
@@ -859,43 +874,44 @@ function build(extensionHandle) {
             const rpcPasswordPlain = crypto.randomBytes(24).toString('hex');
             const rpcPasswordEnvelope = encrypt(rpcPasswordPlain);
 
-            // --- Compose chains.mainchain config. ---
-            const cfg = await ConfigStore.load();
-            cfg.chains = cfg.chains || {};
-            cfg.chains.mainchain = {
-                enabled: true,
-                binaryPath: stateRow.binary_path,
-                binaryVersion: stateRow.binary_version || null,
-                // beta.0.5.0 — stamp install time so F8 suppresses
-                // version-drift proposals for 1h after install.
-                binaryInstalledAt: Date.now(),
-                dataDir: chainDir('mainchain'),
-                activeNet: 'mainnet',
-                ports: { ...ELA_DEFAULT_PORTS },
-                rpc: {
-                    user: 'ela',
-                    passwordEncrypted: rpcPasswordEnvelope,
-                    whiteIPList: ['127.0.0.1'],
-                },
-                dpos: {
-                    enableArbiter,
-                    ipAddressMode: ipMode,
-                    ipAddressManual: ipManual,
-                    refreshOnRestart: true,
-                    ownerPublicKey: '',
-                    nodePublicKey: '',
-                    keystorePasswordEncrypted: keystoreEnvelope,
-                },
-                memoryLimitMb: 4096,
-                archiveMode: false,
-                logLevel: 'info',
-            };
-            cfg.setup = cfg.setup || {};
-            cfg.setup.completed = true;
-            cfg.setup.completedAt = Date.now();
-            cfg.setup.completedStep = 'complete';
-
-            await ConfigStore.save(cfg, { logger: extensionHandle.log });
+            // --- Compose chains.mainchain config. Atomic read-modify-write
+            // (P0-7) so a concurrent timer save can't clobber the wizard's
+            // freshly-built mainchain config. ---
+            await ConfigStore.update((cfg) => {
+                cfg.chains = cfg.chains || {};
+                cfg.chains.mainchain = {
+                    enabled: true,
+                    binaryPath: stateRow.binary_path,
+                    binaryVersion: stateRow.binary_version || null,
+                    // beta.0.5.0 — stamp install time so F8 suppresses
+                    // version-drift proposals for 1h after install.
+                    binaryInstalledAt: Date.now(),
+                    dataDir: chainDir('mainchain'),
+                    activeNet: 'mainnet',
+                    ports: { ...ELA_DEFAULT_PORTS },
+                    rpc: {
+                        user: 'ela',
+                        passwordEncrypted: rpcPasswordEnvelope,
+                        whiteIPList: ['127.0.0.1'],
+                    },
+                    dpos: {
+                        enableArbiter,
+                        ipAddressMode: ipMode,
+                        ipAddressManual: ipManual,
+                        refreshOnRestart: true,
+                        ownerPublicKey: '',
+                        nodePublicKey: '',
+                        keystorePasswordEncrypted: keystoreEnvelope,
+                    },
+                    memoryLimitMb: 4096,
+                    archiveMode: false,
+                    logLevel: 'info',
+                };
+                cfg.setup = cfg.setup || {};
+                cfg.setup.completed = true;
+                cfg.setup.completedAt = Date.now();
+                cfg.setup.completedStep = 'complete';
+            }, { logger: extensionHandle.log });
 
             // --- Mark setup-state row complete. ---
             const now = Date.now();
@@ -965,8 +981,10 @@ function build(extensionHandle) {
     router.post('/council-strategy', limit('admin'), requireOwner, async (req, res) => {
         try {
             const body = req.body || {};
-            const cfg = await ConfigStore.load();
-            const council = (cfg.global && cfg.global.council) || {};
+            // Validate body + build the patch of resolved fields up front (none
+            // of these checks depend on cfg) so the 400 early-returns stay at the
+            // top level and a rejected request never touches the config file.
+            const councilPatch = {};
             // Password strategy.
             if (body.passwordStrategy !== undefined) {
                 const ps = String(body.passwordStrategy);
@@ -975,7 +993,7 @@ function build(extensionHandle) {
                         'passwordStrategy must be one of "shared" | "per-chain"',
                     ));
                 }
-                council.passwordStrategy = ps;
+                councilPatch.passwordStrategy = ps;
                 if (ps === 'shared') {
                     // Require operator to supply the actual password so we
                     // can encrypt it now (per-chain installs reuse this
@@ -993,10 +1011,10 @@ function build(extensionHandle) {
                             'sharedPassword fails complexity: must be 16+ chars with upper, lower, digit, non-alnum',
                         ));
                     }
-                    council.sharedPasswordEncrypted = EnmCrypto.encrypt(body.sharedPassword);
+                    councilPatch.sharedPasswordEncrypted = EnmCrypto.encrypt(body.sharedPassword);
                 } else {
                     // Per-chain — clear any prior shared envelope.
-                    council.sharedPasswordEncrypted = '';
+                    councilPatch.sharedPasswordEncrypted = '';
                 }
             }
             // Miner-address strategy.
@@ -1007,7 +1025,7 @@ function build(extensionHandle) {
                         'minerAddressStrategy must be one of "shared" | "per-chain"',
                     ));
                 }
-                council.minerAddressStrategy = ms;
+                councilPatch.minerAddressStrategy = ms;
                 if (ms === 'shared') {
                     if (typeof body.sharedMinerAddress !== 'string' || body.sharedMinerAddress.length === 0) {
                         return res.status(400).json(errorBody(
@@ -1021,21 +1039,27 @@ function build(extensionHandle) {
                             `sharedMinerAddress: ${v.warning}`,
                         ));
                     }
-                    council.sharedMinerAddress = v.normalized || body.sharedMinerAddress;
+                    councilPatch.sharedMinerAddress = v.normalized || body.sharedMinerAddress;
                 } else {
-                    council.sharedMinerAddress = '';
+                    councilPatch.sharedMinerAddress = '';
                 }
             }
-            // Mark setup-complete when both strategies are set + at least
-            // one of them was passed in this request (i.e. the operator
-            // just finalized).
-            if (council.passwordStrategy && council.minerAddressStrategy) {
-                council.setupCompletedAt = Date.now();
-            }
-            // Ensure the council subdoc exists on cfg.global.
-            cfg.global = cfg.global || {};
-            cfg.global.council = council;
-            await ConfigStore.save(cfg);
+            // Atomic read-modify-write (P0-7). Merge the patch onto the freshly-
+            // loaded council subdoc; capture the result via closure for the
+            // response + log.
+            let council;
+            await ConfigStore.update((cfg) => {
+                cfg.global = cfg.global || {};
+                council = cfg.global.council || {};
+                Object.assign(council, councilPatch);
+                // Mark setup-complete when both strategies are set + at least
+                // one of them was passed in this request (i.e. the operator
+                // just finalized).
+                if (council.passwordStrategy && council.minerAddressStrategy) {
+                    council.setupCompletedAt = Date.now();
+                }
+                cfg.global.council = council;
+            });
             extensionHandle.log.info(
                 `${ENM_LOG_PREFIX} POST /setup/council-strategy saved: `
                 + `password=${council.passwordStrategy} address=${council.minerAddressStrategy}`,
@@ -1098,66 +1122,10 @@ function build(extensionHandle) {
             }
             const activeNet = body.activeNet === 'testnet' ? 'testnet' : 'mainnet';
 
-            const cfg = await ConfigStore.load();
-            const council = (cfg.global && cfg.global.council) || {};
-            // Pre-requisite check 1 — Layer 1 strategy answered.
-            if (!council.passwordStrategy || !council.minerAddressStrategy) {
-                return res.status(412).json(errorBody(
-                    'install-class-b: Council strategy not set. POST '
-                    + '/api/enm/setup/council-strategy with passwordStrategy + '
-                    + 'minerAddressStrategy before installing the first Class B chain.',
-                ));
-            }
-            // Pre-requisite check 2 — already-installed-chain idempotency.
-            if (cfg.chains && cfg.chains[chainId]) {
-                return res.status(409).json(errorBody(
-                    `install-class-b: chain "${chainId}" is already configured. `
-                    + 'Use the Settings tab on its pane to edit; uninstall first if you need to reset.',
-                ));
-            }
-            // Resolve miner.rewardAddress per strategy.
-            let rewardAddress = '';
-            let rewardAddressSource = council.minerAddressStrategy;
-            if (council.minerAddressStrategy === 'shared') {
-                rewardAddress = council.sharedMinerAddress || '';
-                if (!rewardAddress) {
-                    return res.status(412).json(errorBody(
-                        'install-class-b: minerAddressStrategy="shared" but sharedMinerAddress not set. '
-                        + 'Re-run council-strategy with sharedMinerAddress populated.',
-                    ));
-                }
-            } else if ((body.miner && body.miner.rewardAddress) || body.miner === undefined) {
-                rewardAddress = String((body.miner && body.miner.rewardAddress) || '');
-                if (rewardAddress) {
-                    const v = EnmCrypto.validateEthAddress(rewardAddress);
-                    if (!v.valid) {
-                        return res.status(400).json(errorBody(
-                            `miner.rewardAddress: ${v.warning}`,
-                        ));
-                    }
-                    rewardAddress = v.normalized || rewardAddress;
-                }
-            }
-            // Resolve EVM keystore password envelope per strategy.
-            let evmKeystorePasswordEncrypted = '';
-            if (council.passwordStrategy === 'shared') {
-                evmKeystorePasswordEncrypted = council.sharedPasswordEncrypted || '';
-                if (!evmKeystorePasswordEncrypted) {
-                    return res.status(412).json(errorBody(
-                        'install-class-b: passwordStrategy="shared" but sharedPasswordEncrypted not set. '
-                        + 'Re-run council-strategy with sharedPassword supplied.',
-                    ));
-                }
-            } else if (typeof body.evmKeystorePassword === 'string' && body.evmKeystorePassword.length > 0) {
-                if (!EnmCrypto.validatePasswordComplexity(body.evmKeystorePassword)) {
-                    return res.status(400).json(errorBody(
-                        'install-class-b: evmKeystorePassword fails complexity '
-                        + '(16+ chars, upper + lower + digit + non-alnum required).',
-                    ));
-                }
-                evmKeystorePasswordEncrypted = EnmCrypto.encrypt(body.evmKeystorePassword);
-            }
-            // EVM keystore address (optional pass-through).
+            // Threads + sync.mode + EVM keystore-addr + sha256 validations are
+            // body-only; resolve them up front so their 400s stay at the top
+            // level. The council-derived resolution + idempotency check + assign
+            // happen inside the atomic update() below (P0-7) against a fresh cfg.
             let evmKeystoreAddr = '';
             if (body.miner && body.miner.evmKeystoreAddr) {
                 const v = EnmCrypto.validateEthAddress(String(body.miner.evmKeystoreAddr));
@@ -1204,43 +1172,123 @@ function build(extensionHandle) {
                 }
                 binarySha256Expected = body.binarySha256Expected.toLowerCase();
             }
-            // Assemble the chain cfg block.
-            const ports = ClassBPorts.portsFor(chainId, activeNet);
-            const chainCfg = {
-                enabled: false,           // operator flips after M3.8 binary download
-                binaryPath: '',           // filled by M3.8 install endpoint
-                binaryVersion: '',
-                // beta.0.5.0 — stamped when the binary download endpoint
-                // persists the resolved path/version (see M3.8 polling loop).
-                binaryInstalledAt: null,
-                activeNet,
-                ports,
-                pbft: {
-                    usesMainchainKeystore: true,  // H23 invariant
-                    ipAddress: null,              // EnmIpResolver fills at start
-                },
-                miner: {
-                    enabled: !!minerEnabled,
-                    rewardAddress,
-                    rewardAddressSource,
-                    evmKeystoreAddr,
-                    evmKeystorePasswordEncrypted,
-                    threads,
-                },
-                sync: { mode: syncMode },
-                bootnodes: [],
-                healing: { enabledRules: {} },
-                binarySha256Expected,   // empty for esc/eid; required for pg
-            };
-            cfg.chains = cfg.chains || {};
-            cfg.chains[chainId] = chainCfg;
-            await ConfigStore.save(cfg);
+
+            // Atomic read-modify-write (P0-7). The council-strategy + idempotency
+            // preconditions and the per-chain reward/password validation read the
+            // freshly-loaded cfg; on failure we stash the HTTP error and throw a
+            // sentinel so update() aborts the write (nothing persisted).
+            let chainCfg = null;
+            let httpError = null;
+            const savedCfg = await ConfigStore.update((cfg) => {
+                const council = (cfg.global && cfg.global.council) || {};
+                // Pre-requisite check 1 — Layer 1 strategy answered.
+                if (!council.passwordStrategy || !council.minerAddressStrategy) {
+                    httpError = { status: 412, body: errorBody(
+                        'install-class-b: Council strategy not set. POST '
+                        + '/api/enm/setup/council-strategy with passwordStrategy + '
+                        + 'minerAddressStrategy before installing the first Class B chain.',
+                    ) };
+                    throw new SetupAbort();
+                }
+                // Pre-requisite check 2 — already-installed-chain idempotency.
+                if (cfg.chains && cfg.chains[chainId]) {
+                    httpError = { status: 409, body: errorBody(
+                        `install-class-b: chain "${chainId}" is already configured. `
+                        + 'Use the Settings tab on its pane to edit; uninstall first if you need to reset.',
+                    ) };
+                    throw new SetupAbort();
+                }
+                // Resolve miner.rewardAddress per strategy.
+                let rewardAddress = '';
+                const rewardAddressSource = council.minerAddressStrategy;
+                if (council.minerAddressStrategy === 'shared') {
+                    rewardAddress = council.sharedMinerAddress || '';
+                    if (!rewardAddress) {
+                        httpError = { status: 412, body: errorBody(
+                            'install-class-b: minerAddressStrategy="shared" but sharedMinerAddress not set. '
+                            + 'Re-run council-strategy with sharedMinerAddress populated.',
+                        ) };
+                        throw new SetupAbort();
+                    }
+                } else if ((body.miner && body.miner.rewardAddress) || body.miner === undefined) {
+                    rewardAddress = String((body.miner && body.miner.rewardAddress) || '');
+                    if (rewardAddress) {
+                        const v = EnmCrypto.validateEthAddress(rewardAddress);
+                        if (!v.valid) {
+                            httpError = { status: 400, body: errorBody(
+                                `miner.rewardAddress: ${v.warning}`,
+                            ) };
+                            throw new SetupAbort();
+                        }
+                        rewardAddress = v.normalized || rewardAddress;
+                    }
+                }
+                // Resolve EVM keystore password envelope per strategy.
+                let evmKeystorePasswordEncrypted = '';
+                if (council.passwordStrategy === 'shared') {
+                    evmKeystorePasswordEncrypted = council.sharedPasswordEncrypted || '';
+                    if (!evmKeystorePasswordEncrypted) {
+                        httpError = { status: 412, body: errorBody(
+                            'install-class-b: passwordStrategy="shared" but sharedPasswordEncrypted not set. '
+                            + 'Re-run council-strategy with sharedPassword supplied.',
+                        ) };
+                        throw new SetupAbort();
+                    }
+                } else if (typeof body.evmKeystorePassword === 'string' && body.evmKeystorePassword.length > 0) {
+                    if (!EnmCrypto.validatePasswordComplexity(body.evmKeystorePassword)) {
+                        httpError = { status: 400, body: errorBody(
+                            'install-class-b: evmKeystorePassword fails complexity '
+                            + '(16+ chars, upper + lower + digit + non-alnum required).',
+                        ) };
+                        throw new SetupAbort();
+                    }
+                    evmKeystorePasswordEncrypted = EnmCrypto.encrypt(body.evmKeystorePassword);
+                }
+                // Assemble the chain cfg block.
+                const ports = ClassBPorts.portsFor(chainId, activeNet);
+                chainCfg = {
+                    enabled: false,           // operator flips after M3.8 binary download
+                    binaryPath: '',           // filled by M3.8 install endpoint
+                    binaryVersion: '',
+                    // beta.0.5.0 — stamped when the binary download endpoint
+                    // persists the resolved path/version (see M3.8 polling loop).
+                    binaryInstalledAt: null,
+                    activeNet,
+                    ports,
+                    pbft: {
+                        usesMainchainKeystore: true,  // H23 invariant
+                        ipAddress: null,              // EnmIpResolver fills at start
+                    },
+                    miner: {
+                        enabled: !!minerEnabled,
+                        rewardAddress,
+                        rewardAddressSource,
+                        evmKeystoreAddr,
+                        evmKeystorePasswordEncrypted,
+                        threads,
+                    },
+                    sync: { mode: syncMode },
+                    bootnodes: [],
+                    healing: { enabledRules: {} },
+                    binarySha256Expected,   // empty for esc/eid; required for pg
+                };
+                cfg.chains = cfg.chains || {};
+                cfg.chains[chainId] = chainCfg;
+            }).catch((err) => {
+                if (err instanceof SetupAbort) {
+                    return null; // handled below via httpError
+                }
+                throw err;
+            });
+            if (httpError) {
+                return res.status(httpError.status).json(httpError.body);
+            }
 
             // Register the adapter immediately so listChains / overview pick
             // it up without waiting for a reboot.
             try {
                 const ChainRegistry = require('../services/ChainRegistry');
-                ChainRegistry.registerConfiguredAdapters({ cfg });
+                ChainRegistry.registerConfiguredAdapters({ cfg: savedCfg });
             } catch (err) {
                 extensionHandle.log.warn(
                     `${ENM_LOG_PREFIX} install-class-b ${chainId}: post-install register failed: ${err.message}`,
@@ -1334,51 +1382,68 @@ function build(extensionHandle) {
                 ));
             }
 
-            const cfg = await ConfigStore.load();
-            // Pre-req 1 — parent chain must be configured.
-            if (!cfg.chains || !cfg.chains[parentChainId]) {
-                return res.status(412).json(errorBody(
-                    `install-class-c: parent chain "${parentChainId}" not configured. `
-                    + `Install ${parentChainId} (M3.5) before installing its oracle.`,
-                ));
-            }
-            // Pre-req 2 — already-installed idempotency.
-            if (cfg.chains[chainId]) {
-                return res.status(409).json(errorBody(
-                    `install-class-c: oracle "${chainId}" is already configured.`,
-                ));
-            }
-            // Pre-req 3 — Node.js runtime must be resolvable.
+            // Atomic read-modify-write (P0-7). cfg-dependent preconditions +
+            // the (async) Node.js runtime check run inside the mutator to
+            // preserve exact ordering; failures stash an HTTP error and throw a
+            // sentinel so update() aborts the write.
             const NodeJsRuntime = require('../services/NodeJsRuntime');
-            const runtime = await NodeJsRuntime.resolveAny();
-            if (!runtime) {
-                return res.status(412).json(errorBody(
-                    'install-class-c: no Node.js runtime detected. POST '
-                    + '/api/enm/setup/install-node-runtime first (M4.3) or '
-                    + 'install Node.js v23.10.0 on the host.',
-                ));
+            let httpError = null;
+            let runtime = null;
+            const savedCfg = await ConfigStore.update(async (cfg) => {
+                // Pre-req 1 — parent chain must be configured.
+                if (!cfg.chains || !cfg.chains[parentChainId]) {
+                    httpError = { status: 412, body: errorBody(
+                        `install-class-c: parent chain "${parentChainId}" not configured. `
+                        + `Install ${parentChainId} (M3.5) before installing its oracle.`,
+                    ) };
+                    throw new SetupAbort();
+                }
+                // Pre-req 2 — already-installed idempotency.
+                if (cfg.chains[chainId]) {
+                    httpError = { status: 409, body: errorBody(
+                        `install-class-c: oracle "${chainId}" is already configured.`,
+                    ) };
+                    throw new SetupAbort();
+                }
+                // Pre-req 3 — Node.js runtime must be resolvable.
+                runtime = await NodeJsRuntime.resolveAny();
+                if (!runtime) {
+                    httpError = { status: 412, body: errorBody(
+                        'install-class-c: no Node.js runtime detected. POST '
+                        + '/api/enm/setup/install-node-runtime first (M4.3) or '
+                        + 'install Node.js v23.10.0 on the host.',
+                    ) };
+                    throw new SetupAbort();
+                }
+                // Compose cfg block.
+                cfg.chains[chainId] = {
+                    enabled: false,                  // operator flips after install
+                    binaryPath: runtime.path,         // the node interpreter
+                    binaryVersion: runtime.version.raw,
+                    // beta.0.5.0 — stamp install time so F8 suppresses
+                    // version-drift proposals for 1h after install.
+                    binaryInstalledAt: Date.now(),
+                    activeNet,
+                    parentChainId,
+                    scriptPath,
+                    nodejsVersion: NodeJsRuntime.PINNED_VERSION,
+                    ports: { httpRpc },
+                    parent: { chainRpcUrl: '', mainchainRpcUrl: '' },
+                    healing: { enabledRules: {} },
+                };
+            }).catch((err) => {
+                if (err instanceof SetupAbort) {
+                    return null; // handled below via httpError
+                }
+                throw err;
+            });
+            if (httpError) {
+                return res.status(httpError.status).json(httpError.body);
             }
-            // Compose cfg block.
-            cfg.chains[chainId] = {
-                enabled: false,                  // operator flips after install
-                binaryPath: runtime.path,         // the node interpreter
-                binaryVersion: runtime.version.raw,
-                // beta.0.5.0 — stamp install time so F8 suppresses
-                // version-drift proposals for 1h after install.
-                binaryInstalledAt: Date.now(),
-                activeNet,
-                parentChainId,
-                scriptPath,
-                nodejsVersion: NodeJsRuntime.PINNED_VERSION,
-                ports: { httpRpc },
-                parent: { chainRpcUrl: '', mainchainRpcUrl: '' },
-                healing: { enabledRules: {} },
-            };
-            await ConfigStore.save(cfg);
             // Register the adapter immediately so it appears in listChains.
             try {
                 const ChainRegistry = require('../services/ChainRegistry');
-                ChainRegistry.registerConfiguredAdapters({ cfg });
+                ChainRegistry.registerConfiguredAdapters({ cfg: savedCfg });
             } catch (err) {
                 extensionHandle.log.warn(
                     `${ENM_LOG_PREFIX} install-class-c ${chainId}: registerConfiguredAdapters failed: ${err.message}`,
@@ -1390,7 +1455,7 @@ function build(extensionHandle) {
             );
             return res.json(successBody({
                 chainId,
-                chainCfg: cfg.chains[chainId],
+                chainCfg: savedCfg.chains[chainId],
                 next: 'POST /api/enm/chains/' + chainId + '/start to bring it online',
             }));
         } catch (err) {
@@ -1425,67 +1490,85 @@ function build(extensionHandle) {
             const ArbiterAdapter = require('../services/ArbiterAdapter');
 
             const activeNet = body.activeNet === 'testnet' ? 'testnet' : 'mainnet';
-            const cfg = await ConfigStore.load();
-            // Pre-req: all 4 chains configured (M6.1 helper).
-            try {
-                ArbiterAdapter.preflightAllChainsConfigured(cfg.chains || {});
-            } catch (e) {
-                return res.status(412).json(errorBody(e.message));
-            }
-            // Idempotency.
-            if (cfg.chains && cfg.chains.arbiter) {
-                return res.status(409).json(errorBody(
-                    'install-class-d: arbiter already configured.',
-                ));
-            }
-            // Mining address (ELA mainchain).
-            const miningAddress = String(body.miningAddress || '').trim();
-            if (!miningAddress) {
-                return res.status(400).json(errorBody(
-                    'install-class-d: miningAddress is required (ELA mainchain address).',
-                ));
-            }
-            const v = EnmCrypto.validateElaAddress(miningAddress);
-            if (!v.valid) {
-                return res.status(400).json(errorBody(`miningAddress: ${v.warning}`));
-            }
-            const sideChainPowFeeEla = (typeof body.sideChainPowFeeEla === 'number'
-                && body.sideChainPowFeeEla >= 0 && body.sideChainPowFeeEla <= 100)
-                ? body.sideChainPowFeeEla : 0.1;
+            // Atomic read-modify-write (P0-7). cfg-dependent preconditions +
+            // body validations run inside the mutator (preserving order); a
+            // failed precondition stashes an HTTP error and throws a sentinel so
+            // update() aborts the write.
+            let httpError = null;
+            let miningAddress = '';
+            const savedCfg = await ConfigStore.update((cfg) => {
+                // Pre-req: all 4 chains configured (M6.1 helper).
+                try {
+                    ArbiterAdapter.preflightAllChainsConfigured(cfg.chains || {});
+                } catch (e) {
+                    httpError = { status: 412, body: errorBody(e.message) };
+                    throw new SetupAbort();
+                }
+                // Idempotency.
+                if (cfg.chains && cfg.chains.arbiter) {
+                    httpError = { status: 409, body: errorBody(
+                        'install-class-d: arbiter already configured.',
+                    ) };
+                    throw new SetupAbort();
+                }
+                // Mining address (ELA mainchain).
+                miningAddress = String(body.miningAddress || '').trim();
+                if (!miningAddress) {
+                    httpError = { status: 400, body: errorBody(
+                        'install-class-d: miningAddress is required (ELA mainchain address).',
+                    ) };
+                    throw new SetupAbort();
+                }
+                const v = EnmCrypto.validateElaAddress(miningAddress);
+                if (!v.valid) {
+                    httpError = { status: 400, body: errorBody(`miningAddress: ${v.warning}`) };
+                    throw new SetupAbort();
+                }
+                const sideChainPowFeeEla = (typeof body.sideChainPowFeeEla === 'number'
+                    && body.sideChainPowFeeEla >= 0 && body.sideChainPowFeeEla <= 100)
+                    ? body.sideChainPowFeeEla : 0.1;
 
-            // Canonical Arbiter ports per plan §14 (mainnet 20536/20538;
-            // testnet 21536/21538 per H19 21xxx range).
-            const ports = activeNet === 'testnet'
-                ? { rpc: 21536, p2p: 21538 }
-                : { rpc: 20536, p2p: 20538 };
+                // Canonical Arbiter ports per plan §14 (mainnet 20536/20538;
+                // testnet 21536/21538 per H19 21xxx range).
+                const ports = activeNet === 'testnet'
+                    ? { rpc: 21536, p2p: 21538 }
+                    : { rpc: 20536, p2p: 20538 };
 
-            cfg.chains.arbiter = {
-                enabled: false,           // operator flips after install
-                binaryPath: '',           // M3.8-style download path; M6.7 lands binary
-                binaryVersion: '',
-                // beta.0.5.0 — stamped by the M3.8-style binary download
-                // path when arbiter binary actually lands.
-                binaryInstalledAt: null,
-                activeNet,
-                ports,
-                wallet: {
-                    usesMainchainKeystore: true,           // H23 invariant
-                    passwordSource: 'mainchain-ela-txt',
-                },
-                mining: {
-                    miningAddress,
-                    sideChainPowFeeEla,
-                },
-                crossChain: {
-                    sideNodeList: [],                       // auto-populated at start
-                    syncIntervalMs: 1000,                   // plan §14
-                },
-                healing: { enabledRules: {} },
-            };
-            await ConfigStore.save(cfg);
+                cfg.chains.arbiter = {
+                    enabled: false,           // operator flips after install
+                    binaryPath: '',           // M3.8-style download path; M6.7 lands binary
+                    binaryVersion: '',
+                    // beta.0.5.0 — stamped by the M3.8-style binary download
+                    // path when arbiter binary actually lands.
+                    binaryInstalledAt: null,
+                    activeNet,
+                    ports,
+                    wallet: {
+                        usesMainchainKeystore: true,           // H23 invariant
+                        passwordSource: 'mainchain-ela-txt',
+                    },
+                    mining: {
+                        miningAddress,
+                        sideChainPowFeeEla,
+                    },
+                    crossChain: {
+                        sideNodeList: [],                       // auto-populated at start
+                        syncIntervalMs: 1000,                   // plan §14
+                    },
+                    healing: { enabledRules: {} },
+                };
+            }).catch((err) => {
+                if (err instanceof SetupAbort) {
+                    return null; // handled below via httpError
+                }
+                throw err;
+            });
+            if (httpError) {
+                return res.status(httpError.status).json(httpError.body);
+            }
             try {
                 const ChainRegistry = require('../services/ChainRegistry');
-                ChainRegistry.registerConfiguredAdapters({ cfg });
+                ChainRegistry.registerConfiguredAdapters({ cfg: savedCfg });
             } catch (err) {
                 extensionHandle.log.warn(
                     `${ENM_LOG_PREFIX} install-class-d: registerConfiguredAdapters failed: ${err.message}`,
@@ -1497,7 +1580,7 @@ function build(extensionHandle) {
             );
             return res.json(successBody({
                 chainId: 'arbiter',
-                chainCfg: cfg.chains.arbiter,
+                chainCfg: savedCfg.chains.arbiter,
                 next: 'POST /api/enm/setup/install/arbiter to download the binary',
             }));
         } catch (err) {
@@ -2011,31 +2094,42 @@ async function runCouncilInstall(args) {
     try {
         // ---- STEP 1 — Layer 1 council strategy ----
         await runStep('council-strategy', async () => {
-            const cfg2 = await ConfigStore.load();
-            cfg2.global = cfg2.global || {};
-            const c = cfg2.global.council = cfg2.global.council || {};
-            if (c.passwordStrategy === 'shared'
-                && c.minerAddressStrategy === 'shared'
-                && (c.masterPasswordEncrypted || c.sharedPasswordEncrypted)
-                && c.sharedMinerAddress) {
+            // Atomic read-modify-write (P0-7). Idempotency short-circuit throws a
+            // sentinel so update() aborts the write when the strategy is already
+            // set (no needless no-op save).
+            let skipped = false;
+            await ConfigStore.update((cfg2) => {
+                cfg2.global = cfg2.global || {};
+                const c = cfg2.global.council = cfg2.global.council || {};
+                if (c.passwordStrategy === 'shared'
+                    && c.minerAddressStrategy === 'shared'
+                    && (c.masterPasswordEncrypted || c.sharedPasswordEncrypted)
+                    && c.sharedMinerAddress) {
+                    skipped = true;
+                    throw new SetupAbort();
+                }
+                c.passwordStrategy = 'shared';
+                // beta.0.4.7 — master password covers ALL chain keystores
+                // (mainchain DPoS signer + ESC/EID/PG EVM keystores +
+                // Arbiter wallet). `sharedPasswordEncrypted` is kept for
+                // backward-compat with v0.4.6 configs; both envelopes are
+                // populated to the SAME ciphertext for now. A future
+                // cleanup release can drop `sharedPasswordEncrypted` once
+                // every downstream reader has migrated.
+                const masterPlain = inputs.masterPassword || inputs.sharedPassword;
+                const masterEnvelope = EnmCrypto.encrypt(masterPlain);
+                c.masterPasswordEncrypted = masterEnvelope;
+                c.sharedPasswordEncrypted = masterEnvelope; // back-compat
+                c.minerAddressStrategy = 'shared';
+                c.sharedMinerAddress = inputs.sharedRewardAddress;
+                c.setupCompletedAt = Date.now();
+            }).catch((err) => {
+                if (err instanceof SetupAbort) { return null; }
+                throw err;
+            });
+            if (skipped) {
                 return { skipped: true, message: 'already set' };
             }
-            c.passwordStrategy = 'shared';
-            // beta.0.4.7 — master password covers ALL chain keystores
-            // (mainchain DPoS signer + ESC/EID/PG EVM keystores +
-            // Arbiter wallet). `sharedPasswordEncrypted` is kept for
-            // backward-compat with v0.4.6 configs; both envelopes are
-            // populated to the SAME ciphertext for now. A future
-            // cleanup release can drop `sharedPasswordEncrypted` once
-            // every downstream reader has migrated.
-            const masterPlain = inputs.masterPassword || inputs.sharedPassword;
-            const masterEnvelope = EnmCrypto.encrypt(masterPlain);
-            c.masterPasswordEncrypted = masterEnvelope;
-            c.sharedPasswordEncrypted = masterEnvelope; // back-compat
-            c.minerAddressStrategy = 'shared';
-            c.sharedMinerAddress = inputs.sharedRewardAddress;
-            c.setupCompletedAt = Date.now();
-            await ConfigStore.save(cfg2);
             return { message: 'shared strategy saved' };
         });
 
@@ -2255,84 +2349,94 @@ async function runCouncilInstall(args) {
         // flag — Joi rejects unknown keys — so we check the actual file
         // existence instead. Disk state is canonical anyway.
         await runStep('install-mainchain-cfg', async () => {
-            const cfg2 = await ConfigStore.load();
-            cfg2.chains = cfg2.chains || {};
-            cfg2.chains.mainchain = cfg2.chains.mainchain || {};
-            const m = cfg2.chains.mainchain;
-            const keystoreOnDisk = fs.existsSync(path.join(chainDir('mainchain'), 'keystore.dat'));
-            if (m.binaryPath && fs.existsSync(m.binaryPath) && keystoreOnDisk
-                && m.dpos && m.dpos.keystorePasswordEncrypted) {
+            // Atomic read-modify-write (P0-7). The idempotency skip throws a
+            // sentinel so update() aborts the write; genuine errors (binary not
+            // resolvable) bubble through to runStep's failure handler.
+            let skipped = false;
+            const savedCfg = await ConfigStore.update(async (cfg2) => {
+                cfg2.chains = cfg2.chains || {};
+                cfg2.chains.mainchain = cfg2.chains.mainchain || {};
+                const m = cfg2.chains.mainchain;
+                const keystoreOnDisk = fs.existsSync(path.join(chainDir('mainchain'), 'keystore.dat'));
+                if (m.binaryPath && fs.existsSync(m.binaryPath) && keystoreOnDisk
+                    && m.dpos && m.dpos.keystorePasswordEncrypted) {
+                    skipped = true;
+                    throw new SetupAbort();
+                }
+
+                // Re-resolve binary path + version from the downloader
+                // (covers a container restart between Step A and this step,
+                // and avoids trusting any stale value in cfg).
+                const dl = ChainRegistry.getBinaryDownloader();
+                const onDisk = await dl.getStatusWithDisk('mainchain');
+                if (!onDisk || !onDisk.binaryPath) {
+                    throw new Error(
+                        'mainchain binary not resolvable on disk — install-mainchain-binary '
+                        + 'should have completed first (downloader phase='
+                        + (onDisk && onDisk.phase) + ')',
+                    );
+                }
+
+                // Read the identity cache Step B wrote so the
+                // nodePublicKey field is populated for downstream consumers
+                // (Producer registration, audit UI). Missing identity is
+                // non-fatal — the field is allowed empty in the schema and
+                // the keystore-account endpoint can repopulate it later.
+                let nodePublicKey = '';
+                try {
+                    const identityPath = path.join(chainDir('mainchain'), 'keystore-account.json');
+                    const identity = JSON.parse(await fsp.readFile(identityPath, 'utf8'));
+                    if (identity && typeof identity.publicKey === 'string') {
+                        nodePublicKey = identity.publicKey;
+                    }
+                } catch (_) { /* missing/unreadable — non-fatal */ }
+
+                // Generate an RPC password the same way /setup/complete does.
+                // Council operators rarely touch RPC settings later, but if
+                // they do, Settings → Mainchain Advanced can replace this.
+                const rpcPasswordPlain = crypto.randomBytes(24).toString('hex');
+                const rpcPasswordEnvelope = encrypt(rpcPasswordPlain);
+
+                const council = cfg2.global && cfg2.global.council;
+                const keystoreEnvelope = (council && council.masterPasswordEncrypted) || '';
+
+                cfg2.chains.mainchain = {
+                    enabled: m.enabled !== false,
+                    binaryPath: onDisk.binaryPath,
+                    binaryVersion: onDisk.version || null,
+                    // beta.0.5.0 — stamp install time so F8 suppresses
+                    // version-drift proposals for 1h after install.
+                    binaryInstalledAt: Date.now(),
+                    dataDir: chainDir('mainchain'),
+                    activeNet: inputs.activeNet || m.activeNet || 'mainnet',
+                    ports: { ...ELA_DEFAULT_PORTS, ...(m.ports || {}) },
+                    rpc: m.rpc && m.rpc.passwordEncrypted ? m.rpc : {
+                        user: 'ela',
+                        passwordEncrypted: rpcPasswordEnvelope,
+                        whiteIPList: ['127.0.0.1'],
+                    },
+                    dpos: {
+                        enableArbiter: true,                       // Council always signs
+                        ipAddressMode: (m.dpos && m.dpos.ipAddressMode) || 'auto',
+                        ipAddressManual: (m.dpos && m.dpos.ipAddressManual) || null,
+                        refreshOnRestart: true,
+                        ownerPublicKey: (m.dpos && m.dpos.ownerPublicKey) || '',
+                        nodePublicKey: nodePublicKey || (m.dpos && m.dpos.nodePublicKey) || '',
+                        keystorePasswordEncrypted: keystoreEnvelope,
+                    },
+                    memoryLimitMb: m.memoryLimitMb || 4096,
+                    archiveMode: m.archiveMode === true,
+                    logLevel: m.logLevel || 'info',
+                    healing: m.healing || { enabledRules: {} },
+                };
+            }).catch((err) => {
+                if (err instanceof SetupAbort) { return null; }
+                throw err;
+            });
+            if (skipped) {
                 return { skipped: true, message: 'Main chain config already written' };
             }
-
-            // Re-resolve binary path + version from the downloader
-            // (covers a container restart between Step A and this step,
-            // and avoids trusting any stale value in cfg).
-            const dl = ChainRegistry.getBinaryDownloader();
-            const onDisk = await dl.getStatusWithDisk('mainchain');
-            if (!onDisk || !onDisk.binaryPath) {
-                throw new Error(
-                    'mainchain binary not resolvable on disk — install-mainchain-binary '
-                    + 'should have completed first (downloader phase='
-                    + (onDisk && onDisk.phase) + ')',
-                );
-            }
-
-            // Read the identity cache Step B wrote so the
-            // nodePublicKey field is populated for downstream consumers
-            // (Producer registration, audit UI). Missing identity is
-            // non-fatal — the field is allowed empty in the schema and
-            // the keystore-account endpoint can repopulate it later.
-            let nodePublicKey = '';
-            try {
-                const identityPath = path.join(chainDir('mainchain'), 'keystore-account.json');
-                const identity = JSON.parse(await fsp.readFile(identityPath, 'utf8'));
-                if (identity && typeof identity.publicKey === 'string') {
-                    nodePublicKey = identity.publicKey;
-                }
-            } catch (_) { /* missing/unreadable — non-fatal */ }
-
-            // Generate an RPC password the same way /setup/complete does.
-            // Council operators rarely touch RPC settings later, but if
-            // they do, Settings → Mainchain Advanced can replace this.
-            const rpcPasswordPlain = crypto.randomBytes(24).toString('hex');
-            const rpcPasswordEnvelope = encrypt(rpcPasswordPlain);
-
-            const council = cfg2.global && cfg2.global.council;
-            const keystoreEnvelope = (council && council.masterPasswordEncrypted) || '';
-
-            cfg2.chains.mainchain = {
-                enabled: m.enabled !== false,
-                binaryPath: onDisk.binaryPath,
-                binaryVersion: onDisk.version || null,
-                // beta.0.5.0 — stamp install time so F8 suppresses
-                // version-drift proposals for 1h after install.
-                binaryInstalledAt: Date.now(),
-                dataDir: chainDir('mainchain'),
-                activeNet: inputs.activeNet || m.activeNet || 'mainnet',
-                ports: { ...ELA_DEFAULT_PORTS, ...(m.ports || {}) },
-                rpc: m.rpc && m.rpc.passwordEncrypted ? m.rpc : {
-                    user: 'ela',
-                    passwordEncrypted: rpcPasswordEnvelope,
-                    whiteIPList: ['127.0.0.1'],
-                },
-                dpos: {
-                    enableArbiter: true,                       // Council always signs
-                    ipAddressMode: (m.dpos && m.dpos.ipAddressMode) || 'auto',
-                    ipAddressManual: (m.dpos && m.dpos.ipAddressManual) || null,
-                    refreshOnRestart: true,
-                    ownerPublicKey: (m.dpos && m.dpos.ownerPublicKey) || '',
-                    nodePublicKey: nodePublicKey || (m.dpos && m.dpos.nodePublicKey) || '',
-                    keystorePasswordEncrypted: keystoreEnvelope,
-                },
-                memoryLimitMb: m.memoryLimitMb || 4096,
-                archiveMode: m.archiveMode === true,
-                logLevel: m.logLevel || 'info',
-                healing: m.healing || { enabledRules: {} },
-            };
-
-            await ConfigStore.save(cfg2);
-            try { ChainRegistry.registerConfiguredAdapters({ cfg: cfg2 }); }
+            try { ChainRegistry.registerConfiguredAdapters({ cfg: savedCfg }); }
             catch (_) { /* best-effort — adapter may already be registered */ }
             return { message: 'Main chain config written.' };
         });
@@ -2343,57 +2447,67 @@ async function runCouncilInstall(args) {
         const classBChains = ['esc', 'eid', 'pg'];
         for (const chainId of classBChains) {
             await runStep(`install-${chainId}-cfg`, async () => {
-                const cfg2 = await ConfigStore.load();
-                if (cfg2.chains && cfg2.chains[chainId]) {
+                // Atomic read-modify-write (P0-7). The idempotency skip throws a
+                // sentinel so update() aborts the write (no needless no-op save).
+                let skipped = false;
+                const savedCfg = await ConfigStore.update((cfg2) => {
+                    if (cfg2.chains && cfg2.chains[chainId]) {
+                        skipped = true;
+                        throw new SetupAbort();
+                    }
+                    cfg2.chains = cfg2.chains || {};
+                    const ports = ClassBPorts.portsFor(chainId, inputs.activeNet);
+                    cfg2.chains[chainId] = {
+                        enabled: false,
+                        binaryPath: '',
+                        binaryVersion: '',
+                        // beta.0.5.0 — stamped when the binary actually lands
+                        // in the install-binaries-parallel step (see below).
+                        binaryInstalledAt: null,
+                        activeNet: inputs.activeNet,
+                        ports,
+                        pbft: { usesMainchainKeystore: true, ipAddress: null },
+                        miner: {
+                            // FIX-C12 — Council EVM sidechains MUST run as miners
+                            // (validator parity). node.sh's council path always
+                            // takes the MINER branch of esc_start/eid_start/pg_start
+                            // (node.sh:2133-2169 for esc): --mine --miner.threads 1
+                            // --unlock + --miner.etherbase. Without the miner branch,
+                            // geth has no keep-alive work and exits code=0 within
+                            // minutes. The on-duty council member is expected to
+                            // produce blocks, so mining is on by default for the
+                            // council orchestrator (the per-chain install-class-b
+                            // route still honours the operator's explicit choice).
+                            enabled: true,
+                            rewardAddress: inputs.sharedRewardAddress,
+                            rewardAddressSource: 'shared',
+                            // evmKeystoreAddr + evmKeystorePasswordEncrypted are
+                            // populated by EvmSidechainAdapter.start()'s EVM
+                            // account-auto-creation preflight (FIX-C12) — it runs
+                            // the geth binary's `account new` (node.sh esc_init:3245)
+                            // the first time a miner-enabled chain starts, then
+                            // persists the resolved 0x address + encrypted password
+                            // back into this cfg block. Left empty here on purpose.
+                            evmKeystoreAddr: '',
+                            evmKeystorePasswordEncrypted: '',
+                            threads: 1,
+                        },
+                        // FIX-C12 — node.sh:2152 uses `--syncmode full` on the
+                        // council miner branch (NOT fast). A miner must have the
+                        // full state to seal blocks.
+                        sync: { mode: 'full' },
+                        bootnodes: [],
+                        healing: { enabledRules: {} },
+                        binarySha256Expected: '',
+                    };
+                }).catch((err) => {
+                    if (err instanceof SetupAbort) { return null; }
+                    throw err;
+                });
+                if (skipped) {
                     return { skipped: true, message: 'Config already present' };
                 }
-                cfg2.chains = cfg2.chains || {};
-                const ports = ClassBPorts.portsFor(chainId, inputs.activeNet);
-                cfg2.chains[chainId] = {
-                    enabled: false,
-                    binaryPath: '',
-                    binaryVersion: '',
-                    // beta.0.5.0 — stamped when the binary actually lands
-                    // in the install-binaries-parallel step (see below).
-                    binaryInstalledAt: null,
-                    activeNet: inputs.activeNet,
-                    ports,
-                    pbft: { usesMainchainKeystore: true, ipAddress: null },
-                    miner: {
-                        // FIX-C12 — Council EVM sidechains MUST run as miners
-                        // (validator parity). node.sh's council path always
-                        // takes the MINER branch of esc_start/eid_start/pg_start
-                        // (node.sh:2133-2169 for esc): --mine --miner.threads 1
-                        // --unlock + --miner.etherbase. Without the miner branch,
-                        // geth has no keep-alive work and exits code=0 within
-                        // minutes. The on-duty council member is expected to
-                        // produce blocks, so mining is on by default for the
-                        // council orchestrator (the per-chain install-class-b
-                        // route still honours the operator's explicit choice).
-                        enabled: true,
-                        rewardAddress: inputs.sharedRewardAddress,
-                        rewardAddressSource: 'shared',
-                        // evmKeystoreAddr + evmKeystorePasswordEncrypted are
-                        // populated by EvmSidechainAdapter.start()'s EVM
-                        // account-auto-creation preflight (FIX-C12) — it runs
-                        // the geth binary's `account new` (node.sh esc_init:3245)
-                        // the first time a miner-enabled chain starts, then
-                        // persists the resolved 0x address + encrypted password
-                        // back into this cfg block. Left empty here on purpose.
-                        evmKeystoreAddr: '',
-                        evmKeystorePasswordEncrypted: '',
-                        threads: 1,
-                    },
-                    // FIX-C12 — node.sh:2152 uses `--syncmode full` on the
-                    // council miner branch (NOT fast). A miner must have the
-                    // full state to seal blocks.
-                    sync: { mode: 'full' },
-                    bootnodes: [],
-                    healing: { enabledRules: {} },
-                    binarySha256Expected: '',
-                };
-                await ConfigStore.save(cfg2);
-                try { ChainRegistry.registerConfiguredAdapters({ cfg: cfg2 }); }
+                try { ChainRegistry.registerConfiguredAdapters({ cfg: savedCfg }); }
                 catch (_) { /* best-effort */ }
                 return { message: `cfg.chains.${chainId} written` };
             });
@@ -2606,25 +2720,26 @@ async function runCouncilInstall(args) {
                     return { cid, ok: false, error: err.message };
                 }
             }));
-            // Persist successful binary paths into cfg.
-            const cfg2 = await ConfigStore.load();
-            for (const r of results) {
-                if (!r.ok) { continue; }
-                if (r.cid === 'arbiter') {
-                    // arbiter cfg not yet written — defer persist to
-                    // install-arbiter-cfg step. Stash the path for
-                    // that step to read from the downloader.
-                    continue;
+            // Persist successful binary paths into cfg. Atomic read-modify-write
+            // (P0-7) so a concurrent timer save can't drop the binary paths.
+            await ConfigStore.update((cfg2) => {
+                for (const r of results) {
+                    if (!r.ok) { continue; }
+                    if (r.cid === 'arbiter') {
+                        // arbiter cfg not yet written — defer persist to
+                        // install-arbiter-cfg step. Stash the path for
+                        // that step to read from the downloader.
+                        continue;
+                    }
+                    if (cfg2.chains[r.cid]) {
+                        cfg2.chains[r.cid].binaryPath = r.status.binaryPath;
+                        cfg2.chains[r.cid].binaryVersion = r.status.version || '';
+                        // beta.0.5.0 — stamp install time so F8 suppresses
+                        // version-drift proposals for 1h after install.
+                        cfg2.chains[r.cid].binaryInstalledAt = Date.now();
+                    }
                 }
-                if (cfg2.chains[r.cid]) {
-                    cfg2.chains[r.cid].binaryPath = r.status.binaryPath;
-                    cfg2.chains[r.cid].binaryVersion = r.status.version || '';
-                    // beta.0.5.0 — stamp install time so F8 suppresses
-                    // version-drift proposals for 1h after install.
-                    cfg2.chains[r.cid].binaryInstalledAt = Date.now();
-                }
-            }
-            await ConfigStore.save(cfg2);
+            });
             const failed = results.filter((r) => !r.ok);
             if (failed.length > 0) {
                 throw new Error(
@@ -2669,43 +2784,54 @@ async function runCouncilInstall(args) {
         const oracleIds = ['esc-oracle', 'eid-oracle', 'pg-oracle'];
         for (const oracleId of oracleIds) {
             await runStep(`install-${oracleId}`, async () => {
-                const cfg2 = await ConfigStore.load();
-                if (cfg2.chains && cfg2.chains[oracleId]) {
-                    return { skipped: true, message: 'Config already present' };
-                }
                 const parent = oracleId === 'esc-oracle' ? 'esc'
                              : oracleId === 'eid-oracle' ? 'eid' : 'pg';
                 const portMap = { 'esc-oracle': 20632, 'eid-oracle': 20642, 'pg-oracle': 20672 };
                 const port = inputs.activeNet === 'testnet'
                     ? portMap[oracleId] + 1000 : portMap[oracleId];
-                const runtime = await NodeJsRuntime.resolveAny();
-                if (!runtime) {
-                    throw new Error('no Node.js runtime resolvable (step 8 should have ensured one)');
+                // Atomic read-modify-write (P0-7). The idempotency skip throws a
+                // sentinel so update() aborts the write; the runtime-missing
+                // error bubbles to runStep's failure handler.
+                let skipped = false;
+                const savedCfg = await ConfigStore.update(async (cfg2) => {
+                    if (cfg2.chains && cfg2.chains[oracleId]) {
+                        skipped = true;
+                        throw new SetupAbort();
+                    }
+                    const runtime = await NodeJsRuntime.resolveAny();
+                    if (!runtime) {
+                        throw new Error('no Node.js runtime resolvable (step 8 should have ensured one)');
+                    }
+                    cfg2.chains = cfg2.chains || {};
+                    cfg2.chains[oracleId] = {
+                        enabled: false,
+                        binaryPath: runtime.path,
+                        binaryVersion: runtime.version.raw,
+                        // beta.0.5.0 — stamp install time so F8 suppresses
+                        // version-drift proposals for 1h after install.
+                        binaryInstalledAt: Date.now(),
+                        activeNet: inputs.activeNet,
+                        parentChainId: parent,
+                        // beta.0.4.7 — per-oracle subdir layout. Pre-0.4.7
+                        // OracleScriptDownloader stored every script in one
+                        // flat dir; the rewrite gives each oracle its own
+                        // dir so node_modules don't collide. OracleAdapter
+                        // joins this with scriptFilename, so this MUST be
+                        // the per-oracle dir, not the parent.
+                        scriptPath: OracleScriptDownloader.scriptDirFor(oracleId),
+                        nodejsVersion: NodeJsRuntime.PINNED_VERSION,
+                        ports: { httpRpc: port },
+                        parent: { chainRpcUrl: '', mainchainRpcUrl: '' },
+                        healing: { enabledRules: {} },
+                    };
+                }).catch((err) => {
+                    if (err instanceof SetupAbort) { return null; }
+                    throw err;
+                });
+                if (skipped) {
+                    return { skipped: true, message: 'Config already present' };
                 }
-                cfg2.chains = cfg2.chains || {};
-                cfg2.chains[oracleId] = {
-                    enabled: false,
-                    binaryPath: runtime.path,
-                    binaryVersion: runtime.version.raw,
-                    // beta.0.5.0 — stamp install time so F8 suppresses
-                    // version-drift proposals for 1h after install.
-                    binaryInstalledAt: Date.now(),
-                    activeNet: inputs.activeNet,
-                    parentChainId: parent,
-                    // beta.0.4.7 — per-oracle subdir layout. Pre-0.4.7
-                    // OracleScriptDownloader stored every script in one
-                    // flat dir; the rewrite gives each oracle its own
-                    // dir so node_modules don't collide. OracleAdapter
-                    // joins this with scriptFilename, so this MUST be
-                    // the per-oracle dir, not the parent.
-                    scriptPath: OracleScriptDownloader.scriptDirFor(oracleId),
-                    nodejsVersion: NodeJsRuntime.PINNED_VERSION,
-                    ports: { httpRpc: port },
-                    parent: { chainRpcUrl: '', mainchainRpcUrl: '' },
-                    healing: { enabledRules: {} },
-                };
-                await ConfigStore.save(cfg2);
-                try { ChainRegistry.registerConfiguredAdapters({ cfg: cfg2 }); }
+                try { ChainRegistry.registerConfiguredAdapters({ cfg: savedCfg }); }
                 catch (_) { /* best-effort */ }
                 return { message: `cfg.chains.${oracleId} written (parent=${parent}, port=${port})` };
             });
@@ -2713,67 +2839,78 @@ async function runCouncilInstall(args) {
 
         // ---- Arbiter cfg (binary already downloaded in parallel step) ----
         await runStep('install-arbiter-cfg', async () => {
-            const cfg2 = await ConfigStore.load();
-            if (cfg2.chains && cfg2.chains.arbiter && cfg2.chains.arbiter.binaryPath) {
+            // Atomic read-modify-write (P0-7). The idempotency skip throws a
+            // sentinel so update() aborts the write; genuine errors (binary
+            // missing, unresolvable ELA address) bubble to runStep's handler.
+            let skipped = false;
+            const savedCfg = await ConfigStore.update(async (cfg2) => {
+                if (cfg2.chains && cfg2.chains.arbiter && cfg2.chains.arbiter.binaryPath) {
+                    skipped = true;
+                    throw new SetupAbort();
+                }
+                const dl = ChainRegistry.getBinaryDownloader();
+                const arbStatus = dl.getStatus('arbiter');
+                if (!arbStatus || arbStatus.phase !== 'done' || !arbStatus.binaryPath) {
+                    throw new Error(
+                        `arbiter binary not on disk (downloader phase=${arbStatus && arbStatus.phase}); `
+                        + 'the parallel-binaries step should have downloaded it.',
+                    );
+                }
+                const ports = inputs.activeNet === 'testnet'
+                    ? { rpc: 21536, p2p: 21538 }
+                    : { rpc: 20536, p2p: 20538 };
+                // BUG-C9 (v0.5.158) — resolve a VALID ELA mainchain address for the
+                // arbiter's mining.miningAddress. The arbiter binary validates this
+                // at start and refuses a non-ELA value (the old default was the EVM
+                // 0x reward address → "not a valid ELA address" → arbiter never
+                // started). Prefer an explicit arbiterMiningAddress; otherwise use
+                // the operator's own ELA address from the mainchain keystore identity
+                // (keystore-account.json, written at install-mainchain-keystore time).
+                let arbiterMining = '';
+                const explicitMining = String(inputs.arbiterMiningAddress || '').trim();
+                const explicitChk = explicitMining
+                    ? EnmCrypto.validateElaAddress(explicitMining) : { valid: false };
+                if (explicitChk.valid) {
+                    arbiterMining = explicitChk.normalized || explicitMining;
+                } else {
+                    try {
+                        const idRaw = await fsp.readFile(
+                            path.join(chainDir('mainchain'), 'keystore-account.json'), 'utf8');
+                        const id = JSON.parse(idRaw);
+                        const idChk = (id && id.address)
+                            ? EnmCrypto.validateElaAddress(id.address) : { valid: false };
+                        if (idChk.valid) { arbiterMining = idChk.normalized || id.address; }
+                    } catch (_) { /* handled by the guard below */ }
+                }
+                if (!arbiterMining) {
+                    throw new Error(
+                        'arbiter: could not resolve a valid ELA mining address '
+                        + '(no explicit arbiterMiningAddress and the mainchain keystore '
+                        + 'identity is missing or invalid).');
+                }
+                cfg2.chains = cfg2.chains || {};
+                cfg2.chains.arbiter = {
+                    enabled: false,
+                    binaryPath: arbStatus.binaryPath,
+                    binaryVersion: arbStatus.version || '',
+                    // beta.0.5.0 — stamp install time so F8 suppresses
+                    // version-drift proposals for 1h after install.
+                    binaryInstalledAt: Date.now(),
+                    activeNet: inputs.activeNet,
+                    ports,
+                    wallet: { usesMainchainKeystore: true, passwordSource: 'mainchain-ela-txt' },
+                    mining: { miningAddress: arbiterMining, sideChainPowFeeEla: 0.1 },
+                    crossChain: { sideNodeList: [], syncIntervalMs: 1000 },
+                    healing: { enabledRules: {} },
+                };
+            }).catch((err) => {
+                if (err instanceof SetupAbort) { return null; }
+                throw err;
+            });
+            if (skipped) {
                 return { skipped: true, message: 'Config and binary already in place' };
             }
-            const dl = ChainRegistry.getBinaryDownloader();
-            const arbStatus = dl.getStatus('arbiter');
-            if (!arbStatus || arbStatus.phase !== 'done' || !arbStatus.binaryPath) {
-                throw new Error(
-                    `arbiter binary not on disk (downloader phase=${arbStatus && arbStatus.phase}); `
-                    + 'the parallel-binaries step should have downloaded it.',
-                );
-            }
-            const ports = inputs.activeNet === 'testnet'
-                ? { rpc: 21536, p2p: 21538 }
-                : { rpc: 20536, p2p: 20538 };
-            // BUG-C9 (v0.5.158) — resolve a VALID ELA mainchain address for the
-            // arbiter's mining.miningAddress. The arbiter binary validates this
-            // at start and refuses a non-ELA value (the old default was the EVM
-            // 0x reward address → "not a valid ELA address" → arbiter never
-            // started). Prefer an explicit arbiterMiningAddress; otherwise use
-            // the operator's own ELA address from the mainchain keystore identity
-            // (keystore-account.json, written at install-mainchain-keystore time).
-            let arbiterMining = '';
-            const explicitMining = String(inputs.arbiterMiningAddress || '').trim();
-            const explicitChk = explicitMining
-                ? EnmCrypto.validateElaAddress(explicitMining) : { valid: false };
-            if (explicitChk.valid) {
-                arbiterMining = explicitChk.normalized || explicitMining;
-            } else {
-                try {
-                    const idRaw = await fsp.readFile(
-                        path.join(chainDir('mainchain'), 'keystore-account.json'), 'utf8');
-                    const id = JSON.parse(idRaw);
-                    const idChk = (id && id.address)
-                        ? EnmCrypto.validateElaAddress(id.address) : { valid: false };
-                    if (idChk.valid) { arbiterMining = idChk.normalized || id.address; }
-                } catch (_) { /* handled by the guard below */ }
-            }
-            if (!arbiterMining) {
-                throw new Error(
-                    'arbiter: could not resolve a valid ELA mining address '
-                    + '(no explicit arbiterMiningAddress and the mainchain keystore '
-                    + 'identity is missing or invalid).');
-            }
-            cfg2.chains = cfg2.chains || {};
-            cfg2.chains.arbiter = {
-                enabled: false,
-                binaryPath: arbStatus.binaryPath,
-                binaryVersion: arbStatus.version || '',
-                // beta.0.5.0 — stamp install time so F8 suppresses
-                // version-drift proposals for 1h after install.
-                binaryInstalledAt: Date.now(),
-                activeNet: inputs.activeNet,
-                ports,
-                wallet: { usesMainchainKeystore: true, passwordSource: 'mainchain-ela-txt' },
-                mining: { miningAddress: arbiterMining, sideChainPowFeeEla: 0.1 },
-                crossChain: { sideNodeList: [], syncIntervalMs: 1000 },
-                healing: { enabledRules: {} },
-            };
-            await ConfigStore.save(cfg2);
-            try { ChainRegistry.registerConfiguredAdapters({ cfg: cfg2 }); }
+            try { ChainRegistry.registerConfiguredAdapters({ cfg: savedCfg }); }
             catch (_) { /* best-effort */ }
             return { message: 'Arbiter config written.' };
         });
@@ -2792,16 +2929,18 @@ async function runCouncilInstall(args) {
         // still be marked enabled=true (their adapter handles
         // mainchain-down gracefully via reconnection backoff).
         await runStep('start-chains', async () => {
-            const cfg2 = await ConfigStore.load();
             // beta.0.4.7 — PG is always part of the start order.
             // v0.4.7.1 — mainchain enabled + started ahead of others.
             const startOrder = ['mainchain', 'esc', 'eid', 'pg',
                 'esc-oracle', 'eid-oracle', 'pg-oracle', 'arbiter'];
-            // Flip enabled=true so AUTOSTART/restart logic respects it.
-            for (const cid of startOrder) {
-                if (cfg2.chains[cid]) { cfg2.chains[cid].enabled = true; }
-            }
-            await ConfigStore.save(cfg2);
+            // Flip enabled=true so AUTOSTART/restart logic respects it. Atomic
+            // read-modify-write (P0-7); the returned cfg drives the adapter
+            // starts below.
+            const cfg2 = await ConfigStore.update((c) => {
+                for (const cid of startOrder) {
+                    if (c.chains[cid]) { c.chains[cid].enabled = true; }
+                }
+            });
 
             const started = [];
 
@@ -2853,15 +2992,16 @@ async function runCouncilInstall(args) {
             // state (cfg.setup.completed) was never written, so /setup/state
             // returned currentStep≠'welcome' on every reload → wizard re-mounted.
             //
-            // Use a FRESH ConfigStore.load() (not the cfg2 from earlier in this
-            // handler) so we don't clobber any concurrent writes from chain
-            // adapters that ran during `await adapter.start(...)` above.
-            const cfgFinal = await ConfigStore.load();
-            cfgFinal.setup = cfgFinal.setup || {};
-            cfgFinal.setup.completed = true;
-            cfgFinal.setup.completedAt = Date.now();
-            cfgFinal.setup.completedStep = 'council-install';
-            await ConfigStore.save(cfgFinal);
+            // Atomic read-modify-write (P0-7) — load+mutate+save under the write
+            // lock so we don't clobber any concurrent writes from chain adapters
+            // that ran during `await adapter.start(...)` above. (Pre-P0-7 this
+            // used a fresh load() to narrow, but not close, that race window.)
+            await ConfigStore.update((cfgFinal) => {
+                cfgFinal.setup = cfgFinal.setup || {};
+                cfgFinal.setup.completed = true;
+                cfgFinal.setup.completedAt = Date.now();
+                cfgFinal.setup.completedStep = 'council-install';
+            });
 
             // 0.5.145 audit Session 145 — mirror BPoS /setup/complete (line
             // 788-793) and also upsert completed=1 into enm_setup_state.

@@ -42,6 +42,15 @@ const EnmFirewallManager = require('../services/EnmFirewallManager');
 const RequestSchemas = require('../services/EnmRequestSchemas');
 
 /**
+ * Sentinel thrown from inside a ConfigStore.update mutator to abort the atomic
+ * write when a cfg-dependent precondition fails (e.g. enabling RPC with no
+ * password). update() runs the mutator before _saveInner, so throwing here
+ * guarantees nothing is persisted; the route's catch maps it back to the
+ * original HTTP status using a closure flag (no write on rejection).
+ */
+class ConfigPreconditionError extends Error {}
+
+/**
  * @param {object} extensionHandle
  * @returns {import('express').Router}
  */
@@ -149,17 +158,23 @@ function build(extensionHandle) {
         }
         const { mode, manualValue } = value;
         try {
-            const cfg = await ConfigStore.load();
-            const chain = cfg.chains && cfg.chains.mainchain;
+            // Atomic read-modify-write (P0-7). The 409 + the dpos subdoc for the
+            // response are captured via closure from the freshly-loaded cfg.
+            let chain = null;
+            await ConfigStore.update((cfg) => {
+                chain = cfg.chains && cfg.chains.mainchain;
+                if (!chain) {
+                    return;
+                }
+                chain.dpos = chain.dpos || {};
+                if (mode) chain.dpos.ipAddressMode = mode;
+                chain.dpos.ipAddressManual = (mode === 'manual' && typeof manualValue === 'string')
+                    ? manualValue.trim()
+                    : (mode === 'auto' ? null : chain.dpos.ipAddressManual);
+            }, { logger: extensionHandle.log });
             if (!chain) {
                 return res.status(409).json(errorBody('Main chain not configured.'));
             }
-            chain.dpos = chain.dpos || {};
-            if (mode) chain.dpos.ipAddressMode = mode;
-            chain.dpos.ipAddressManual = (mode === 'manual' && typeof manualValue === 'string')
-                ? manualValue.trim()
-                : (mode === 'auto' ? null : chain.dpos.ipAddressManual);
-            await ConfigStore.save(cfg, { logger: extensionHandle.log });
             return res.json(successBody({ dpos: chain.dpos }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} PUT /config/network: ${err.message}`);
@@ -208,97 +223,109 @@ function build(extensionHandle) {
             });
         }
         const body = value;
+        // P1 (v0.5.183) — reject world-open whitelist entries. The form
+        // accepts any IPv4/IPv6+CIDR, but 0.0.0.0/0 and ::/0 mean "every
+        // host on the internet can hit the RPC" — that's never what an
+        // operator intends and silently opens the node to the world. We
+        // gate it here (not in the schema) so the operator gets a clear,
+        // actionable 400 instead of a generic "invalid" rejection. Body-only
+        // check — hoisted above the atomic write so a rejected request never
+        // touches the config file.
+        if (Array.isArray(body.whiteIPList)) {
+            const BROAD_CIDRS = ['0.0.0.0/0', '::/0'];
+            const broad = body.whiteIPList.filter(
+                (entry) => typeof entry === 'string'
+                    && BROAD_CIDRS.includes(entry.trim()),
+            );
+            if (broad.length) {
+                return res.status(400).json(errorBody(
+                    `Whitelist entry "${broad[0]}" is too broad — it allows `
+                    + 'every host on the internet. List the specific IPs or '
+                    + 'subnets that need RPC access instead.',
+                ));
+            }
+        }
+        // Hoisted above the try so the catch can read them (the mutator runs
+        // inside ConfigStore.update below and signals via these closures).
+        let chain = null;
+        let rpcEnabledBefore = false;
+        let rpcPasswordMissing = false;
         try {
-            const cfg = await ConfigStore.load();
-            const chain = cfg.chains && cfg.chains.mainchain;
+            // Atomic read-modify-write (P0-7). The 409s + the values needed for
+            // the post-save firewall sync are captured via closure from the
+            // freshly-loaded cfg. cfg-dependent precondition failures throw a
+            // tagged sentinel so the save is aborted (no write on rejection).
+            await ConfigStore.update((cfg) => {
+                chain = cfg.chains && cfg.chains.mainchain;
+                if (!chain) {
+                    return;
+                }
+                chain.rpc = chain.rpc || {};
+                // P1 (v0.5.183) — refuse to open external RPC without a password.
+                // Enabling RPC (rpcEnabled=true) while no password has ever been
+                // set would expose an unauthenticated RPC endpoint to whatever the
+                // whitelist allows. Require a password first — either already on
+                // disk (chain.rpc.passwordEncrypted) or supplied in this same
+                // request (body.rpcPassword, encrypted below).
+                if (body.rpcEnabled === true) {
+                    const hasStoredPassword = typeof chain.rpc.passwordEncrypted === 'string'
+                        && chain.rpc.passwordEncrypted.length > 0;
+                    const suppliesPassword = typeof body.rpcPassword === 'string'
+                        && body.rpcPassword.length > 0;
+                    if (!hasStoredPassword && !suppliesPassword) {
+                        rpcPasswordMissing = true;
+                        throw new ConfigPreconditionError();
+                    }
+                }
+                // Joi validated types already — these checks are now just
+                // "did the operator send the field?" presence guards.
+                if (body.logLevel != null)     { chain.logLevel = body.logLevel; }
+                if (body.archiveMode != null)  { chain.archiveMode = body.archiveMode; }
+                if (body.memoryLimitMb != null){ chain.memoryLimitMb = body.memoryLimitMb; }
+
+                chain.rpc = chain.rpc || {};
+                // alpha.19: master gate for external RPC access. Defaults to false
+                // on new installs (see EnmConfigSchema). When false, the generated
+                // ela config.json hard-forces WhiteIPList=['127.0.0.1'] regardless
+                // of what the operator saved here.
+                //
+                // beta.3.31: capture the prior state so we know whether the
+                // operator is toggling ON (false → true: open firewall) or
+                // toggling OFF (true → false: close firewall). Same-state
+                // saves are a no-op on the firewall side.
+                rpcEnabledBefore = chain.rpc.enabled === true;
+                if (body.rpcEnabled != null) {
+                    chain.rpc.enabled = body.rpcEnabled;
+                }
+                if (body.rpcUser) {
+                    chain.rpc.user = body.rpcUser;
+                }
+                if (body.rpcPassword) {
+                    ConfigStore.setRpcPassword(chain, body.rpcPassword);
+                }
+                if (body.whiteIPList) {
+                    // Joi already filtered to strings + validated each as IP/CIDR.
+                    chain.rpc.whiteIPList = body.whiteIPList.slice();
+                    // SAFETY NET (alpha.19): 127.0.0.1 is required for ENM's own
+                    // RPC calls + local diagnostics. Force-include if a UI bug or
+                    // sloppy client tries to remove it — operator can't lock us out.
+                    if (!chain.rpc.whiteIPList.includes('127.0.0.1')) {
+                        chain.rpc.whiteIPList.unshift('127.0.0.1');
+                    }
+                }
+            }, { logger: extensionHandle.log });
             if (!chain) {
                 return res.status(409).json(errorBody('Main chain not configured.'));
-            }
-            chain.rpc = chain.rpc || {};
-            // P1 (v0.5.183) — reject world-open whitelist entries. The form
-            // accepts any IPv4/IPv6+CIDR, but 0.0.0.0/0 and ::/0 mean "every
-            // host on the internet can hit the RPC" — that's never what an
-            // operator intends and silently opens the node to the world. We
-            // gate it here (not in the schema) so the operator gets a clear,
-            // actionable 400 instead of a generic "invalid" rejection.
-            if (Array.isArray(body.whiteIPList)) {
-                const BROAD_CIDRS = ['0.0.0.0/0', '::/0'];
-                const broad = body.whiteIPList.filter(
-                    (entry) => typeof entry === 'string'
-                        && BROAD_CIDRS.includes(entry.trim()),
-                );
-                if (broad.length) {
-                    return res.status(400).json(errorBody(
-                        `Whitelist entry "${broad[0]}" is too broad — it allows `
-                        + 'every host on the internet. List the specific IPs or '
-                        + 'subnets that need RPC access instead.',
-                    ));
-                }
-            }
-            // P1 (v0.5.183) — refuse to open external RPC without a password.
-            // Enabling RPC (rpcEnabled=true) while no password has ever been
-            // set would expose an unauthenticated RPC endpoint to whatever the
-            // whitelist allows. Require a password first — either already on
-            // disk (chain.rpc.passwordEncrypted) or supplied in this same
-            // request (body.rpcPassword, encrypted below).
-            if (body.rpcEnabled === true) {
-                const hasStoredPassword = typeof chain.rpc.passwordEncrypted === 'string'
-                    && chain.rpc.passwordEncrypted.length > 0;
-                const suppliesPassword = typeof body.rpcPassword === 'string'
-                    && body.rpcPassword.length > 0;
-                if (!hasStoredPassword && !suppliesPassword) {
-                    return res.status(409).json(errorBody(
-                        'Set an RPC password before enabling external RPC access.',
-                    ));
-                }
-            }
-            // Joi validated types already — these checks are now just
-            // "did the operator send the field?" presence guards.
-            if (body.logLevel != null)     { chain.logLevel = body.logLevel; }
-            if (body.archiveMode != null)  { chain.archiveMode = body.archiveMode; }
-            if (body.memoryLimitMb != null){ chain.memoryLimitMb = body.memoryLimitMb; }
-
-            chain.rpc = chain.rpc || {};
-            // alpha.19: master gate for external RPC access. Defaults to false
-            // on new installs (see EnmConfigSchema). When false, the generated
-            // ela config.json hard-forces WhiteIPList=['127.0.0.1'] regardless
-            // of what the operator saved here.
-            //
-            // beta.3.31: capture the prior state so we know whether the
-            // operator is toggling ON (false → true: open firewall) or
-            // toggling OFF (true → false: close firewall). Same-state
-            // saves are a no-op on the firewall side.
-            const rpcEnabledBefore = chain.rpc.enabled === true;
-            if (body.rpcEnabled != null) {
-                chain.rpc.enabled = body.rpcEnabled;
             }
             // P1 (v0.5.183) — a running ela only re-reads RpcConfiguration
             // (RpcServiceLevel / WhiteIPList) on (re)start, so toggling RPC or
             // editing the whitelist here does NOT take effect until the chain
             // restarts. We do NOT auto-restart (that would interrupt sync /
             // signing); we just signal it so the UI can surface a "Restart
-            // required" prompt. Computed before save so it reflects exactly
-            // what the operator changed in this request.
+            // required" prompt. Reflects exactly what the operator changed in
+            // this request.
             const rpcSettingChanged = body.rpcEnabled != null
                 || body.whiteIPList != null;
-            if (body.rpcUser) {
-                chain.rpc.user = body.rpcUser;
-            }
-            if (body.rpcPassword) {
-                ConfigStore.setRpcPassword(chain, body.rpcPassword);
-            }
-            if (body.whiteIPList) {
-                // Joi already filtered to strings + validated each as IP/CIDR.
-                chain.rpc.whiteIPList = body.whiteIPList.slice();
-                // SAFETY NET (alpha.19): 127.0.0.1 is required for ENM's own
-                // RPC calls + local diagnostics. Force-include if a UI bug or
-                // sloppy client tries to remove it — operator can't lock us out.
-                if (!chain.rpc.whiteIPList.includes('127.0.0.1')) {
-                    chain.rpc.whiteIPList.unshift('127.0.0.1');
-                }
-            }
-
-            await ConfigStore.save(cfg, { logger: extensionHandle.log });
 
             // beta.3.31 — keep the host firewall in sync with the RPC
             // toggle. We do this AFTER the config save so the persisted
@@ -358,6 +385,14 @@ function build(extensionHandle) {
                 rpcSettingChanged ? { ok: true, restartRequired: true } : { ok: true },
             ));
         } catch (err) {
+            // cfg-dependent precondition (RPC enable without a password) aborts
+            // the atomic write via a tagged throw — surface it as the original
+            // 409, not a generic 500.
+            if (err instanceof ConfigPreconditionError && rpcPasswordMissing) {
+                return res.status(409).json(errorBody(
+                    'Set an RPC password before enabling external RPC access.',
+                ));
+            }
             extensionHandle.log.error(`${ENM_LOG_PREFIX} PUT /config/mainchain: ${err.message}`);
             return res.status(500).json(errorBody('Could not save Main chain settings. Try again.'));
         }
@@ -402,22 +437,26 @@ function build(extensionHandle) {
         }
         const body = value;
         try {
-            const cfg = await ConfigStore.load();
-            cfg.global = cfg.global || {};
-            cfg.global.healing = cfg.global.healing || {};
-            cfg.global.notifications = cfg.global.notifications || {};
-            cfg.global.audit = cfg.global.audit || {};
-            if (body.autoExecuteSafe != null) {
-                cfg.global.healing.autoExecuteSafe = body.autoExecuteSafe;
-            }
-            if (body.criticalRequiresAck != null) {
-                cfg.global.notifications.criticalRequiresAck = body.criticalRequiresAck;
-            }
-            if (body.auditRetentionDays != null) {
-                cfg.global.audit.retentionDays = body.auditRetentionDays;
-            }
-            await ConfigStore.save(cfg, { logger: extensionHandle.log });
-            return res.json(successBody({ global: cfg.global }));
+            // Atomic read-modify-write (P0-7). Capture the mutated global subdoc
+            // via closure for the response.
+            let global;
+            await ConfigStore.update((cfg) => {
+                cfg.global = cfg.global || {};
+                cfg.global.healing = cfg.global.healing || {};
+                cfg.global.notifications = cfg.global.notifications || {};
+                cfg.global.audit = cfg.global.audit || {};
+                if (body.autoExecuteSafe != null) {
+                    cfg.global.healing.autoExecuteSafe = body.autoExecuteSafe;
+                }
+                if (body.criticalRequiresAck != null) {
+                    cfg.global.notifications.criticalRequiresAck = body.criticalRequiresAck;
+                }
+                if (body.auditRetentionDays != null) {
+                    cfg.global.audit.retentionDays = body.auditRetentionDays;
+                }
+                global = cfg.global;
+            }, { logger: extensionHandle.log });
+            return res.json(successBody({ global }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} PUT /config/general: ${err.message}`);
             return res.status(500).json(errorBody('Could not save general settings. Try again.'));
@@ -448,26 +487,32 @@ function build(extensionHandle) {
         }
         const body = value;
         try {
-            const cfg = await ConfigStore.load();
-            cfg.global = cfg.global || {};
-            cfg.global.logRotation = cfg.global.logRotation || {};
-            cfg.global.backup = cfg.global.backup || {};
-            if (body.logGzipAfterDays != null) {
-                cfg.global.logRotation.gzipAfterDays = body.logGzipAfterDays;
-            }
-            if (body.logRetentionDays != null) {
-                cfg.global.logRotation.purgeAfterDays = body.logRetentionDays;
-            }
-            if (body.keystoreIntervalDays != null) {
-                cfg.global.backup.keystoreIntervalDays = body.keystoreIntervalDays;
-            }
-            if (body.keystoreKeepCount != null) {
-                cfg.global.backup.keystoreKeepCount = body.keystoreKeepCount;
-            }
-            await ConfigStore.save(cfg, { logger: extensionHandle.log });
+            // Atomic read-modify-write (P0-7). Capture the mutated subdocs via
+            // closure for the response.
+            let logRotation;
+            let backup;
+            await ConfigStore.update((cfg) => {
+                cfg.global = cfg.global || {};
+                cfg.global.logRotation = cfg.global.logRotation || {};
+                cfg.global.backup = cfg.global.backup || {};
+                if (body.logGzipAfterDays != null) {
+                    cfg.global.logRotation.gzipAfterDays = body.logGzipAfterDays;
+                }
+                if (body.logRetentionDays != null) {
+                    cfg.global.logRotation.purgeAfterDays = body.logRetentionDays;
+                }
+                if (body.keystoreIntervalDays != null) {
+                    cfg.global.backup.keystoreIntervalDays = body.keystoreIntervalDays;
+                }
+                if (body.keystoreKeepCount != null) {
+                    cfg.global.backup.keystoreKeepCount = body.keystoreKeepCount;
+                }
+                logRotation = cfg.global.logRotation;
+                backup = cfg.global.backup;
+            }, { logger: extensionHandle.log });
             return res.json(successBody({
-                logRotation: cfg.global.logRotation,
-                backup: cfg.global.backup,
+                logRotation,
+                backup,
             }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} PUT /config/storage: ${err.message}`);
@@ -504,25 +549,28 @@ function build(extensionHandle) {
         }
         const body = value;
         try {
-            const cfg = await ConfigStore.load();
-            cfg.global = cfg.global || {};
-            cfg.global.notifications = cfg.global.notifications || {};
-            cfg.global.notifications.thresholds =
-                cfg.global.notifications.thresholds || {};
-            const slot = cfg.global.notifications.thresholds;
-            if (body.diskFreeWarnGb != null) {
-                slot.diskFreeWarnGb = body.diskFreeWarnGb;
-            }
-            if (body.diskFreeCriticalGb != null) {
-                slot.diskFreeCriticalGb = body.diskFreeCriticalGb;
-            }
-            if (body.peerZeroGraceMin != null) {
-                slot.peerZeroGraceMin = body.peerZeroGraceMin;
-            }
-            if (body.syncStallGraceMin != null) {
-                slot.syncStallGraceMin = body.syncStallGraceMin;
-            }
-            await ConfigStore.save(cfg, { logger: extensionHandle.log });
+            // Atomic read-modify-write (P0-7). Capture the mutated thresholds
+            // slot via closure for the response.
+            let slot;
+            await ConfigStore.update((cfg) => {
+                cfg.global = cfg.global || {};
+                cfg.global.notifications = cfg.global.notifications || {};
+                cfg.global.notifications.thresholds =
+                    cfg.global.notifications.thresholds || {};
+                slot = cfg.global.notifications.thresholds;
+                if (body.diskFreeWarnGb != null) {
+                    slot.diskFreeWarnGb = body.diskFreeWarnGb;
+                }
+                if (body.diskFreeCriticalGb != null) {
+                    slot.diskFreeCriticalGb = body.diskFreeCriticalGb;
+                }
+                if (body.peerZeroGraceMin != null) {
+                    slot.peerZeroGraceMin = body.peerZeroGraceMin;
+                }
+                if (body.syncStallGraceMin != null) {
+                    slot.syncStallGraceMin = body.syncStallGraceMin;
+                }
+            }, { logger: extensionHandle.log });
             return res.json(successBody({ thresholds: slot }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} PUT /config/notifications: ${err.message}`);
@@ -569,16 +617,19 @@ function build(extensionHandle) {
             }
         }
         try {
-            const cfg = await ConfigStore.load();
-            cfg.global = cfg.global || {};
-            cfg.global.healing = cfg.global.healing || {};
-            cfg.global.healing.enabledRules =
-                cfg.global.healing.enabledRules || {};
-            const slot = cfg.global.healing.enabledRules;
-            for (const k of Object.keys(enabledRules)) {
-                slot[k] = !!enabledRules[k];
-            }
-            await ConfigStore.save(cfg, { logger: extensionHandle.log });
+            // Atomic read-modify-write (P0-7). Capture the mutated enabledRules
+            // slot via closure for the response.
+            let slot;
+            await ConfigStore.update((cfg) => {
+                cfg.global = cfg.global || {};
+                cfg.global.healing = cfg.global.healing || {};
+                cfg.global.healing.enabledRules =
+                    cfg.global.healing.enabledRules || {};
+                slot = cfg.global.healing.enabledRules;
+                for (const k of Object.keys(enabledRules)) {
+                    slot[k] = !!enabledRules[k];
+                }
+            }, { logger: extensionHandle.log });
             return res.json(successBody({ enabledRules: slot }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} PUT /config/healing: ${err.message}`);
@@ -629,14 +680,14 @@ function build(extensionHandle) {
                     set: !!(cfg && cfg.global && cfg.global.antiSnipePasswordHash),
                 }));
             }
-            const cfg = await ConfigStore.load();
-            cfg.global = cfg.global || {};
             if (password === '') {
                 // Explicit clear. Strip the field entirely so a future
                 // GET /config doesn't leak even the metadata that a
-                // hash USED to be set.
-                delete cfg.global.antiSnipePasswordHash;
-                await ConfigStore.save(cfg, { logger: extensionHandle.log });
+                // hash USED to be set. Atomic read-modify-write (P0-7).
+                await ConfigStore.update((cfg) => {
+                    cfg.global = cfg.global || {};
+                    delete cfg.global.antiSnipePasswordHash;
+                }, { logger: extensionHandle.log });
                 return res.json(successBody({ set: false }));
             }
             // Reject obviously-weak passwords. Server-side sanity only —
@@ -650,7 +701,8 @@ function build(extensionHandle) {
             // _verifyAntiSnipePassword exactly. Random 16-byte salt
             // + 64-byte derived key. KDF cost defaults match Node's
             // recommendation (N=16384, r=8, p=1). Owner-only path,
-            // so we can use the slightly heavier sync default.
+            // so we can use the slightly heavier sync default. Computed
+            // before the atomic write since it doesn't depend on cfg.
             const crypto = require('crypto');
             const salt = crypto.randomBytes(16);
             const derived = await new Promise((resolve, reject) => {
@@ -658,9 +710,13 @@ function build(extensionHandle) {
                     if (err) { reject(err); } else { resolve(key); }
                 });
             });
-            cfg.global.antiSnipePasswordHash = 'scrypt$'
+            const passwordHash = 'scrypt$'
                 + salt.toString('hex') + '$' + derived.toString('hex');
-            await ConfigStore.save(cfg, { logger: extensionHandle.log });
+            // Atomic read-modify-write (P0-7).
+            await ConfigStore.update((cfg) => {
+                cfg.global = cfg.global || {};
+                cfg.global.antiSnipePasswordHash = passwordHash;
+            }, { logger: extensionHandle.log });
             return res.json(successBody({ set: true }));
         } catch (err) {
             extensionHandle.log.error(

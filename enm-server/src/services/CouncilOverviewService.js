@@ -184,12 +184,20 @@ class CouncilOverviewService {
         try { proc = this.registry.getProcessService(); }
         catch (_) { proc = null; }
 
+        // v0.5.186 (Council Node UX P1.3) — the SyncTracker already holds each
+        // chain's latest height (fed by HealthChecker's poll), so the overview
+        // can show real height + sync state with ZERO new RPCs — it stays a
+        // cheap snapshot. null when unavailable (entry height stays null → "—").
+        let syncTracker = null;
+        try { syncTracker = this.registry.getSyncTracker(); } catch (_) { syncTracker = null; }
+
         const list = this.registry.listChains();
         const items = list.map((meta) => {
             return buildChainEntry({
                 meta,
                 chainCfg: chainsCfg[meta.chainId] || null,
                 proc,
+                syncTracker,
                 log: this.log,
             });
         });
@@ -275,7 +283,7 @@ class CouncilOverviewService {
  * @returns {object} chain entry
  */
 function buildChainEntry(args) {
-    const { meta, chainCfg, proc, log } = args;
+    const { meta, chainCfg, proc, syncTracker, log } = args;
     const cId = meta.chainId;
     let st = null;
     try {
@@ -310,6 +318,33 @@ function buildChainEntry(args) {
         chainCfg,
         uptimeSec,
     });
+    // v0.5.186 (Council Node UX P1.3) — real height + sync state from the
+    // SyncTracker cache (no new RPC). Lets the multi-chain control center show
+    // height + healthy/syncing/stalled, not just running/stopped. height stays
+    // null for class C/D (services with no chain height) and for chains without
+    // samples yet; syncState stays null when there's no network reference (we
+    // never guess "stalled" without knowing the chain is behind).
+    let height = null;
+    let networkHeight = null;
+    let blocksBehind = null;
+    let syncPercent = null;
+    let syncState = null;
+    if (alive && syncTracker && typeof syncTracker.syncSnapshot === 'function') {
+        try {
+            const sy = syncTracker.syncSnapshot(cId);
+            height = (typeof sy.localHeight === 'number') ? sy.localHeight : null;
+            networkHeight = (typeof sy.networkHeight === 'number') ? sy.networkHeight : null;
+            blocksBehind = (typeof sy.blocksBehind === 'number') ? sy.blocksBehind : null;
+            syncPercent = (typeof sy.percent === 'number') ? sy.percent : null;
+            if (height != null && blocksBehind != null) {
+                if (blocksBehind === 0) { syncState = 'synced'; }
+                else if (sy.stale) { syncState = 'stalled'; }
+                else { syncState = 'syncing'; }
+            }
+        } catch (err) {
+            log.debug(`${ENM_LOG_PREFIX} council:overview: syncSnapshot(${cId}) failed: ${err.message}`);
+        }
+    }
     return {
         chainId: cId,
         displayName: meta.displayName,
@@ -321,6 +356,11 @@ function buildChainEntry(args) {
         attached,
         uptimeSec,
         state,
+        height,
+        networkHeight,
+        blocksBehind,
+        syncPercent,
+        syncState,
     };
 }
 

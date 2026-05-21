@@ -391,6 +391,14 @@ function build(extensionHandle) {
                 coarseState = deriveCoarseState(status, chainCfg, syncSnapshot, adapter.chainClass);
             }
 
+            // v0.5.186 (Council Node UX P1.2) — class C oracle real status
+            // (parent reachability + parent height + last log activity + last
+            // error). Only oracles; null elsewhere so the UI shows "—".
+            let oracleInfo = null;
+            if (adapter.chainClass === 'C' && typeof adapter.oracleStatus === 'function') {
+                oracleInfo = await adapter.oracleStatus(chainCfg).catch(() => null);
+            }
+
             return res.json(successBody({
                 chainId: adapter.chainId,
                 displayName: adapter.displayName,
@@ -427,6 +435,23 @@ function build(extensionHandle) {
                 // snapshot). null/absent for every non-oracle chain.
                 parentChainId: adapter.parentChainId || null,
                 parentBlockHeight,
+                // v0.5.186 (Council Node UX P1.2) — class C oracle real status,
+                // so the Oracle view shows running/parent-reachable/last-activity/
+                // last-error instead of almost nothing. null for non-oracles.
+                oracle: oracleInfo,
+                // v0.5.186 (Council Node UX P1.1) — EVM (class B) miner identity.
+                // The geth/EVM account address + the operator's PBFT block-reward
+                // address + mining on/off live in cfg.miner (set by
+                // EvmSidechainAdapter._ensureEvmAccount + the class-b-config route)
+                // but were never returned, so the EVM dashboard structurally could
+                // not show the two addresses an operator most wants to verify. Class
+                // B only; null elsewhere so the UI renders "—" rather than guessing.
+                // The encrypted account password is NEVER included.
+                miner: (adapter.chainClass === 'B' && chainCfg.miner) ? {
+                    enabled: !!chainCfg.miner.enabled,
+                    rewardAddress: chainCfg.miner.rewardAddress || null,
+                    evmKeystoreAddr: chainCfg.miner.evmKeystoreAddr || null,
+                } : null,
             }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} GET /chains/${req.params.chainId}: ${err.message}`);
@@ -1668,14 +1693,22 @@ function build(extensionHandle) {
                     normalized.push(v.normalized);
                 }
             }
-            const cfg = await ConfigStore.load();
-            const chainCfg = cfg.chains && cfg.chains[chainId];
+            // Atomic read-modify-write (P0-7). Capture the prior list + the
+            // not-found case via closure so the HTTP 404 is decided after the
+            // mutator runs against the freshly-loaded cfg.
+            let chainCfg = null;
+            let previous = [];
+            await ConfigStore.update((cfg) => {
+                chainCfg = cfg.chains && cfg.chains[chainId];
+                if (!chainCfg) {
+                    return;
+                }
+                previous = Array.isArray(chainCfg.bootnodes) ? chainCfg.bootnodes.slice() : [];
+                chainCfg.bootnodes = normalized;
+            }, { logger: extensionHandle.log });
             if (!chainCfg) {
                 return res.status(404).json(errorBody(`Chain '${chainId}' not configured.`));
             }
-            const previous = Array.isArray(chainCfg.bootnodes) ? chainCfg.bootnodes.slice() : [];
-            chainCfg.bootnodes = normalized;
-            await ConfigStore.save(cfg, { logger: extensionHandle.log });
 
             // Live-apply only the NEWLY added enodes against a running chain.
             // Nodes already in the persisted list were dialed on a prior call
@@ -1740,15 +1773,15 @@ function build(extensionHandle) {
                 ));
             }
             const body = req.body || {};
-            const cfg = await ConfigStore.load();
-            const chainCfg = cfg.chains && cfg.chains[chainId];
-            if (!chainCfg) {
-                return res.status(404).json(errorBody(`Chain '${chainId}' not configured.`));
-            }
+            // Validate + normalize the (cfg-independent) body fields up front so
+            // the 400 early-returns stay at the top level. The resulting closures
+            // are then applied in place inside the atomic update() below (P0-7).
+            const minerMutations = [];
             // Optional miner subdoc merge.
             if (body.miner && typeof body.miner === 'object') {
                 if (typeof body.miner.enabled === 'boolean') {
-                    chainCfg.miner.enabled = body.miner.enabled;
+                    const enabled = body.miner.enabled;
+                    minerMutations.push((miner) => { miner.enabled = enabled; });
                 }
                 if (body.miner.rewardAddress !== undefined) {
                     const addr = String(body.miner.rewardAddress || '');
@@ -1759,7 +1792,8 @@ function build(extensionHandle) {
                                 `miner.rewardAddress: ${v.warning}`,
                             ));
                         }
-                        chainCfg.miner.rewardAddress = v.normalized || addr;
+                        const rewardAddress = v.normalized || addr;
+                        minerMutations.push((miner) => { miner.rewardAddress = rewardAddress; });
                         if (v.warning) {
                             // Soft warning (e.g. EIP-55 checksum mismatch).
                             extensionHandle.log.info(
@@ -1767,7 +1801,7 @@ function build(extensionHandle) {
                             );
                         }
                     } else {
-                        chainCfg.miner.rewardAddress = '';
+                        minerMutations.push((miner) => { miner.rewardAddress = ''; });
                     }
                 }
                 if (body.miner.evmKeystoreAddr !== undefined) {
@@ -1779,9 +1813,10 @@ function build(extensionHandle) {
                                 `miner.evmKeystoreAddr: ${v.warning}`,
                             ));
                         }
-                        chainCfg.miner.evmKeystoreAddr = v.normalized || addr;
+                        const evmKeystoreAddr = v.normalized || addr;
+                        minerMutations.push((miner) => { miner.evmKeystoreAddr = evmKeystoreAddr; });
                     } else {
-                        chainCfg.miner.evmKeystoreAddr = '';
+                        minerMutations.push((miner) => { miner.evmKeystoreAddr = ''; });
                     }
                 }
                 if (Number.isInteger(body.miner.threads)) {
@@ -1790,10 +1825,12 @@ function build(extensionHandle) {
                             'miner.threads: must be integer in [1, 16]',
                         ));
                     }
-                    chainCfg.miner.threads = body.miner.threads;
+                    const threads = body.miner.threads;
+                    minerMutations.push((miner) => { miner.threads = threads; });
                 }
             }
             // Optional sync subdoc merge.
+            let syncMode;
             if (body.sync && typeof body.sync === 'object') {
                 if (body.sync.mode !== undefined) {
                     const m = String(body.sync.mode);
@@ -1802,7 +1839,7 @@ function build(extensionHandle) {
                             'sync.mode: must be one of fast | full | archive',
                         ));
                     }
-                    chainCfg.sync.mode = m;
+                    syncMode = m;
                 }
             }
             // Optional bootnodes array replace. v0.5.175 — validate each as a
@@ -1810,12 +1847,13 @@ function build(extensionHandle) {
             // write-paths can't diverge and persist garbage that geth then
             // rejects at spawn. Persist-only here; live-apply is the dedicated
             // peer route's job.
+            let normalizedBootnodes;
             if (Array.isArray(body.bootnodes)) {
                 if (body.bootnodes.length > MAX_BOOTNODES) {
                     return res.status(400).json(errorBody(`bootnodes: too many (max ${MAX_BOOTNODES})`));
                 }
                 const { validateEnode } = require('../services/EnmCrypto');
-                const normalizedBootnodes = [];
+                normalizedBootnodes = [];
                 for (const b of body.bootnodes) {
                     const v = validateEnode(b);
                     if (!v.valid) {
@@ -1825,9 +1863,28 @@ function build(extensionHandle) {
                         normalizedBootnodes.push(v.normalized);
                     }
                 }
-                chainCfg.bootnodes = normalizedBootnodes;
             }
-            await ConfigStore.save(cfg);
+            // Atomic read-modify-write (P0-7). The 404 + the mutated subdoc for
+            // the response are captured via closure from the freshly-loaded cfg.
+            let chainCfg = null;
+            await ConfigStore.update((cfg) => {
+                chainCfg = cfg.chains && cfg.chains[chainId];
+                if (!chainCfg) {
+                    return;
+                }
+                for (const apply of minerMutations) {
+                    apply(chainCfg.miner);
+                }
+                if (syncMode !== undefined) {
+                    chainCfg.sync.mode = syncMode;
+                }
+                if (normalizedBootnodes !== undefined) {
+                    chainCfg.bootnodes = normalizedBootnodes;
+                }
+            });
+            if (!chainCfg) {
+                return res.status(404).json(errorBody(`Chain '${chainId}' not configured.`));
+            }
             extensionHandle.log.info(
                 `${ENM_LOG_PREFIX} PUT /chains/${chainId}/class-b-config saved`,
             );

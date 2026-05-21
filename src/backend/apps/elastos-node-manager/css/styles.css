@@ -6590,7 +6590,7 @@ body[data-app-size="compact"] .enm-app .enm-filter-chip {
     margin: 0;
     font-size: 14px;
     line-height: 1.5;
-    color: var(--text-muted, var(--text-primary));
+    color: var(--text-tertiary);
 }
 .enm-app .enm-pane-stub code {
     padding: 1px 5px;
@@ -6604,6 +6604,18 @@ body[data-app-size="compact"] .enm-app .enm-filter-chip {
    _exitOverviewMode via document.body.dataset.enmOverview). */
 body[data-enm-overview="1"] .enm-app .enm-tabs {
     display: none;
+}
+
+/* v0.5.186 (Council Node UX P1.4) — caption that marks the EVM-tab feature
+   grid as roadmap (not live). On-palette tokens only. The feature grid itself
+   is themed as part of the app-wide branding pass (later phase). */
+.enm-app .enm-evm-features-caption {
+    margin: var(--sp-4) 0 var(--sp-2);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-tertiary);
 }
 
 .enm-app .enm-role-card[data-goal="council"]:not([data-disabled="true"]) .enm-role-card-badge {
@@ -6651,11 +6663,11 @@ body[data-enm-overview="1"] .enm-app .enm-tabs {
 .enm-app .enm-council-form-hint {
     font-size: 12px;
     line-height: 1.4;
-    color: var(--text-muted, var(--text-primary));
+    color: var(--text-tertiary);
 }
 .enm-app .enm-council-form-error {
     font-size: 12px;
-    color: var(--state-error, #ef5350);
+    color: var(--error);
 }
 /* beta.0.4.5 — explainer note under Card E's single input, telling
    the operator that sidechain mining is OFF by default. */
@@ -6667,7 +6679,7 @@ body[data-enm-overview="1"] .enm-app .enm-tabs {
     border-radius: 8px;
     font-size: 12px;
     line-height: 1.5;
-    color: var(--text-muted, var(--text-primary));
+    color: var(--text-tertiary);
 }
 .enm-app .enm-council-form-note strong {
     color: var(--text-primary);
@@ -6717,34 +6729,34 @@ body[data-enm-overview="1"] .enm-app .enm-tabs {
     opacity: 0.5;
 }
 .enm-app .enm-council-step[data-status="start"] {
-    background: color-mix(in srgb, var(--state-syncing, #ffb74d) 10%, var(--bg-elevated));
+    background: color-mix(in srgb, var(--warning) 10%, var(--bg-elevated));
     padding: var(--sp-2, 8px) var(--sp-3, 12px);
     margin: var(--sp-1, 4px) 0;
     font-size: 14px;
     font-weight: 500;
 }
 .enm-app .enm-council-step[data-status="error"] {
-    background: color-mix(in srgb, var(--state-error, #ef5350) 12%, var(--bg-elevated));
+    background: color-mix(in srgb, var(--error) 12%, var(--bg-elevated));
     padding: var(--sp-2, 8px) var(--sp-3, 12px);
     margin: var(--sp-1, 4px) 0;
 }
 .enm-app .enm-council-step-icon {
     font-size: 14px;
     text-align: center;
-    color: var(--text-muted, var(--text-primary));
+    color: var(--text-tertiary);
 }
 .enm-app .enm-council-step[data-status="start"] .enm-council-step-icon {
-    color: var(--state-syncing, #ffb74d);
+    color: var(--warning);
     animation: enm-overview-pulse 1.4s ease-in-out infinite;
 }
 .enm-app .enm-council-step[data-status="done"] .enm-council-step-icon {
-    color: var(--state-healthy, #4caf50);
+    color: var(--success);
 }
 .enm-app .enm-council-step[data-status="skip"] .enm-council-step-icon {
-    color: var(--text-muted, var(--text-primary));
+    color: var(--text-tertiary);
 }
 .enm-app .enm-council-step[data-status="error"] .enm-council-step-icon {
-    color: var(--state-error, #ef5350);
+    color: var(--error);
 }
 .enm-app .enm-council-step-label {
     font-weight: 500;
@@ -6754,7 +6766,7 @@ body[data-enm-overview="1"] .enm-app .enm-tabs {
 }
 .enm-app .enm-council-step-message {
     font-size: 12px;
-    color: var(--text-muted, var(--text-primary));
+    color: var(--text-tertiary);
     text-align: right;
     max-width: 280px;
     overflow: hidden;
@@ -6792,13 +6804,13 @@ body[data-enm-overview="1"] .enm-app .enm-tabs {
 }
 .enm-app .enm-council-summary .enm-install-bar-fill {
     transition: width 300ms ease-out;
-    background: var(--state-syncing, #ffb74d);
+    background: var(--warning);
 }
 .enm-app .enm-council-summary[data-state="done"] .enm-install-bar-fill {
-    background: var(--state-healthy, #4caf50);
+    background: var(--success);
 }
 .enm-app .enm-council-summary[data-state="error"] .enm-install-bar-fill {
-    background: var(--state-error, #ef5350);
+    background: var(--error);
 }
 .enm-app .enm-council-summary-text {
     margin-top: var(--sp-2, 8px);
@@ -6815,8 +6827,8 @@ body[data-enm-overview="1"] .enm-app .enm-tabs {
     max-width: 640px;
     margin: var(--sp-3, 12px) auto;
     padding: var(--sp-3, 12px) var(--sp-4, 16px);
-    background: color-mix(in srgb, var(--state-syncing, #ffb74d) 12%, var(--bg-elevated));
-    border: 1px solid color-mix(in srgb, var(--state-syncing, #ffb74d) 40%, transparent);
+    background: color-mix(in srgb, var(--warning) 12%, var(--bg-elevated));
+    border: 1px solid color-mix(in srgb, var(--warning) 40%, transparent);
     border-radius: 10px;
 }
 .enm-app .enm-council-step-note-title {
@@ -6828,7 +6840,7 @@ body[data-enm-overview="1"] .enm-app .enm-tabs {
 .enm-app .enm-council-step-note-body {
     font-size: 12px;
     line-height: 1.5;
-    color: var(--text-muted, var(--text-primary));
+    color: var(--text-tertiary);
 }
 
 /* beta.0.4.6 — Card E PG-include checkbox row. The .enm-council-form
@@ -6846,7 +6858,7 @@ body[data-enm-overview="1"] .enm-app .enm-tabs {
     height: 18px;
     flex-shrink: 0;
     margin-top: 2px;
-    accent-color: var(--state-syncing, #ffb74d);
+    accent-color: var(--warning);
     cursor: pointer;
 }
 .enm-app .enm-council-form-row.enm-council-form-checkbox > span {
@@ -6893,20 +6905,20 @@ body[data-enm-overview="1"] .enm-app .enm-tabs {
     font-size: 16px;
     text-align: center;
     line-height: 1.4;
-    color: var(--text-muted, var(--text-primary));
+    color: var(--text-tertiary);
 }
 .enm-app .enm-preflight-row[data-state="checking"] .enm-preflight-icon {
-    color: var(--state-syncing, #ffb74d);
+    color: var(--warning);
     animation: enm-overview-pulse 1.4s ease-in-out infinite;
 }
 .enm-app .enm-preflight-row[data-state="ok"] .enm-preflight-icon {
-    color: var(--state-healthy, #4caf50);
+    color: var(--success);
 }
 .enm-app .enm-preflight-row[data-state="warn"] .enm-preflight-icon {
-    color: var(--state-syncing, #ffb74d);
+    color: var(--warning);
 }
 .enm-app .enm-preflight-row[data-state="error"] .enm-preflight-icon {
-    color: var(--state-error, #ef5350);
+    color: var(--error);
 }
 .enm-app .enm-preflight-text {
     display: flex;
@@ -6919,7 +6931,7 @@ body[data-enm-overview="1"] .enm-app .enm-tabs {
 }
 .enm-app .enm-preflight-message {
     font-size: 12px;
-    color: var(--text-muted, var(--text-primary));
+    color: var(--text-tertiary);
     line-height: 1.4;
 }
 .enm-app .enm-preflight-actions {
@@ -6969,7 +6981,7 @@ body[data-enm-overview="1"] .enm-app .enm-tabs {
 .enm-app .enm-overview-summary {
     margin: 0;
     font-size: 13px;
-    color: var(--text-muted, var(--text-primary));
+    color: var(--text-tertiary);
 }
 .enm-app .enm-overview-body {
     display: flex;
@@ -6986,7 +6998,7 @@ body[data-enm-overview="1"] .enm-app .enm-tabs {
     margin: 0 0 var(--sp-2, 8px) 0;
     font-size: 12px;
     font-weight: 600;
-    color: var(--text-muted, var(--text-primary));
+    color: var(--text-tertiary);
     text-transform: uppercase;
     letter-spacing: 0.05em;
 }
@@ -7024,24 +7036,24 @@ body[data-enm-overview="1"] .enm-app .enm-tabs {
     width: 10px;
     height: 10px;
     border-radius: 50%;
-    background: var(--text-muted, #888);
+    background: var(--text-tertiary);
     flex: 0 0 auto;
 }
 .enm-app .enm-overview-dot.state-running {
-    background: var(--state-healthy, #4caf50);
+    background: var(--success);
     box-shadow: 0 0 6px rgba(76, 175, 80, 0.5);
 }
 .enm-app .enm-overview-dot.state-starting {
-    background: var(--state-syncing, #ffb74d);
+    background: var(--warning);
     animation: enm-overview-pulse 1.4s ease-in-out infinite;
 }
 .enm-app .enm-overview-dot.state-stopped {
-    background: var(--state-error, #ef5350);
+    background: var(--error);
 }
 .enm-app .enm-overview-dot.state-disabled,
 .enm-app .enm-overview-dot.state-unconfigured,
 .enm-app .enm-overview-dot.state-unknown {
-    background: var(--text-muted, #888);
+    background: var(--text-tertiary);
     opacity: 0.6;
 }
 @keyframes enm-overview-pulse {
@@ -7058,11 +7070,11 @@ body[data-enm-overview="1"] .enm-app .enm-tabs {
 }
 .enm-app .enm-overview-state {
     font-size: 12px;
-    color: var(--text-muted, var(--text-primary));
+    color: var(--text-tertiary);
 }
 .enm-app .enm-overview-uptime {
     font-size: 12px;
-    color: var(--text-muted, var(--text-primary));
+    color: var(--text-tertiary);
     font-variant-numeric: tabular-nums;
     text-align: right;
 }
@@ -7070,14 +7082,14 @@ body[data-enm-overview="1"] .enm-app .enm-tabs {
     display: block;
     height: 24px;
     min-width: 60px;
-    color: var(--state-healthy, #4caf50);
+    color: var(--success);
 }
 .enm-app .enm-overview-spark svg {
     width: 100%;
     height: 100%;
 }
 .enm-app .enm-overview-arrow {
-    color: var(--text-muted, var(--text-primary));
+    color: var(--text-tertiary);
     font-size: 16px;
     opacity: 0.5;
     transition: opacity 120ms;
@@ -7101,7 +7113,7 @@ body[data-enm-overview="1"] .enm-app .enm-tabs {
 .enm-app .enm-overview-error h2 {
     margin: 0 0 var(--sp-2, 8px) 0;
     font-size: 16px;
-    color: var(--state-error, #ef5350);
+    color: var(--error);
 }
 .enm-app .enm-overview-empty p {
     margin: 0 0 var(--sp-2, 8px) 0;
@@ -7151,7 +7163,7 @@ body[data-app-size="compact"] .enm-app .enm-overview-row .enm-overview-spark {
     margin: 0 0 var(--sp-2, 8px) 0;
     font-size: 14px;
     line-height: 1.55;
-    color: var(--text-muted, var(--text-primary));
+    color: var(--text-tertiary);
 }
 .enm-app .enm-settings-class-stub p:last-child { margin-bottom: 0; }
 .enm-app .enm-settings-class-stub code {
@@ -7201,20 +7213,20 @@ body[data-app-size="compact"] .enm-app .enm-overview-row .enm-overview-spark {
     font-size: 16px;
     text-align: center;
     line-height: 1.4;
-    color: var(--text-muted, var(--text-primary));
+    color: var(--text-tertiary);
 }
 .enm-app .enm-syscheck-row[data-state="checking"] .enm-syscheck-icon {
-    color: var(--state-syncing, #ffb74d);
+    color: var(--warning);
     animation: enm-overview-pulse 1.4s ease-in-out infinite;
 }
 .enm-app .enm-syscheck-row[data-state="ok"] .enm-syscheck-icon {
-    color: var(--state-healthy, #4caf50);
+    color: var(--success);
 }
 .enm-app .enm-syscheck-row[data-state="warn"] .enm-syscheck-icon {
-    color: var(--state-syncing, #ffb74d);
+    color: var(--warning);
 }
 .enm-app .enm-syscheck-row[data-state="error"] .enm-syscheck-icon {
-    color: var(--state-error, #ef5350);
+    color: var(--error);
 }
 /* 0.5.2 audit Session 2 — banner variant used when the backend returns
    previouslyVerified=true (setup already done) or installInProgress=true.
@@ -7223,11 +7235,11 @@ body[data-app-size="compact"] .enm-app .enm-overview-row .enm-overview-spark {
    already passed and isn't being re-run. */
 .enm-app .enm-syscheck-row.enm-syscheck-banner {
     background: var(--ok-bg, rgba(76, 175, 80, 0.08));
-    border: 1px solid var(--state-healthy, rgba(76, 175, 80, 0.35));
+    border: 1px solid color-mix(in srgb, var(--success) 35%, transparent);
     padding: var(--sp-3, 12px) var(--sp-4, 16px);
 }
 .enm-app .enm-syscheck-row.enm-syscheck-banner .enm-syscheck-icon {
-    color: var(--state-healthy, #4caf50);
+    color: var(--success);
     font-size: 20px;
 }
 .enm-app .enm-syscheck-row.enm-syscheck-banner .enm-syscheck-label {
@@ -7244,7 +7256,7 @@ body[data-app-size="compact"] .enm-app .enm-overview-row .enm-overview-spark {
 }
 .enm-app .enm-syscheck-message {
     font-size: 12px;
-    color: var(--text-muted, var(--text-primary));
+    color: var(--text-tertiary);
     line-height: 1.4;
 }
 .enm-app .enm-syscheck-help[data-state="warn"] {
@@ -7275,7 +7287,7 @@ body[data-app-size="compact"] .enm-app .enm-overview-row .enm-overview-spark {
 .enm-app .enm-syscheck-rem-status {
     margin: var(--sp-2, 8px) 0 0 0;
     font-size: 12px;
-    color: var(--text-muted, var(--text-primary));
+    color: var(--text-tertiary);
 }
 
 /* ============================================================

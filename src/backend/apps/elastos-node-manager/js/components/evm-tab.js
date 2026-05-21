@@ -57,6 +57,11 @@
                 '<strong>Dashboard → Identity</strong> for the step-by-step ' +
                 'registration instructions and your node\'s public key.' +
             '</p>' +
+            // v0.5.186 (Council Node UX P1.4) — label the tiles unambiguously as
+            // ROADMAP so they aren't misread as live/available features. The
+            // copy above already states this is future; this caption makes the
+            // grid itself self-evidently "planned, not live".
+            '<p class="enm-evm-features-caption">Planned for a future release</p>' +
             '<div class="enm-evm-features">' +
                 '<div class="enm-evm-feature">' +
                     '<div class="enm-evm-feature-title">Wallet connect</div>' +
