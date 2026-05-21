@@ -469,18 +469,36 @@ class HealthChecker {
                 dposDesyncDetected = await this._probeDposDesyncSignal(chainId);
             }
 
-            // v0.5.184 — F26 probe. On a Class B (EVM) chain that is alive AND
-            // already height-stalled, tail the node log for the wedged-fork
-            // signature ("retrieved hash chain is invalid"). Same cheap bounded
-            // read as the DPoS probe and gated on an in-progress stall so it
-            // never runs on the hot path of a healthy, advancing chain. The
-            // class gate avoids wasted reads on ela / oracle / arbiter logs.
+            // v0.5.184/185 — Class B (EVM) self-heal signals. Two probes:
+            //  - evmSpvReady (P0-A/B): track the embedded SPV client's height
+            //    each tick. The EVM chains validate blocks using the mainchain
+            //    arbiter set learned via SPV, so a chain whose SPV is still
+            //    bulk-downloading headers legitimately can't advance — F26 must
+            //    not treat that as a fork and wipe it. "ready" = SPV present,
+            //    >0, and advancing slowly (tracking the tip) vs bulk-download.
+            //  - evmForkDetected (F26): the wedged-fork log signature, only
+            //    probed once already height-stalled (cheap-gate). Same bounded
+            //    64KB read as the DPoS probe; class-gated to skip ela/oracle/arbiter.
             let evmForkDetected = false;
-            if (status.alive && s.firstHeightStallAt) {
-                let isEvm = false;
-                try { isEvm = this.getAdapter(chainId).chainClass === 'B'; } catch (_) { isEvm = false; }
-                if (isEvm) {
+            let evmRecoveryStall = false;
+            let evmSpvReady; // undefined for non-Class-B; true/false for Class B
+            let isEvm = false;
+            try { isEvm = this.getAdapter(chainId).chainClass === 'B'; } catch (_) { isEvm = false; }
+            if (isEvm && status.alive) {
+                const spvH = await this._probeEvmSpvHeight(chainId);
+                if (typeof spvH === 'number' && spvH > 0) {
+                    const prev = s.lastEvmSpvHeight;
+                    const delta = (typeof prev === 'number') ? (spvH - prev) : null;
+                    // ready iff we have a prior sample AND the per-tick advance
+                    // is small (tracking the tip), not a bulk header download.
+                    evmSpvReady = (delta !== null && delta >= 0 && delta < HealthRules.SPV_CAUGHTUP_MAX_DELTA);
+                    s.lastEvmSpvHeight = spvH;
+                } else {
+                    evmSpvReady = false; // no SPV height observed yet → not ready
+                }
+                if (s.firstHeightStallAt) {
                     evmForkDetected = await this._probeEvmForkSignal(chainId);
+                    evmRecoveryStall = await this._probeEvmRecoveryStall(chainId);
                 }
             }
 
@@ -496,6 +514,8 @@ class HealthChecker {
                 ruleState: s,
                 dposDesyncDetected,
                 evmForkDetected,
+                evmRecoveryStall,
+                evmSpvReady,
             };
             this._enrichOracleSnap(snap, chainCfg);
             this._enrichArbiterSnap(snap);
@@ -504,7 +524,7 @@ class HealthChecker {
                 d.ruleId === 'F3' || d.ruleId === 'F4' || d.ruleId === 'F9'
                 || d.ruleId === 'F10' || d.ruleId === 'F16' || d.ruleId === 'F18'
                 || d.ruleId === 'F22' || d.ruleId === 'F24' || d.ruleId === 'F23'
-                || d.ruleId === 'F26');
+                || d.ruleId === 'F26' || d.ruleId === 'F27');
             if (dets.length > 0) {
                 await this.engine.apply(chainId, dets, chainCfg);
             }
@@ -1311,8 +1331,20 @@ class HealthChecker {
      */
     async _probeEvmForkSignal(chainId) {
         const PROBE_MAX_BYTES = 64 * 1024;
-        const EVM_FORK_MIN_HITS = 3;
-        const PATTERN = /retrieved hash chain is invalid/gi;
+        // Two fork-class signatures, different confidence:
+        //  - DOWNLOADER_FORK: geth's block downloader rejecting a peer's header
+        //    chain. Emitted transiently by a single bad peer too, so require
+        //    ≥3 hits to confirm a genuine local minority-fork wedge.
+        //  - STATE_CORRUPT (v0.5.185 P0-C): a state/receipt-root mismatch or
+        //    BAD BLOCK on the PBFT live-insert path. When no higher-TD peer
+        //    exists this halts import with NO downloader string (the silent
+        //    halt F26 used to miss → only F4 restart fired, which re-poisons).
+        //    It's definitive local-state corruption, so ≥1 suffices — F26's
+        //    other gates (20-min stall + peers>0 + SPV-ready) prevent a fluke
+        //    from triggering the destructive wipe.
+        const DOWNLOADER_FORK = /retrieved hash chain is invalid/gi;
+        const STATE_CORRUPT = /invalid merkle root|invalid receipt root hash|BAD BLOCK/gi;
+        const DOWNLOADER_MIN_HITS = 3;
         try {
             const logDir = path.join(chainDir(chainId), 'logs');
             const entries = await fsp.readdir(logDir).catch(() => []);
@@ -1328,14 +1360,111 @@ class HealthChecker {
             try {
                 const buf = Buffer.alloc(stat.size - startOffset);
                 await fd.read(buf, 0, buf.length, startOffset);
-                const matches = buf.toString('utf8').match(PATTERN);
-                return Array.isArray(matches) && matches.length >= EVM_FORK_MIN_HITS;
+                const text = buf.toString('utf8');
+                const stateHits = (text.match(STATE_CORRUPT) || []).length;
+                if (stateHits >= 1) {
+                    this.extensionHandle.log.debug(
+                        `${ENM_LOG_PREFIX} _probeEvmForkSignal(${chainId}): state-corruption signature ×${stateHits} (silent-halt fork)`,
+                    );
+                    return true;
+                }
+                const dlHits = (text.match(DOWNLOADER_FORK) || []).length;
+                return dlHits >= DOWNLOADER_MIN_HITS;
             } finally {
                 await fd.close().catch(() => {});
             }
         } catch (err) {
             this.extensionHandle.log.debug(
                 `${ENM_LOG_PREFIX} _probeEvmForkSignal(${chainId}) failed (non-fatal): ${err.message}`,
+            );
+            return false;
+        }
+    }
+
+    /**
+     * v0.5.185 (P0-A) — read an EVM chain's embedded-SPV height from its node
+     * log. These chains log `GetCurrentConsensusMode ... spvHeight=N Mode=M`
+     * continuously (esc src spv/blocklistener.go:218); we tail the newest log
+     * and return the LAST spvHeight observed. Gates F26 (don't wipe a chain
+     * whose SPV is still catching up — it can't validate yet) and suppresses
+     * F4 sync-stall during SPV catch-up. Returns a number, or null if unknown.
+     * Same bounded 64KB read as the fork/dpos probes; never throws.
+     *
+     * @param {string} chainId
+     * @returns {Promise<number|null>}
+     */
+    async _probeEvmSpvHeight(chainId) {
+        const PROBE_MAX_BYTES = 64 * 1024;
+        const PATTERN = /spvHeight=(\d+)/g;
+        try {
+            const logDir = path.join(chainDir(chainId), 'logs');
+            const entries = await fsp.readdir(logDir).catch(() => []);
+            const logFiles = entries.filter((n) => /\.log$/.test(n));
+            if (logFiles.length === 0) return null;
+            logFiles.sort();
+            const newest = logFiles[logFiles.length - 1];
+            const full = path.join(logDir, newest);
+            const stat = await fsp.stat(full).catch(() => null);
+            if (!stat) return null;
+            const startOffset = Math.max(0, stat.size - PROBE_MAX_BYTES);
+            const fd = await fsp.open(full, 'r');
+            try {
+                const buf = Buffer.alloc(stat.size - startOffset);
+                await fd.read(buf, 0, buf.length, startOffset);
+                const text = buf.toString('utf8');
+                let last = null;
+                let m;
+                while ((m = PATTERN.exec(text)) !== null) { last = m[1]; }
+                return last !== null ? parseInt(last, 10) : null;
+            } finally {
+                await fd.close().catch(() => {});
+            }
+        } catch (err) {
+            this.extensionHandle.log.debug(
+                `${ENM_LOG_PREFIX} _probeEvmSpvHeight(${chainId}) failed (non-fatal): ${err.message}`,
+            );
+            return null;
+        }
+    }
+
+    /**
+     * v0.5.185 (P1-A) — detect a PBFT consensus-recovery STALL in an EVM chain's
+     * node log: the node has peers + a flat height but is stuck unable to reach
+     * quorum / recover state. Signatures (esc src consensus/pbft + network.go):
+     * "wait for recoved states", "can not find active peer", "recover failed".
+     * This is a re-peer / quorum problem — NOT a data fork — so a wipe+resync
+     * (F26) cannot fix it and would waste days re-syncing a 20 GB chain. F27
+     * surfaces it as an alert and detectF26 yields when this is set. Bounded
+     * 64KB read; never throws.
+     *
+     * @param {string} chainId
+     * @returns {Promise<boolean>}
+     */
+    async _probeEvmRecoveryStall(chainId) {
+        const PROBE_MAX_BYTES = 64 * 1024;
+        const PATTERN = /wait for recoved states|can not find active peer|recover failed/i;
+        try {
+            const logDir = path.join(chainDir(chainId), 'logs');
+            const entries = await fsp.readdir(logDir).catch(() => []);
+            const logFiles = entries.filter((n) => /\.log$/.test(n));
+            if (logFiles.length === 0) return false;
+            logFiles.sort();
+            const newest = logFiles[logFiles.length - 1];
+            const full = path.join(logDir, newest);
+            const stat = await fsp.stat(full).catch(() => null);
+            if (!stat) return false;
+            const startOffset = Math.max(0, stat.size - PROBE_MAX_BYTES);
+            const fd = await fsp.open(full, 'r');
+            try {
+                const buf = Buffer.alloc(stat.size - startOffset);
+                await fd.read(buf, 0, buf.length, startOffset);
+                return PATTERN.test(buf.toString('utf8'));
+            } finally {
+                await fd.close().catch(() => {});
+            }
+        } catch (err) {
+            this.extensionHandle.log.debug(
+                `${ENM_LOG_PREFIX} _probeEvmRecoveryStall(${chainId}) failed (non-fatal): ${err.message}`,
             );
             return false;
         }

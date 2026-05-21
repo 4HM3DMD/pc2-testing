@@ -358,8 +358,13 @@ async function chainResync(opts) {
             candidates = [
                 path.join(dataDir, 'geth'),        // esc/eid EVM blockchain DB
                 path.join(dataDir, 'pgp'),         // pg EVM blockchain DB
-                path.join(dataDir, 'geth.ipc'),    // stale ipc socket
-                path.join(dataDir, 'peers.json'),  // stale peer cache
+                path.join(dataDir, 'geth.ipc'),    // stale ipc socket (esc/eid)
+                path.join(dataDir, 'pgp.ipc'),     // v0.5.185 P2-B — stale ipc socket (pg)
+                // v0.5.185 P2-A — data/peers.json is NOT wiped: it is the SPV
+                // mainchain-watch addrmgr peer cache (ELA-SPV), not EVM fork
+                // state, so wiping it only slows the SPV mainchain re-handshake
+                // after a resync. The EVM eth-layer peer DB is data/<instance>/
+                // nodes, which lives INSIDE geth/pgp above and is wiped with it.
                 path.join(DataDir.enmDataDir(), '.tmp', 'bootstrap', chainId),
             ];
         } else {
@@ -375,20 +380,35 @@ async function chainResync(opts) {
                 path.join(DataDir.enmDataDir(), '.tmp', 'bootstrap', chainId),
             ];
         }
-        // P1-7 hard safety net — NEVER delete the mining keystore, even if a
-        // future edit mistakenly adds data/ or data/keystore to the candidates.
-        // Identity loss is permanent + unrecoverable, so this guard is absolute.
-        const keystoreDir = path.join(cdir, 'data', 'keystore');
+        // P1-7 / v0.5.185 P2-C hard safety net — NEVER delete identity or SPV
+        // state, even if a future edit mistakenly adds them to the candidates.
+        // The mining keystore (identity) is permanent + unrecoverable. For
+        // Class B the embedded-SPV store (header/store/spv_transaction_info.db/
+        // logs-spv) takes hours to re-download and, if wiped, the EVM chain
+        // CANNOT validate until SPV re-syncs (the operator's dev: "if you
+        // removed spv data you must wait until spv sync finished"). Absolute.
+        const protectedPaths = [path.join(cdir, 'data', 'keystore')];
+        if (adapter.chainClass === 'B') {
+            const d = path.join(cdir, 'data');
+            protectedPaths.push(
+                path.join(d, 'header'),
+                path.join(d, 'store'),
+                path.join(d, 'spv_transaction_info.db'),
+                path.join(d, 'logs-spv'),
+            );
+        }
         candidates = candidates.filter((p) => {
-            const rel = path.relative(p, keystoreDir);
-            const wouldHitKeystore = (p === keystoreDir)
-                || (rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel));
-            if (wouldHitKeystore) {
-                log.warn(
-                    `${ENM_LOG_PREFIX} maintenance.chainResync: REFUSING to delete ${p} — `
-                    + 'it is or contains the mining keystore',
-                );
-                return false;
+            for (const prot of protectedPaths) {
+                const rel = path.relative(p, prot);
+                const wouldHit = (p === prot)
+                    || (rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel));
+                if (wouldHit) {
+                    log.warn(
+                        `${ENM_LOG_PREFIX} maintenance.chainResync: REFUSING to delete ${p} — `
+                        + `it is or contains protected state (${path.basename(prot)})`,
+                    );
+                    return false;
+                }
             }
             return true;
         });

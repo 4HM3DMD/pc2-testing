@@ -111,6 +111,14 @@ const EVM_ACCOUNT_NEW_TIMEOUT_MS = 120_000;
 // as a REPEATED `--frozen.account.list <addr>` flag (one flag per address,
 // NOT comma-separated) in the council miner branch — verbatim from
 // node.sh:2156-2166. This applies to esc ONLY (NOT eid, NOT pg).
+//
+// v0.5.185 P1-E — DRIFT WARNING: this list is hard-coded against a specific
+// node.sh revision. It is CONSENSUS-CRITICAL — a producing ESC validator that
+// uses a different frozen set than the network diverges (forks). If Elastos
+// amends ESC's mainnet frozen accounts in a future binary release, node.sh
+// ships the update but THIS list goes stale. Re-verify against node.sh on every
+// esc binary bump (the binary also appends 2 more frozen addrs in its mainnet
+// default branch — so the effective set is these 11 + 2 = 13).
 const ESC_FROZEN_ACCOUNTS = Object.freeze([
     '0xD3651037F719CC3f38ef819f919972e04A0762d4',
     '0xd5300C4091C4C45787C1BcB2b3d089F6a6094498',
@@ -373,9 +381,16 @@ class EvmSidechainAdapter extends ChainAdapter {
         if (secrets.pbftPasswordFile) {
             args.push('--pbft.keystore.password', secrets.pbftPasswordFile);
         }
-        // Sync mode: 'fast' / 'full' / 'archive'. node.sh default is 'fast'.
+        // Sync mode: 'fast' / 'full' / 'archive'.
         if (cfg.sync && cfg.sync.mode) {
             args.push('--syncmode', cfg.sync.mode);
+        } else if (cfg.miner && cfg.miner.enabled === true) {
+            // v0.5.185 P2-D — node.sh forces `--syncmode full` on a producing
+            // council validator (esc_start:2152). Without it geth defaults to
+            // 'fast', and a PBFT producer on fast-sync can mis-serve / mis-mine
+            // before its state is complete. Match node.sh for miners; non-miner
+            // followers keep geth's default.
+            args.push('--syncmode', 'full');
         }
         // Miner — enabled for council validators (the sidechain produces
         // blocks). Values:

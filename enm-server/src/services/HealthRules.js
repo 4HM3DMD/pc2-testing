@@ -141,6 +141,14 @@ const PRODUCER_INACTIVE_CRITICAL = 1300;              // F12 — close to forced
 // probe) is the definitive marker; this grace ensures the wedge has persisted.
 const EVM_FORK_STALL_GRACE_MS    = 20 * 60_000;
 
+// v0.5.185 (P0-B) — max per-medium-tick (30s) SPV-height advance still counted
+// as "tracking the mainchain tip" rather than an initial bulk header download.
+// Normal tip-tracking moves ~tens of blocks per 30s; a fresh SPV catching up
+// moves thousands. Above this delta the embedded SPV client is still syncing,
+// so the EVM chain legitimately can't validate yet — F26 must NOT wipe it (the
+// "fork" would just be SPV-not-ready, and a resync would re-fork identically).
+const SPV_CAUGHTUP_MAX_DELTA      = 2000;
+
 /**
  * @typedef {object} HealthSnapshot
  * @property {string} chainId
@@ -273,6 +281,14 @@ function detectF4(snap) {
     // handles it. Yield here so the operator doesn't also get F4's useless
     // restart proposal for the same condition.
     if (snap.evmForkDetected) return null;
+    // v0.5.185 (P1-C) — suppress the generic sync-stall restart while a Class B
+    // chain's SPV client is still catching up: its height legitimately can't
+    // advance until SPV reaches the tip, so a restart neither helps nor is the
+    // stall a fault. evmSpvReady is set (true/false) only for Class B.
+    if (snap.evmSpvReady === false) return null;
+    // v0.5.185 (P1-A) — a PBFT recovery stall is owned by F27 (alert-only). A
+    // generic F4 restart can loop on a quorum problem, so yield here too.
+    if (snap.evmRecoveryStall) return null;
 
     // FIX-C15 — height legitimately sits flat right after start (a node at
     // genesis, or one that just restored a snapshot, hasn't begun advancing
@@ -931,8 +947,20 @@ function detectF26(snap) {
     // Require a positive peer count: the fork diagnosis is "we have peers but
     // reject all their chains". A peerless node is F3/F16's domain, not F26's.
     if (!(snap.rpcSummary.peers > 0)) return null;
+    // v0.5.185 (P1-A) — yield to F27 on a PBFT recovery stall. A quorum/peer
+    // problem is NOT a data fork; wiping + resyncing a 20 GB chain cannot fix it
+    // and would waste days. F27 alerts the operator instead.
+    if (snap.evmRecoveryStall) return null;
     // The definitive marker — set only by HealthChecker._probeEvmForkSignal.
     if (!snap.evmForkDetected) return null;
+    // v0.5.185 (P0-B) — SPV-readiness gate. The EVM chains validate blocks via
+    // the mainchain arbiter set learned over their embedded SPV client. If SPV
+    // is still bulk-downloading headers (a fresh install can take hours), the
+    // chain genuinely cannot validate and any transient fork signal is NOT a
+    // real local fork — wiping + resyncing would just re-fork the same way once
+    // it re-validates against the not-yet-ready SPV. Only wipe when SPV has
+    // caught up to the tip (set by HealthChecker; true/false only for Class B).
+    if (snap.evmSpvReady !== true) return null;
     // A freshly-started node may log transient sync errors before it settles;
     // don't wipe it during the initial start grace.
     if (withinInitialStartGrace(snap)) return null;
@@ -952,6 +980,39 @@ function detectF26(snap) {
         // stuckHeight lets the engine's auto-resolve sweep tell "still forked"
         // from "recovered" (height climbed past it), mirroring F4's payload.
         payload: { action: 'evm-fork-resync', chainId: snap.chainId, stuckHeight: snap.rpcSummary.height },
+    };
+}
+
+/**
+ * F27 — EVM sidechain PBFT consensus-recovery stall (Class B, v0.5.185 P1-A).
+ *
+ * Fires when an EVM chain is alive + height-stalled past EVM_FORK_STALL_GRACE_MS
+ * and HealthChecker's log probe found a recovery-stall signature ("wait for
+ * recoved states" / "can not find active peer" / "recover failed"). Unlike F26,
+ * this is a quorum / re-peer problem, NOT a local data fork — a wipe+resync
+ * cannot fix it and would waste days rebuilding a 20 GB chain. Alert-only
+ * (CRITICAL_NOTIFY); detectF26 yields when evmRecoveryStall is set so the two
+ * never both fire on the same condition.
+ */
+function detectF27(snap) {
+    if (!snap || !snap.processStatus || !snap.processStatus.alive) return null;
+    if (!snap.evmRecoveryStall) return null;
+    const firstStall = snap.ruleState && snap.ruleState.firstHeightStallAt;
+    if (!firstStall) return null;
+    if (Date.now() - firstStall < EVM_FORK_STALL_GRACE_MS) return null;
+
+    return {
+        ruleId: 'F27',
+        tier: HEALING_TIERS.CRITICAL_NOTIFY,
+        severity: 'CRITICAL',
+        summaryAction: `${snap.chainId}: PBFT consensus stuck (cannot reach quorum)`,
+        summaryReason:
+            `${snap.chainId} has peers but its height has been stalled for >20 min and its node `
+            + 'log shows a PBFT recovery stall ("wait for recoved states" / "can not find active '
+            + 'peer"). This is a consensus / peer-quorum problem, not a forked chain — an auto-resync '
+            + 'will NOT help. Check the chain\'s peers/bootnodes (Settings → EVM → Peers) and that '
+            + 'other validators are reachable; restart the chain once peers are restored.',
+        payload: { chainId: snap.chainId },  // no `action` → alert-only
     };
 }
 
@@ -1039,6 +1100,9 @@ const RULE_METADATA = Object.freeze({
     // v0.5.184 — Class B-only. EVM sidechain wedged on a minority fork.
     F26: { tier: 'AUTOMATED_SAFE', title: 'Auto-resync wedged EVM fork',
            description: 'On an EVM sidechain (ESC/EID/PG) that has been stuck for >20 min while its node log rejects every peer with "retrieved hash chain is invalid", the local chain data has forked off the network and a restart cannot recover it. Auto-resync wipes the chain data (mining keystore preserved) and re-syncs from peers. Rate-limited to once per chain per 24h; a chain that re-forks inside that window escalates to operator confirmation instead of wiping again.' },
+    // v0.5.185 (P1-A) — Class B-only, alert-only. PBFT consensus-recovery stall.
+    F27: { tier: 'CRITICAL_NOTIFY', title: 'EVM consensus-recovery stall',
+           description: 'On an EVM sidechain (ESC/EID/PG) that is stuck for >20 min with peers but a PBFT recovery-stall log signature ("wait for recoved states" / "can not find active peer"), surface a critical alert. This is a quorum / peer problem, not a data fork — an auto-resync cannot fix it, so F26 yields to this alert and the operator restores peers/bootnodes instead.' },
 });
 
 // beta.3.22 — every rule is enabled by default. The operator-facing
@@ -1074,6 +1138,7 @@ const DEFAULT_ENABLED = Object.freeze({
     F24: true,  // beta.0.3.5 — Class C oracle parent offline (alert-only)
     F23: true,  // beta.0.3.14 — Class D arbiter cross-chain unreachable
     F26: true,  // v0.5.184 — Class B wedged-fork auto-resync (rate-limited)
+    F27: true,  // v0.5.185 — Class B PBFT recovery-stall alert (alert-only)
 });
 
 // Global rule overrides (apply to all chains). Pre-3.87 this was the only
@@ -1192,6 +1257,9 @@ function runAll(snap) {
         // F4: a forked EVM chain needs a wipe+resync, NOT a restart. detectF4
         // additionally yields on snap.evmForkDetected so F26 owns the case.
         ['F26', detectF26],
+        // v0.5.185 (P1-A) — F27 (recovery-stall alert) before F4 too, so the
+        // consensus-stall alert wins over a generic restart proposal.
+        ['F27', detectF27],
         ['F4',  detectF4],  ['F5',  detectF5],  ['F6',  detectF6],
         ['F7',  detectF7],  ['F8',  detectF8],  ['F9',  detectF9],
         ['F10', detectF10], ['F11', detectF11], ['F12', detectF12],
@@ -1229,8 +1297,9 @@ function runAll(snap) {
     // beta.4.00 (Wave M3.6) — Class B-only rules. F25 is mining-address
     // semantics that only apply to EVM sidechains; for mainchain (Class A)
     // or oracles (Class C) etc., the rule is silently skipped.
-    // v0.5.184 — F26 (wedged-fork auto-resync) is EVM-sidechain-only.
-    const CLASS_B_ONLY_RULES = new Set(['F25', 'F26']);
+    // v0.5.184/185 — F26 (wedged-fork auto-resync) + F27 (recovery-stall alert)
+    // are EVM-sidechain-only.
+    const CLASS_B_ONLY_RULES = new Set(['F25', 'F26', 'F27']);
     // beta.0.3.5 (Wave M4.5) — Class C-only rules. F24 fires only for
     // oracles (esc-oracle/eid-oracle/pg-oracle) where the parent-
     // chain abstraction exists.
@@ -1297,7 +1366,9 @@ module.exports = {
     detectF24,  // beta.0.3.5 (Wave M4.5)
     detectF23,  // beta.0.3.14 (Wave M6.5)
     detectF26,  // v0.5.184 — Class B wedged-fork auto-resync
+    detectF27,  // v0.5.185 (P1-A) — Class B PBFT recovery-stall alert
     EVM_FORK_STALL_GRACE_MS,
+    SPV_CAUGHTUP_MAX_DELTA,  // v0.5.185 (P0-B)
     PEER_ZERO_GRACE_MS,
     RPC_UNREACHABLE_GRACE_MS,
     HEIGHT_STALL_GRACE_MS,

@@ -109,9 +109,16 @@ const PROCESS_RESTART_BUDGET_WINDOW_MS = 10 * 60 * 1000;
 // (which needs tens of seconds to flush leveldb) got SIGKILLed mid-write by the
 // process-group teardown → dirty DB → rewind on restart → (for a mining EVM
 // node) fork. We now AWAIT the children's clean exit up to this budget before
-// letting ENM exit. Bounded below PROCESS_STOP_GRACE_MS so it fits inside a
-// typical supervisor SIGTERM→SIGKILL window (systemd default 90s).
-const SHUTDOWN_DRAIN_GRACE_MS = 45_000;
+// letting ENM exit.
+//
+// v0.5.185 (P0-D) — raised 45s → 120s. Diagnosed root cause of the recurring
+// EVM forks: pc2-node's service cgroup (KillMode=control-group) SIGKILLs ENM +
+// all 8 chains when its 90s systemd TimeoutStopSec expires, and the 20 GB
+// esc/eid geth chains can take far longer than 45s to flush leveldb → killed
+// mid-write → corruption → fork. The host's TimeoutStopSec was raised to 300s
+// (pc2-node.service.d/timeoutstop.conf drop-in), so this 120s drain now fits
+// comfortably inside the supervisor's stop budget and lets the big chains flush.
+const SHUTDOWN_DRAIN_GRACE_MS = 120_000;
 
 // v0.5.184 — F26 auto-resync rate limit. Wiping + re-syncing an EVM chain is
 // destructive (drops to genesis, hours to rebuild) though recoverable (keystore
