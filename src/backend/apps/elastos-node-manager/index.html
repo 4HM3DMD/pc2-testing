@@ -211,6 +211,12 @@
     <script defer src="js/components/sparkline.js?ts=20260512a"></script>
     <script defer src="js/components/power-circle.js?ts=20260512a"></script>
     <script defer src="js/components/chain-card.js?ts=20260520v168"></script>
+    <!-- v0.5.187 (Council Node UX Phase 3) — additive per-class dashboard
+         cards mounted BELOW the shared chain-card hero. Class B (EVM): mining
+         on/off + geth/reward addresses. Class C (Oracle): parent reachable +
+         height + last activity/error. Never mounted for the mainchain. -->
+    <script defer src="js/components/evm-detail-card.js?ts=20260521v187"></script>
+    <script defer src="js/components/oracle-status-card.js?ts=20260521v187"></script>
     <script defer src="js/components/validator-registration-card.js?ts=20260515b3t"></script>
     <!-- beta.3.14 — always-on node-identity card. Truth-corrected from beta.3.13:
          the keystore-derived address is the consensus signing identity ONLY;

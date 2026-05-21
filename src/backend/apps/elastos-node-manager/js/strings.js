@@ -748,6 +748,21 @@
             row_aria_open:        'Open {chainName} dashboard',
             // SR announcer message after row click.
             announce_switched_to: 'Switched to {chainName}',
+            // v0.5.186 (Council Node UX P2.1) — control-center row meta line.
+            // {n} = thousands-separated block height; {parent} = parent
+            // EVM chain name an Oracle relays for.
+            block:                'Block {n}',
+            relays_for:           'Relays for {parent}',
+            // Honest placeholder shown for an alive chain whose RPC hasn't
+            // reported a height yet (never a faked number).
+            height_pending:       'height pending…',
+            // Sync-state badges — only rendered from a real syncState.
+            synced:               'Synced',
+            stalled:              'Stalled',
+            syncing:              'Syncing',
+            // P2.2 — confirm prompt for disruptive quick actions (stop/restart).
+            // {action} = stop|restart; {chainName} = display name.
+            action_confirm:       'Are you sure you want to {action} {chainName}? In-progress sync work will be interrupted.',
         },
 
         // beta.3.94 (Wave M2.6) — non-mainchain dashboard pane stub

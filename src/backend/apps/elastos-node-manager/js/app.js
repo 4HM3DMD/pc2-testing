@@ -1352,6 +1352,23 @@
             card.mount(pane);
             this._dashboardMounts.push(card);
         }
+        // v0.5.187 (Council Node UX Phase 3) — additive per-class detail cards,
+        // mounted BELOW the shared hero and ABOVE system-status so chain-specific
+        // info groups together at the top. These branches NEVER fire for the
+        // mainchain (Class A), so the Class-A dashboard order is unchanged:
+        //   Class B (EVM) → mining on/off + geth/reward addresses
+        //   Class C (Oracle) → parent reachable + height + last activity/error
+        // chain-card.js itself is untouched (Main Chain is the reference).
+        if (chainClass === 'B' && root.EnmEvmDetailCard) {
+            var evmDetail = new root.EnmEvmDetailCard(common);
+            evmDetail.mount(pane);
+            this._dashboardMounts.push(evmDetail);
+        }
+        if (chainClass === 'C' && root.EnmOracleStatusCard) {
+            var oracleStatus = new root.EnmOracleStatusCard(common);
+            oracleStatus.mount(pane);
+            this._dashboardMounts.push(oracleStatus);
+        }
         if (root.EnmSystemStatus) {
             var sys = new root.EnmSystemStatus(common);
             sys.mount(pane);

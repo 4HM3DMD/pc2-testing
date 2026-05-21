@@ -266,84 +266,152 @@
         var self = this;
         var miner = chainCfg.miner || {};
         var sync = chainCfg.sync || {};
+        // v0.5.187 (Phase 4) — compute the display name here. Pre-0.5.187 this
+        // method referenced an undefined `name`, silently reading window.name
+        // (the Restart button rendered "Restart " with an empty suffix).
+        var fallbackChainNames = { esc: 'Smart Chain (ESC)', eid: 'Identity Chain (EID)', pg: 'PG Chain' };
+        var name = _tFb('chain_name.' + chainId, fallbackChainNames[chainId] || chainId);
         parent.dataset.state = 'ready';
-        parent.innerHTML = ''
-            + '<section class="enm-section enm-section-classb">'
-            + '<h3>Mining &amp; Rewards</h3>'
-            + '<label class="enm-field">'
-            + '<input type="checkbox" data-key="miner.enabled"' + (miner.enabled ? ' checked' : '') + '> '
-            + 'Enable mining (produce blocks for rewards)'
-            + '</label>'
-            + '<label class="enm-field">Reward address (where mining rewards go):'
-            + '<input type="text" data-key="miner.rewardAddress" '
-            + 'placeholder="0x…40 hex chars" value="' + escapeHtml(miner.rewardAddress || '') + '" '
-            + 'spellcheck="false" autocomplete="off">'
-            + '<small class="enm-field-hint" data-role="hint-reward">Ethereum-style address: <code>0x</code> + 40 hex chars.</small>'
-            + '</label>'
-            + '<label class="enm-field">EVM keystore address (which account to unlock for signing):'
-            + '<input type="text" data-key="miner.evmKeystoreAddr" '
-            + 'placeholder="0x…40 hex chars (often same as reward address)" '
-            + 'value="' + escapeHtml(miner.evmKeystoreAddr || '') + '" '
-            + 'spellcheck="false" autocomplete="off">'
-            + '<small class="enm-field-hint" data-role="hint-evm">Ethereum-style address: <code>0x</code> + 40 hex chars.</small>'
-            + '</label>'
-            + '<label class="enm-field">Mining threads:'
-            + '<input type="number" data-key="miner.threads" min="1" max="16" '
-            + 'value="' + (Number.isInteger(miner.threads) ? miner.threads : 1) + '">'
-            + '</label>'
-            + '</section>'
-            // 0.5.13 audit Session 13 — drop "(node.sh convention since v0.1)" and
-            // clarify the path: operator must switch the chain selector to
-            // Main chain first, then open Settings → Identity.
-            + '<section class="enm-section enm-section-classb">'
-            + '<h3>Block-signing keystore</h3>'
-            + '<p>This chain signs blocks with the <strong>Main chain</strong> '
-            + 'keystore. To change its password, back it up, or import a different '
-            + 'one, switch the chain selector to <strong>Main chain</strong> and '
-            + 'open <strong>Settings → Identity</strong>.</p>'
-            + '<p><code>chains/mainchain/keystore.dat</code></p>'
-            + '</section>'
-            + '<section class="enm-section enm-section-classb">'
-            + '<h3>Sync mode</h3>'
-            + '<label class="enm-field">'
-            + '<select data-key="sync.mode">'
-            +   '<option value="fast"' + (sync.mode === 'fast' ? ' selected' : '') + '>fast — recommended (recent state only)</option>'
-            +   '<option value="full"' + (sync.mode === 'full' ? ' selected' : '') + '>full — keep all blocks</option>'
-            +   '<option value="archive"' + (sync.mode === 'archive' ? ' selected' : '') + '>archive — full + all historical state</option>'
-            + '</select>'
-            + '</label>'
-            + '</section>'
-            + '<div class="enm-section-actions">'
-            + '<button type="button" class="enm-btn enm-btn-primary" data-action="save-class-b">Save changes</button>'
-            + '<span class="enm-foot-status" role="status" aria-live="polite"></span>'
-            + '</div>'
-            // 0.5.13 audit Session 13 — Restart section parallel to Class C
-            // (Session 12 v0.5.12). Save copy used to say "Restart the chain
-            // to apply" but offered no in-pane way to do that; operator had
-            // to leave Settings and find the restart from the overview card.
-            + '<section class="enm-section enm-section-classb">'
-            + '<h3>Restart</h3>'
-            + '<p>After saving mining or sync changes, restart the chain to apply them. '
-            + 'Restart is also useful if the chain is stuck or stalls on sync.</p>'
-            + '<button type="button" class="enm-btn enm-btn-secondary" '
-            +   'data-action="restart-class-b">Restart ' + escapeHtml(name) + '</button>'
-            + '<p class="enm-section-status" data-role="restart-status" hidden></p>'
-            + '</section>'
-            // v0.5.176 — Network peers. Self-contained panel (EnmPeersPanel):
-            // its own GET/PUT /chains/<id>/bootnodes + add/remove, independent
-            // of the mining/sync "Save changes" above. Mounted below.
-            + '<section class="enm-section enm-section-classb">'
-            + '<h3>Network peers</h3>'
-            + '<div data-peers-mount></div>'
-            + '</section>';
+        parent.innerHTML = '';
 
-        // Wire address-format hints (soft validation — disables Save when invalid).
-        var rewardInput = parent.querySelector('[data-key="miner.rewardAddress"]');
-        var evmInput    = parent.querySelector('[data-key="miner.evmKeystoreAddr"]');
-        var hintReward  = parent.querySelector('[data-role="hint-reward"]');
-        var hintEvm     = parent.querySelector('[data-role="hint-evm"]');
-        var saveBtn     = parent.querySelector('[data-action="save-class-b"]');
-        var status      = parent.querySelector('.enm-foot-status');
+        // v0.5.187 (Council Node UX Phase 4) — re-emit through the same
+        // canonical primitives the Class-A (mainchain) settings use:
+        // makeSection (savable card w/ Save+Revert+status), makeInfoCard
+        // (foot-less read-only/action card), makeFormRow / makeToggleRow /
+        // makeInput / makeSelectWrap for controls. Class A render path is
+        // untouched (this method is only reached for chainClass === 'B').
+
+        // ---- Card 1: Mining & sync (savable) ----
+        var sec = makeSection({
+            id: 'classb-mining',
+            icon: '',
+            title: 'Mining & sync',
+            help: 'Whether this node produces blocks for ' + name + ', where rewards go, and '
+                + 'how much history it keeps. Restart the chain after saving to apply.',
+            tag: { kind: 'muted', label: 'Restart to apply' },
+        });
+
+        var enabledToggle = makeToggleRow({
+            initial: !!miner.enabled,
+            getLabel: function (on) {
+                return on
+                    ? { title: 'Mining on', sub: 'Produces blocks for this chain and earns the block reward.' }
+                    : { title: 'Mining off', sub: 'Sync-only node — does not produce blocks.' };
+            },
+            onChange: function () { sec.setDirty(true); },
+        });
+        sec.body.appendChild(enabledToggle.el);
+
+        var rewardInput = makeInput({ value: miner.rewardAddress || '', placeholder: '0x…40 hex chars', mono: true, ariaLabel: 'Reward address' });
+        rewardInput.setAttribute('spellcheck', 'false');
+        rewardInput.setAttribute('autocomplete', 'off');
+        var rewardRow = makeFormRow({ label: 'Reward address', help: 'Where mining rewards are credited. 0x + 40 hex characters.', control: rewardInput });
+        sec.body.appendChild(rewardRow);
+
+        var evmInput = makeInput({ value: miner.evmKeystoreAddr || '', placeholder: '0x…40 hex chars (often same as reward)', mono: true, ariaLabel: 'EVM keystore address' });
+        evmInput.setAttribute('spellcheck', 'false');
+        evmInput.setAttribute('autocomplete', 'off');
+        var evmRow = makeFormRow({ label: 'EVM keystore address', help: 'Account unlocked for signing. 0x + 40 hex characters.', control: evmInput });
+        sec.body.appendChild(evmRow);
+
+        var threadsInput = makeInput({ type: 'number', value: Number.isInteger(miner.threads) ? miner.threads : 1, min: 1, max: 16, ariaLabel: 'Mining threads' });
+        threadsInput.addEventListener('input', function () { sec.setDirty(true); });
+        sec.body.appendChild(makeFormRow({ label: 'Mining threads', help: 'CPU threads used while mining is on.', control: threadsInput }));
+
+        var syncSel = makeSelectWrap({
+            options: [
+                { value: 'fast', label: 'fast — recommended (recent state only)' },
+                { value: 'full', label: 'full — keep all blocks' },
+                { value: 'archive', label: 'archive — full + all historical state' },
+            ],
+            value: sync.mode || 'fast',
+            onChange: function () { sec.setDirty(true); },
+        });
+        sec.body.appendChild(makeFormRow({ label: 'Sync mode', help: 'How much chain history this node retains.', control: syncSel.el }));
+
+        parent.appendChild(sec.card);
+
+        // ---- Card 2: Block-signing keystore (read-only) ----
+        parent.appendChild(makeInfoCard({
+            title: 'Block-signing keystore',
+            help: 'This chain signs blocks with the Main chain keystore; ENM never holds the '
+                + 'private key. To change its password or import a different one, switch the '
+                + 'chain selector to Main chain and open Settings → Identity.',
+            codeLine: 'chains/mainchain/keystore.dat',
+        }).card);
+
+        // ---- Card 3: Restart (action) ----
+        var restartCard = makeInfoCard({
+            title: 'Restart',
+            help: 'After saving mining or sync changes, restart ' + name + ' to apply them. '
+                + 'Also useful if the chain is stuck or stalls on sync.',
+        });
+        var restartBtn = document.createElement('button');
+        restartBtn.type = 'button';
+        restartBtn.className = 'enm-btn enm-btn-secondary';
+        restartBtn.textContent = 'Restart ' + name;
+        var restartStatus = document.createElement('p');
+        restartStatus.className = 'enm-section-card-foot-status';
+        restartStatus.setAttribute('role', 'status');
+        restartStatus.setAttribute('aria-live', 'polite');
+        restartStatus.hidden = true;
+        restartCard.body.appendChild(restartBtn);
+        restartCard.body.appendChild(restartStatus);
+        parent.appendChild(restartCard.card);
+
+        // ---- Card 4: Binary update (v0.5.187 Phase 5) — re-download latest ----
+        // The backend (POST /chains/:id/update) re-downloads the latest binary
+        // (node.sh ela_update model) and requires the chain stopped. There is
+        // NO per-EVM "update available" check endpoint (/updates/available is
+        // mainchain-only), so this honestly offers a re-download + shows the
+        // installed version — it does not fake a vX→vY diff or "up to date".
+        var updateCard = makeInfoCard({
+            title: 'Binary update',
+            help: 'Re-downloads the latest ' + name + ' binary. Stop the chain first (from the '
+                + 'dashboard or overview), update here, then start it again. Updating replaces '
+                + 'only the binary — it does not touch chain data.',
+        });
+        var verList = document.createElement('div');
+        verList.className = 'enm-detail-list';
+        var verRow = document.createElement('div');
+        verRow.className = 'enm-detail-row';
+        var verLbl = document.createElement('span');
+        verLbl.className = 'enm-detail-label';
+        verLbl.textContent = 'Installed version';
+        var verVal = document.createElement('span');
+        verVal.className = 'enm-detail-value enm-detail-addr';
+        verVal.textContent = chainCfg.binaryVersion || 'unknown';
+        verRow.appendChild(verLbl);
+        verRow.appendChild(verVal);
+        verList.appendChild(verRow);
+        updateCard.body.appendChild(verList);
+        var updateBtn = document.createElement('button');
+        updateBtn.type = 'button';
+        updateBtn.className = 'enm-btn enm-btn-secondary';
+        updateBtn.textContent = 'Update binary';
+        var updateStatus = document.createElement('p');
+        updateStatus.className = 'enm-section-card-foot-status';
+        updateStatus.setAttribute('role', 'status');
+        updateStatus.setAttribute('aria-live', 'polite');
+        updateStatus.hidden = true;
+        updateCard.body.appendChild(updateBtn);
+        updateCard.body.appendChild(updateStatus);
+        parent.appendChild(updateCard.card);
+        updateBtn.addEventListener('click', function () {
+            self._updateClassB(chainId, name, updateBtn, updateStatus);
+        });
+
+        // ---- Card 5: Network peers (self-contained panel) ----
+        var peersCard = makeInfoCard({
+            title: 'Network peers',
+            help: 'Bootnodes and live peers for ' + name + '. Changes here apply immediately and '
+                + 'are independent of the mining/sync save above.',
+        });
+        var peersMount = document.createElement('div');
+        peersCard.body.appendChild(peersMount);
+        parent.appendChild(peersCard.card);
+
+        // ---- soft address validation (disable Save on invalid) ----
         var validateEth = function (v) {
             v = (v || '').trim();
             if (!v) { return 'empty'; }
@@ -351,110 +419,164 @@
             return 'ok';
         };
         var refreshValidity = function () {
-            var r  = validateEth(rewardInput.value);
-            var e  = validateEth(evmInput.value);
-            hintReward.dataset.state = r;
-            hintEvm.dataset.state    = e;
-            saveBtn.disabled = (r === 'bad') || (e === 'bad');
+            var r = validateEth(rewardInput.value);
+            var e = validateEth(evmInput.value);
+            rewardRow.setAttribute('data-validity', r);
+            evmRow.setAttribute('data-validity', e);
+            sec.saveBtn.disabled = (r === 'bad') || (e === 'bad');
         };
-        rewardInput.addEventListener('input', refreshValidity);
-        evmInput.addEventListener('input', refreshValidity);
+        rewardInput.addEventListener('input', function () { sec.setDirty(true); refreshValidity(); });
+        evmInput.addEventListener('input', function () { sec.setDirty(true); refreshValidity(); });
         refreshValidity();
 
-        saveBtn.addEventListener('click', function () {
-            self._saveClassB(parent, chainId, saveBtn, status);
+        // ---- save (reads control handles; enmRunOnce guards double-submit) ----
+        var controls = { enabled: enabledToggle, reward: rewardInput, evm: evmInput, threads: threadsInput, syncMode: syncSel };
+        sec.saveBtn.addEventListener('click', function () {
+            self._saveClassB(chainId, controls, sec);
+        });
+        sec.revertBtn.addEventListener('click', function () {
+            enabledToggle.setValue(!!miner.enabled);
+            rewardInput.value = miner.rewardAddress || '';
+            evmInput.value = miner.evmKeystoreAddr || '';
+            threadsInput.value = Number.isInteger(miner.threads) ? miner.threads : 1;
+            syncSel.setValue(sync.mode || 'fast');
+            refreshValidity();
+            sec.setDirty(false);
+            if (sec.statusEl) { sec.statusEl.textContent = ''; }
         });
 
-        // Wire the Restart button.
-        var restartBtn = parent.querySelector('[data-action="restart-class-b"]');
-        var restartStatus = parent.querySelector('[data-role="restart-status"]');
+        // ---- restart (confirm-before-disruptive + enmRunOnce) ----
         restartBtn.addEventListener('click', function () {
             self._restartClassB(chainId, name, restartBtn, restartStatus);
         });
 
-        // v0.5.176 — mount the Network peers panel into its section. Destroy
-        // any prior instance first (this form re-renders on chain switch /
-        // reload). destroy() in this component's own destroy() tears it down.
+        // ---- Network peers panel — destroy any prior instance first (form
+        // re-renders on chain switch / reload); destroy() tears it down. ----
         if (this._peersPanel) {
             try { this._peersPanel.destroy(); } catch (_) { /* idempotent */ }
             this._peersPanel = null;
         }
         if (root.EnmPeersPanel) {
-            var peersMount = parent.querySelector('[data-peers-mount]');
-            if (peersMount) {
-                this._peersPanel = new root.EnmPeersPanel({
-                    api: this.api,
-                    chainId: chainId,
-                    notifications: this.notifications,
-                });
-                this._peersPanel.mount(peersMount);
-            }
+            this._peersPanel = new root.EnmPeersPanel({
+                api: this.api,
+                chainId: chainId,
+                notifications: this.notifications,
+            });
+            this._peersPanel.mount(peersMount);
         }
     };
 
-    /** @private */
-    SettingsTab.prototype._saveClassB = function (parent, chainId, btn, status) {
+    /** @private — v0.5.187 (Phase 4): reads from the control handles built in
+     * _renderClassBForm (toggle/select expose getValue; inputs expose .value).
+     * enmRunOnce guards the Save button against double-submit and manages its
+     * disabled/label state; the status line is managed separately. */
+    SettingsTab.prototype._saveClassB = function (chainId, controls, sec) {
         var self = this;
-        var get = function (sel) { return parent.querySelector('[data-key="' + sel + '"]'); };
+        var status = sec.statusEl;
         var body = {
             miner: {
-                enabled: get('miner.enabled').checked,
-                rewardAddress: get('miner.rewardAddress').value.trim(),
-                evmKeystoreAddr: get('miner.evmKeystoreAddr').value.trim(),
-                threads: parseInt(get('miner.threads').value, 10) || 1,
+                enabled: controls.enabled.getValue(),
+                rewardAddress: (controls.reward.value || '').trim(),
+                evmKeystoreAddr: (controls.evm.value || '').trim(),
+                threads: parseInt(controls.threads.value, 10) || 1,
             },
             sync: {
-                mode: get('sync.mode').value,
+                mode: controls.syncMode.getValue(),
             },
         };
-        btn.disabled = true;
-        status.textContent = 'Saving…';
-        this.api.put('/chains/' + chainId + '/class-b-config', body).then(function () {
-            if (self._destroyed) { return; }
-            // 0.5.13 audit Session 13 — point operator at the in-pane
-            // Restart button (added below) instead of leaving them to
-            // find restart on the overview card.
-            status.textContent = 'Saved. Use Restart below to apply.';
-        }).catch(function (err) {
-            if (self._destroyed) { return; }
-            // 0.5.132 audit Session 132 — silence on 401, see S129/130/131.
-            if (err && err.status === 401) { return; }
-            status.textContent = 'Save failed: ' + ((err && err.message) || String(err));
-        }).finally(function () {
-            btn.disabled = false;
-        });
+        if (status) { status.textContent = ''; }
+        var doSave = function () {
+            return self.api.put('/chains/' + chainId + '/class-b-config', body).then(function () {
+                if (self._destroyed) { return; }
+                sec.setDirty(false);
+                // Point the operator at the in-pane Restart card to apply.
+                if (status) { status.textContent = 'Saved. Use Restart below to apply.'; }
+            }).catch(function (err) {
+                if (self._destroyed) { return; }
+                // Silence on 401 — boot path owns re-auth.
+                if (err && err.status === 401) { return; }
+                if (status) { status.textContent = 'Save failed: ' + ((err && err.message) || String(err)); }
+            });
+        };
+        if (typeof root.enmRunOnce === 'function') {
+            root.enmRunOnce(sec.saveBtn, 'Saving…', doSave);
+        } else {
+            sec.saveBtn.disabled = true;
+            doSave().finally(function () { sec.saveBtn.disabled = false; });
+        }
     };
 
     /**
-     * @private — 0.5.13 audit Session 13. Restart a Class B chain
-     * via POST /chains/<id>/restart, matching the Class C oracle
-     * pattern shipped in Session 12.
+     * @private — v0.5.187 (Phase 5): re-download the latest binary for an EVM
+     * chain via POST /chains/:id/update (node.sh ela_update model). The backend
+     * requires the chain stopped (409 otherwise) and exposes NO per-EVM
+     * "update available" check — so this is a safe re-download with a clear
+     * stop-first message on 409, not a version diff. Confirm + enmRunOnce.
+     */
+    SettingsTab.prototype._updateClassB = function (chainId, name, btn, statusEl) {
+        var self = this;
+        if (typeof root.confirm === 'function'
+            && !root.confirm('Update the ' + name + ' binary now? Stop the chain first; this '
+                + 're-downloads the latest binary and does not touch chain data.')) {
+            return;
+        }
+        statusEl.hidden = false;
+        statusEl.className = 'enm-section-card-foot-status';
+        statusEl.textContent = 'Updating…';
+        var doUpdate = function () {
+            return self.api.post('/chains/' + chainId + '/update', {}).then(function () {
+                if (self._destroyed) { return; }
+                statusEl.className = 'enm-section-card-foot-status success';
+                statusEl.textContent = 'Binary updated. Start the chain to run the new version.';
+            }).catch(function (err) {
+                if (self._destroyed) { return; }
+                if (err && err.status === 401) { statusEl.hidden = true; return; }
+                statusEl.className = 'enm-section-card-foot-status error';
+                // 409 = chain still running; the backend message tells the
+                // operator to stop it first. Surface the backend message verbatim.
+                statusEl.textContent = (err && err.message) ? err.message : 'Update failed. Try again.';
+            });
+        };
+        if (typeof root.enmRunOnce === 'function') {
+            root.enmRunOnce(btn, 'Updating…', doUpdate);
+        } else {
+            btn.disabled = true;
+            doUpdate().finally(function () { btn.disabled = false; });
+        }
+    };
+
+    /**
+     * @private — Restart a Class B chain via POST /chains/<id>/restart.
+     * v0.5.187 (Phase 4): confirm-before-disruptive (parity with the overview
+     * quick actions) + enmRunOnce guards the button against double-submit. A
+     * restart interrupts in-progress sync work, so the operator confirms first.
      */
     SettingsTab.prototype._restartClassB = function (chainId, name, btn, statusEl) {
         var self = this;
-        var labelDefault = 'Restart ' + name;
-        btn.disabled = true;
-        btn.textContent = 'Restarting…';
+        if (typeof root.confirm === 'function'
+            && !root.confirm('Restart ' + name + '? In-progress sync work will be interrupted.')) {
+            return;
+        }
         statusEl.hidden = true;
-        this.api.post('/chains/' + chainId + '/restart', {})
-            .then(function () {
+        var doRestart = function () {
+            return self.api.post('/chains/' + chainId + '/restart', {}).then(function () {
                 if (self._destroyed) { return; }
-                btn.disabled = false;
-                btn.textContent = labelDefault;
                 statusEl.hidden = false;
                 statusEl.textContent = 'Restart requested. Watch the chain card for status.';
-            })
-            .catch(function (err) {
+            }).catch(function (err) {
                 if (self._destroyed) { return; }
-                // Reset button first so operator can re-attempt after re-auth.
-                btn.disabled = false;
-                btn.textContent = labelDefault;
-                // 0.5.132 audit Session 132 — silence error text on 401.
+                // Silence error text on 401 — boot path owns re-auth.
                 if (err && err.status === 401) { return; }
                 statusEl.hidden = false;
-                statusEl.textContent = 'Restart failed: '
-                    + ((err && err.message) || String(err));
+                statusEl.textContent = 'Restart failed: ' + ((err && err.message) || String(err));
             });
+        };
+        if (typeof root.enmRunOnce === 'function') {
+            root.enmRunOnce(btn, 'Restarting…', doRestart);
+        } else {
+            btn.disabled = true;
+            doRestart().finally(function () { btn.disabled = false; });
+        }
     };
 
     /**
@@ -533,6 +655,17 @@
     SettingsTab.prototype._renderClassCInfo = function (parent, chainId, oracleCfg) {
         parent.dataset.state = 'ready';
         var self = this;
+        parent.innerHTML = '';
+
+        // v0.5.187 (Council Node UX Phase 4) — re-emit through the canonical
+        // makeInfoCard (foot-less .enm-section-card) + the shared .enm-detail-row
+        // key/value primitive, matching the Class-A reference. Class A untouched.
+
+        // ---- Card 1: Oracle wiring (read-only key/value) ----
+        var wiring = makeInfoCard({
+            title: 'Oracle wiring',
+            help: 'Read-only — an oracle is a stateless relayer with nothing to tune.',
+        });
         var fields = [
             { label: 'Parent chain',     value: oracleCfg.parentChainId || '—' },
             { label: 'HTTP port',        value: (oracleCfg.ports && oracleCfg.ports.httpRpc) || '—' },
@@ -541,74 +674,79 @@
             { label: 'Network',          value: oracleCfg.activeNet || 'mainnet' },
             { label: 'Process enabled',  value: oracleCfg.enabled ? 'on' : 'off' },
         ];
-        var html = '<section class="enm-section enm-section-classc">'
-            + '<h3>Oracle wiring</h3>'
-            + '<dl class="enm-info-dl">';
+        var list = document.createElement('div');
+        list.className = 'enm-detail-list';
         fields.forEach(function (f) {
-            html += '<dt>' + escapeHtml(f.label) + '</dt>'
-                  + '<dd>' + escapeHtml(String(f.value)) + '</dd>';
+            var row = document.createElement('div');
+            row.className = 'enm-detail-row';
+            var lbl = document.createElement('span');
+            lbl.className = 'enm-detail-label';
+            lbl.textContent = f.label;
+            var val = document.createElement('span');
+            val.className = 'enm-detail-value';
+            val.textContent = String(f.value);
+            row.appendChild(lbl);
+            row.appendChild(val);
+            list.appendChild(row);
         });
-        html += '</dl></section>';
-        // 0.5.12 audit Session 12 — rewrite the "no editable fields"
-        // section in plain operator-friendly English. Pre-0.5.12 it
-        // referenced M4.4 milestone tags + told the operator to edit
-        // cfg.chains.<id> directly (i.e. hand-edit the JSON config
-        // file) for port/script changes — hostile UX for a non-power
-        // user. New copy explains the WHY (oracles are stateless
-        // relayers) and the WHAT (restart available below; deeper
-        // changes need a re-install).
-        html += '<section class="enm-section enm-section-classc">'
-              + '<h3>Nothing to tune</h3>'
-              + '<p>This oracle is a stateless relay between '
-              + '<code>' + escapeHtml(oracleCfg.parentChainId || 'its parent chain') + '</code> '
-              + 'and mainchain. It has no keystore, no mining rewards, and no peers '
-              + '— so there are no per-oracle settings to change. To move it to a '
-              + 'different port or swap the relayer script, re-install via the '
-              + 'setup wizard.</p>'
-              + '</section>';
-        // 0.5.12 audit Session 12 — add the Restart button promised in
-        // the function's docblock. Single Restart action is the only
-        // legitimate operator interaction for an oracle from this pane.
-        html += '<section class="enm-section enm-section-classc">'
-              + '<h3>Restart</h3>'
-              + '<p>If the oracle stalls or loses its parent connection, '
-              + 'a restart re-handshakes with both endpoints.</p>'
-              + '<button type="button" class="enm-btn enm-btn-secondary" '
-              +   'data-action="restart-oracle">Restart oracle</button>'
-              + '<p class="enm-section-status" data-role="restart-status" hidden></p>'
-              + '</section>';
-        parent.innerHTML = html;
+        wiring.body.appendChild(list);
+        parent.appendChild(wiring.card);
 
-        // Wire the Restart button.
-        var restartBtn = parent.querySelector('[data-action="restart-oracle"]');
-        var statusEl   = parent.querySelector('[data-role="restart-status"]');
-        if (restartBtn) {
-            restartBtn.addEventListener('click', function () {
-                if (self._destroyed) { return; }
+        // ---- Card 2: Nothing to tune (info) ----
+        parent.appendChild(makeInfoCard({
+            title: 'Nothing to tune',
+            help: 'This oracle is a stateless relay between '
+                + (oracleCfg.parentChainId || 'its parent chain') + ' and the Main chain. '
+                + 'It has no keystore, mining rewards, or peers — so there are no per-oracle '
+                + 'settings to change. To move it to a different port or swap the relayer '
+                + 'script, re-install via the setup wizard.',
+        }).card);
+
+        // ---- Card 3: Restart (action) ----
+        var restartCard = makeInfoCard({
+            title: 'Restart',
+            help: 'If the oracle stalls or loses its parent connection, a restart re-handshakes with both endpoints.',
+        });
+        var restartBtn = document.createElement('button');
+        restartBtn.type = 'button';
+        restartBtn.className = 'enm-btn enm-btn-secondary';
+        restartBtn.textContent = 'Restart oracle';
+        var statusEl = document.createElement('p');
+        statusEl.className = 'enm-section-card-foot-status';
+        statusEl.setAttribute('role', 'status');
+        statusEl.setAttribute('aria-live', 'polite');
+        statusEl.hidden = true;
+        restartCard.body.appendChild(restartBtn);
+        restartCard.body.appendChild(statusEl);
+        parent.appendChild(restartCard.card);
+
+        // Restart — confirm-before-disruptive + enmRunOnce (parity w/ Class B).
+        restartBtn.addEventListener('click', function () {
+            if (self._destroyed) { return; }
+            if (typeof root.confirm === 'function'
+                && !root.confirm('Restart this oracle? In-progress relay work will be interrupted.')) {
+                return;
+            }
+            statusEl.hidden = true;
+            var doRestart = function () {
+                return self.api.post('/chains/' + chainId + '/restart', {}).then(function () {
+                    if (self._destroyed) { return; }
+                    statusEl.hidden = false;
+                    statusEl.textContent = 'Restart requested. Watch the chain card for status.';
+                }).catch(function (err) {
+                    if (self._destroyed) { return; }
+                    if (err && err.status === 401) { return; }
+                    statusEl.hidden = false;
+                    statusEl.textContent = 'Restart failed: ' + ((err && err.message) || String(err));
+                });
+            };
+            if (typeof root.enmRunOnce === 'function') {
+                root.enmRunOnce(restartBtn, 'Restarting…', doRestart);
+            } else {
                 restartBtn.disabled = true;
-                restartBtn.textContent = 'Restarting…';
-                statusEl.hidden = true;
-                self.api.post('/chains/' + chainId + '/restart', {})
-                    .then(function () {
-                        if (self._destroyed) { return; }
-                        restartBtn.disabled = false;
-                        restartBtn.textContent = 'Restart oracle';
-                        statusEl.hidden = false;
-                        statusEl.textContent = 'Restart requested. Watch the chain card for status.';
-                    })
-                    .catch(function (err) {
-                        if (self._destroyed) { return; }
-                        // Reset button first so operator can re-attempt after re-auth.
-                        restartBtn.disabled = false;
-                        restartBtn.textContent = 'Restart oracle';
-                        // 0.5.132 audit Session 132 — silence error text on 401.
-                        if (err && err.status === 401) { return; }
-                        statusEl.hidden = false;
-                        statusEl.textContent = 'Restart failed: '
-                            + ((err && err.message) || String(err));
-                    });
-            });
-        }
+                doRestart().finally(function () { restartBtn.disabled = false; });
+            }
+        });
     };
 
     /**
@@ -671,94 +809,110 @@
     SettingsTab.prototype._renderClassDInfo = function (parent, arbCfg, allChains) {
         parent.dataset.state = 'ready';
         var self = this;
+        parent.innerHTML = '';
+
+        // v0.5.187 (Council Node UX Phase 4) — canonical makeInfoCard +
+        // .enm-detail-row, matching the Class-A reference. Class A untouched.
+        function kv(label, value, mono) {
+            var row = document.createElement('div');
+            row.className = 'enm-detail-row';
+            var l = document.createElement('span');
+            l.className = 'enm-detail-label';
+            l.textContent = label;
+            var v = document.createElement('span');
+            v.className = mono ? 'enm-detail-value enm-detail-addr' : 'enm-detail-value';
+            v.textContent = value;
+            row.appendChild(l);
+            row.appendChild(v);
+            return row;
+        }
+
         var addr = (arbCfg.mining && arbCfg.mining.miningAddress) || '—';
         var fee  = (arbCfg.mining && arbCfg.mining.sideChainPowFeeEla) || '—';
-        // 0.5.14 audit Session 14 — strip "plan H8 invariant" + "via
-        // EnmEncryption" dev tags from operator-facing copy.
-        var html = '<section class="enm-section enm-section-classd">'
-            + '<h3>Wallet &amp; Mining</h3>'
-            + '<dl class="enm-info-dl">'
-            +   '<dt>Signing keystore</dt>'
-            +   '<dd>Reuses the Main chain keystore '
-            +     '(<code>chains/mainchain/keystore.dat</code>).</dd>'
-            +   '<dt>Wallet password</dt>'
-            +   '<dd>Same as the Main chain wallet password (encrypted at rest). '
-            +     'To change it, switch the chain selector to '
-            +     '<strong>Main chain</strong> and open '
-            +     '<strong>Settings → Identity</strong>.</dd>'
-            +   '<dt>Mining address (ELA mainchain)</dt>'
-            +   '<dd><code>' + escapeHtml(addr) + '</code></dd>'
-            +   '<dt>SideChainPow fee (ELA)</dt>'
-            +   '<dd>' + escapeHtml(String(fee)) + '</dd>'
-            + '</dl></section>';
-        // 0.5.14 audit Session 14 — rename "Cross-chain reachability" to
-        // "Configured chains". The matrix shows config presence (not live
-        // reach) — pre-0.5.14 label invited operator to misread "✓
-        // Configured" as "✓ Reachable". Live reachability lives on the
-        // Arbiter chain card. Drop the "F23 healing rule" dev tag.
-        html += '<section class="enm-section enm-section-classd">'
-            + '<h3>Configured chains</h3>'
-            + '<p>The arbiter signs messages between these four chains. All four '
-            + 'must be configured before the arbiter can run.</p>'
-            + '<dl class="enm-info-dl">';
+
+        // ---- Card 1: Wallet & mining (read-only) ----
+        var wallet = makeInfoCard({
+            title: 'Wallet & mining',
+            help: 'The arbiter signs with the Main chain keystore (chains/mainchain/keystore.dat) '
+                + 'and shares the Main chain wallet password (encrypted at rest). To change the '
+                + 'password, switch the chain selector to Main chain and open Settings → Identity.',
+        });
+        var wlist = document.createElement('div');
+        wlist.className = 'enm-detail-list';
+        wlist.appendChild(kv('Mining address (ELA mainchain)', addr, true));
+        wlist.appendChild(kv('SideChainPow fee (ELA)', String(fee), false));
+        wallet.body.appendChild(wlist);
+        parent.appendChild(wallet.card);
+
+        // ---- Card 2: Configured chains (config presence, not live reach) ----
+        var chainsCard = makeInfoCard({
+            title: 'Configured chains',
+            help: 'The arbiter signs messages between these four chains; all must be configured '
+                + 'before it can run. Live reachability is shown on the arbiter’s dashboard card '
+                + '(retested every 30s) — this lists configuration only.',
+        });
+        var clist = document.createElement('div');
+        clist.className = 'enm-detail-list';
         ['mainchain', 'esc', 'eid', 'pg'].forEach(function (cid) {
             var configured = !!allChains[cid];
-            var rpcPort = configured && allChains[cid].ports
-                ? allChains[cid].ports.rpc : '—';
-            html += '<dt>' + escapeHtml(cid.toUpperCase()) + '</dt>'
-                  + '<dd>' + (configured ? '✓ Configured (RPC port '
-                      + escapeHtml(String(rpcPort)) + ')' : '✗ NOT configured')
-                  + '</dd>';
+            var rpcPort = (configured && allChains[cid].ports) ? allChains[cid].ports.rpc : '—';
+            clist.appendChild(kv(
+                cid.toUpperCase(),
+                configured ? ('Configured (RPC port ' + rpcPort + ')') : 'Not configured',
+                false,
+            ));
         });
-        html += '</dl>'
-            + '<p>Live reachability for each chain is shown on the arbiter\'s '
-            + 'chain card on the dashboard. ENM retests reachability '
-            + 'automatically every 30 seconds.</p>'
-            + '</section>';
-        // 0.5.14 audit Session 14 — Restart section parallel to Class B
-        // (Session 13) and Class C (Session 12). Arbiter restart is
-        // useful when one of the four target chains was restarted or
-        // when cross-chain reach degraded.
-        html += '<section class="enm-section enm-section-classd">'
-              + '<h3>Restart</h3>'
-              + '<p>Restart the arbiter if one of the four chains it monitors '
-              + 'was just restarted, or if cross-chain reach has degraded.</p>'
-              + '<button type="button" class="enm-btn enm-btn-secondary" '
-              +   'data-action="restart-arbiter">Restart arbiter</button>'
-              + '<p class="enm-section-status" data-role="restart-status" hidden></p>'
-              + '</section>';
-        parent.innerHTML = html;
+        chainsCard.body.appendChild(clist);
+        parent.appendChild(chainsCard.card);
 
-        // Wire the Restart button.
-        var restartBtn = parent.querySelector('[data-action="restart-arbiter"]');
-        var statusEl   = parent.querySelector('[data-role="restart-status"]');
-        if (restartBtn) {
-            restartBtn.addEventListener('click', function () {
-                if (self._destroyed) { return; }
+        // ---- Card 3: Restart (action) ----
+        var restartCard = makeInfoCard({
+            title: 'Restart',
+            help: 'Restart the arbiter if one of the four chains it monitors was just restarted, '
+                + 'or if cross-chain reach has degraded.',
+        });
+        var restartBtn = document.createElement('button');
+        restartBtn.type = 'button';
+        restartBtn.className = 'enm-btn enm-btn-secondary';
+        restartBtn.textContent = 'Restart arbiter';
+        var statusEl = document.createElement('p');
+        statusEl.className = 'enm-section-card-foot-status';
+        statusEl.setAttribute('role', 'status');
+        statusEl.setAttribute('aria-live', 'polite');
+        statusEl.hidden = true;
+        restartCard.body.appendChild(restartBtn);
+        restartCard.body.appendChild(statusEl);
+        parent.appendChild(restartCard.card);
+
+        // Restart — confirm-before-disruptive + enmRunOnce. The arbiter is the
+        // most security-sensitive component; cross-chain signing pauses during
+        // the bounce, so the operator confirms first.
+        restartBtn.addEventListener('click', function () {
+            if (self._destroyed) { return; }
+            if (typeof root.confirm === 'function'
+                && !root.confirm('Restart the arbiter? Cross-chain signing pauses until it is back.')) {
+                return;
+            }
+            statusEl.hidden = true;
+            var doRestart = function () {
+                return self.api.post('/chains/arbiter/restart', {}).then(function () {
+                    if (self._destroyed) { return; }
+                    statusEl.hidden = false;
+                    statusEl.textContent = 'Restart requested. Watch the arbiter card for status.';
+                }).catch(function (err) {
+                    if (self._destroyed) { return; }
+                    if (err && err.status === 401) { return; }
+                    statusEl.hidden = false;
+                    statusEl.textContent = 'Restart failed: ' + ((err && err.message) || String(err));
+                });
+            };
+            if (typeof root.enmRunOnce === 'function') {
+                root.enmRunOnce(restartBtn, 'Restarting…', doRestart);
+            } else {
                 restartBtn.disabled = true;
-                restartBtn.textContent = 'Restarting…';
-                statusEl.hidden = true;
-                self.api.post('/chains/arbiter/restart', {})
-                    .then(function () {
-                        if (self._destroyed) { return; }
-                        restartBtn.disabled = false;
-                        restartBtn.textContent = 'Restart arbiter';
-                        statusEl.hidden = false;
-                        statusEl.textContent = 'Restart requested. Watch the arbiter card for status.';
-                    })
-                    .catch(function (err) {
-                        if (self._destroyed) { return; }
-                        // Reset button first so operator can re-attempt after re-auth.
-                        restartBtn.disabled = false;
-                        restartBtn.textContent = 'Restart arbiter';
-                        // 0.5.132 audit Session 132 — silence error text on 401.
-                        if (err && err.status === 401) { return; }
-                        statusEl.hidden = false;
-                        statusEl.textContent = 'Restart failed: '
-                            + ((err && err.message) || String(err));
-                    });
-            });
-        }
+                doRestart().finally(function () { restartBtn.disabled = false; });
+            }
+        });
     };
 
     /**
@@ -790,12 +944,17 @@
             + 'There is nothing to configure here, and you can safely ignore '
             + 'this option.',
         );
-        this.root.innerHTML = ''
-            + '<div class="enm-settings-class-stub" role="status" aria-live="polite">'
-            + '<h2>' + escapeHtml(title) + '</h2>'
-            + '<p>' + escapeHtml(lead) + '</p>'
-            + '<p>' + escapeHtml(note) + '</p>'
-            + '</div>';
+        this.root.innerHTML = '';
+        // v0.5.187 (Council Node UX Phase 4) — single canonical card so SPV
+        // matches the other classes' chrome. SPV genuinely has nothing to
+        // configure, so this stays an honest "nothing here" pane (no controls).
+        // Class A render path untouched.
+        var card = makeInfoCard({ title: title, help: lead });
+        var noteEl = document.createElement('p');
+        noteEl.className = 'enm-section-card-help';
+        noteEl.textContent = note;
+        card.body.appendChild(noteEl);
+        this.root.appendChild(card.card);
     };
 
     SettingsTab.prototype.destroy = function () {
@@ -4567,6 +4726,50 @@
             }
         }
         return { card: card, body: body, statusEl: statusEl, saveBtn: saveBtn, revertBtn: revertBtn, setDirty: setDirty };
+    }
+
+    /**
+     * makeInfoCard({ title, help?, helpCodes?, helpSuffix?, codeLine? })
+     * → { card, body }
+     *
+     * v0.5.187 (Council Node UX Phase 4) — a foot-less .enm-section-card for
+     * read-only / action sections (no Save/Revert button). Same head/body
+     * chrome as makeSection so the Class B/C/D/E settings cards match the
+     * Class-A reference. Callers append their own controls (restart button,
+     * peers mount, etc.) to .body; codeLine renders a monospace path line.
+     */
+    function makeInfoCard(opts) {
+        opts = opts || {};
+        var card = document.createElement('div');
+        card.className = 'enm-section-card';
+
+        var head = document.createElement('div');
+        head.className = 'enm-section-card-head';
+        var headbody = document.createElement('div');
+        headbody.className = 'enm-section-card-headbody';
+        var title = document.createElement('div');
+        title.className = 'enm-section-card-title';
+        title.textContent = opts.title || '';
+        headbody.appendChild(title);
+        if (opts.help) {
+            var help = document.createElement('div');
+            help.className = 'enm-section-card-help';
+            renderHelp(help, opts.help, opts.helpCodes, opts.helpSuffix);
+            headbody.appendChild(help);
+        }
+        head.appendChild(headbody);
+        card.appendChild(head);
+
+        var body = document.createElement('div');
+        body.className = 'enm-section-card-body';
+        if (opts.codeLine) {
+            var code = document.createElement('code');
+            code.className = 'enm-detail-addr';
+            code.textContent = opts.codeLine;
+            body.appendChild(code);
+        }
+        card.appendChild(body);
+        return { card: card, body: body };
     }
 
     /**

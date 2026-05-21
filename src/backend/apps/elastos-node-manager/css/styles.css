@@ -2032,6 +2032,96 @@ body[data-app-size="compact"] .enm-sys-cell:last-child,
 .enm-section-card-foot-status.error   { color: var(--error); }
 .enm-section-card-foot-status.warn    { color: var(--warning); }
 
+/* v0.5.187 (Council Node UX Phase 3) — shared read-only detail primitives used
+   by the per-class dashboard cards (evm-detail-card = Class B, oracle-status-card
+   = Class C). Two row shapes: a horizontal label/value stat row, and a stacked
+   address row with a monospace value + copy button. Real-data-only: an empty
+   value renders as a muted "—", never a fabricated address. These cards sit in
+   #enm-pane-dashboard's flex column, so the pane's gap handles separation — no
+   per-card margin needed. */
+.enm-detail-list {
+    display: flex;
+    flex-direction: column;
+}
+.enm-detail-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--sp-4);
+    padding: var(--sp-2) 0;
+    border-bottom: 1px solid var(--border-subtle);
+}
+.enm-detail-row:last-child { border-bottom: none; }
+.enm-detail-label {
+    font-size: var(--fs-body);
+    color: var(--text-secondary);
+    flex: 0 0 auto;
+}
+.enm-detail-value {
+    font-size: var(--fs-body);
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.enm-detail-row.is-empty .enm-detail-value,
+.enm-detail-addr-row.is-empty .enm-detail-addr {
+    color: var(--text-tertiary);
+}
+.enm-detail-addr-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: var(--sp-3) 0;
+    border-bottom: 1px solid var(--border-subtle);
+}
+.enm-detail-addr-row:last-child { border-bottom: none; }
+.enm-detail-row-head {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+.enm-detail-hint {
+    font-size: var(--fs-caption);
+    color: var(--text-tertiary);
+    line-height: 1.4;
+}
+.enm-detail-value-stack {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    min-width: 0;
+}
+.enm-detail-addr {
+    font-family: var(--font-mono);
+    font-size: var(--fs-caption);
+    color: var(--text-primary);
+    background: var(--bg-elevated);
+    padding: 4px 8px;
+    border-radius: var(--r-sm);
+    word-break: break-all;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.enm-detail-copy-slot { flex: 0 0 auto; }
+/* Compact: stack the horizontal stat rows (label over value) so long values
+   aren't crushed against the label on a 320px screen. Address rows are already
+   stacked. */
+.enm-app[data-app-size="compact"] .enm-detail-row,
+body[data-app-size="compact"] .enm-app .enm-detail-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+}
+.enm-app[data-app-size="compact"] .enm-detail-value,
+body[data-app-size="compact"] .enm-app .enm-detail-value {
+    text-align: left;
+    white-space: normal;
+}
+
 /* beta.3.18 — Phase 1 IA reshape. Three new visual primitives:
    1. .enm-advanced-warning  — banner at the top of the Advanced section
       to mark that everything below is "don't touch unless you know why"
@@ -6957,10 +7047,16 @@ body[data-enm-overview="1"] .enm-app .enm-tabs {
            ul.enm-overview-rows
              li.enm-overview-row  (one per chain)
                .enm-overview-dot[.state-running|.state-stopped|...]
-               .enm-overview-name
-               .enm-overview-state
-               .enm-overview-uptime
+               .enm-overview-main   (v0.5.186 control-center column)
+                 .enm-overview-line1
+                   .enm-overview-name
+                   .enm-overview-state  (state chip)
+                 .enm-overview-meta   (class-specific operational line)
+                   .enm-overview-height + .enm-sync-badge   (class A/B)
+                   .enm-overview-relays                     (class C)
+                   .enm-overview-meta-muted                 (height pending)
                .enm-overview-spark  (EnmSparkline mounted here per-chain)
+               .enm-overview-uptime
                .enm-overview-arrow */
 .enm-app .enm-overview {
     max-width: 1100px;
@@ -7010,9 +7106,14 @@ body[data-enm-overview="1"] .enm-app .enm-tabs {
     flex-direction: column;
     gap: var(--sp-1, 4px);
 }
+/* v0.5.186 (Council Node UX P2.1/P2.2) — control-center row. Direct children:
+   [dot] [main (name+state / meta line)] [spark] [uptime] [actions] [arrow].
+   The main column is a 2-line flex stack so each chain shows live operational
+   truth (height + sync badge for A/B; "relays for <parent>" for C) under its
+   name; the actions column carries state-gated start/stop/restart. */
 .enm-app .enm-overview-row {
     display: grid;
-    grid-template-columns: 16px minmax(150px, 1fr) 100px 60px 1fr 16px;
+    grid-template-columns: 16px minmax(160px, 1fr) 90px 56px auto 16px;
     align-items: center;
     gap: var(--sp-3, 12px);
     padding: var(--sp-2, 8px) var(--sp-3, 12px);
@@ -7022,6 +7123,27 @@ body[data-enm-overview="1"] .enm-app .enm-tabs {
     cursor: pointer;
     transition: background-color 120ms, border-color 120ms;
     color: var(--text-primary);
+}
+.enm-app .enm-overview-main {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+.enm-app .enm-overview-line1 {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2, 8px);
+    min-width: 0;
+}
+.enm-app .enm-overview-meta {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2, 8px);
+    min-height: 16px;
+    font-size: 12px;
+    color: var(--text-tertiary);
+    font-variant-numeric: tabular-nums;
 }
 .enm-app .enm-overview-row:hover,
 .enm-app .enm-overview-row:focus-visible {
@@ -7067,11 +7189,125 @@ body[data-enm-overview="1"] .enm-app .enm-tabs {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    flex: 0 1 auto;
+    min-width: 0;
 }
+/* v0.5.186 — state label is now a compact chip beside the name. Color
+   keys off the same state-* class the dot uses, kept subtle (text + faint
+   tint) so the dot remains the primary state cue. */
 .enm-app .enm-overview-state {
-    font-size: 12px;
+    flex: 0 0 auto;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1;
+    padding: 3px 7px;
+    border-radius: 999px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
     color: var(--text-tertiary);
+    background: color-mix(in srgb, var(--text-tertiary) 14%, transparent);
 }
+.enm-app .enm-overview-state.state-running {
+    color: var(--success);
+    background: color-mix(in srgb, var(--success) 16%, transparent);
+}
+.enm-app .enm-overview-state.state-starting {
+    color: var(--warning);
+    background: color-mix(in srgb, var(--warning) 16%, transparent);
+}
+.enm-app .enm-overview-state.state-stopped {
+    color: var(--error);
+    background: color-mix(in srgb, var(--error) 16%, transparent);
+}
+/* v0.5.186 — meta-line detail spans. */
+.enm-app .enm-overview-height {
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+.enm-app .enm-overview-relays {
+    color: var(--text-tertiary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.enm-app .enm-overview-meta-muted {
+    color: var(--text-tertiary);
+    opacity: 0.75;
+    font-style: italic;
+}
+/* v0.5.186 — sync-state badge. Only ever rendered when the snapshot
+   carries a real syncState (never faked); colors mirror the chain-card. */
+.enm-app .enm-sync-badge {
+    flex: 0 0 auto;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1;
+    padding: 2px 6px;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    white-space: nowrap;
+}
+.enm-app .enm-sync-badge.synced {
+    color: var(--success);
+    background: color-mix(in srgb, var(--success) 16%, transparent);
+}
+.enm-app .enm-sync-badge.syncing {
+    color: var(--warning);
+    background: color-mix(in srgb, var(--warning) 16%, transparent);
+}
+.enm-app .enm-sync-badge.stalled {
+    color: var(--error);
+    background: color-mix(in srgb, var(--error) 16%, transparent);
+}
+/* v0.5.186 (P2.2) — compact quick actions. Always visible (discoverable on
+   touch), muted by default, colorize on hover/focus per action. Buttons
+   intercept the row click in JS so acting never also navigates. Properties
+   follow the project's button rule: inline-flex, centered, line-height 1,
+   font-family inherit. */
+.enm-app .enm-overview-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px;
+}
+.enm-app .enm-overview-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    font-size: 12px;
+    line-height: 1;
+    font-family: inherit;
+    border: 1px solid var(--border-color, var(--border-subtle));
+    border-radius: 6px;
+    background: var(--bg-page);
+    color: var(--text-tertiary);
+    cursor: pointer;
+    transition: color 120ms, border-color 120ms, background-color 120ms, opacity 120ms;
+}
+.enm-app .enm-overview-action:hover,
+.enm-app .enm-overview-action:focus-visible {
+    outline: none;
+    border-color: currentColor;
+}
+.enm-app .enm-overview-action:focus-visible {
+    box-shadow: 0 0 0 2px rgba(80, 160, 240, 0.4);
+}
+.enm-app .enm-overview-action.is-start:hover,
+.enm-app .enm-overview-action.is-start:focus-visible { color: var(--success); }
+.enm-app .enm-overview-action.is-stop:hover,
+.enm-app .enm-overview-action.is-stop:focus-visible { color: var(--error); }
+.enm-app .enm-overview-action.is-restart:hover,
+.enm-app .enm-overview-action.is-restart:focus-visible { color: var(--accent); }
+.enm-app .enm-overview-action.is-busy {
+    opacity: 0.5;
+    cursor: default;
+    animation: enm-overview-pulse 1.4s ease-in-out infinite;
+}
+.enm-app .enm-overview-action[disabled] { cursor: default; }
 .enm-app .enm-overview-uptime {
     font-size: 12px;
     color: var(--text-tertiary);
@@ -7088,15 +7324,32 @@ body[data-enm-overview="1"] .enm-app .enm-tabs {
     width: 100%;
     height: 100%;
 }
-.enm-app .enm-overview-arrow {
+/* v0.5.187 a11y — the open affordance is now a real <button> (was a
+   decorative arrow span nested in a role=button row). Button reset keeps the
+   same chevron look; it brightens on row hover or its own focus. */
+.enm-app .enm-overview-open {
+    appearance: none;
+    -webkit-appearance: none;
+    border: none;
+    background: transparent;
+    padding: 0;
+    margin: 0;
+    font: inherit;
+    line-height: 1;
     color: var(--text-tertiary);
     font-size: 16px;
     opacity: 0.5;
+    cursor: pointer;
     transition: opacity 120ms;
 }
-.enm-app .enm-overview-row:hover .enm-overview-arrow,
-.enm-app .enm-overview-row:focus-visible .enm-overview-arrow {
+.enm-app .enm-overview-row:hover .enm-overview-open,
+.enm-app .enm-overview-open:focus-visible {
     opacity: 1;
+}
+.enm-app .enm-overview-open:focus-visible {
+    outline: none;
+    border-radius: 4px;
+    box-shadow: 0 0 0 2px rgba(80, 160, 240, 0.4);
 }
 .enm-app .enm-overview-loading,
 .enm-app .enm-overview-error,
@@ -7122,8 +7375,10 @@ body[data-enm-overview="1"] .enm-app .enm-tabs {
 }
 .enm-app .enm-overview-empty p:last-child { margin-bottom: 0; }
 
-/* Compact viewport: hide uptime + sparkline columns, give name+state
-   more room. Row still tappable, still routes on click. */
+/* Compact viewport: hide uptime + sparkline columns so the control-center
+   main column (name + state + live meta line) keeps full width. Quick actions
+   stay (operators need them on small screens too). Row still tappable, still
+   routes on click. Visible children: dot, main, actions, arrow → 4 columns. */
 .enm-app[data-app-size="compact"] .enm-overview-row,
 body[data-app-size="compact"] .enm-app .enm-overview-row {
     grid-template-columns: 16px 1fr auto 16px;
@@ -7133,6 +7388,12 @@ body[data-app-size="compact"] .enm-app .enm-overview-row {
 body[data-app-size="compact"] .enm-app .enm-overview-row .enm-overview-uptime,
 body[data-app-size="compact"] .enm-app .enm-overview-row .enm-overview-spark {
     display: none;
+}
+/* Compact: let the meta line wrap if a long "Relays for <name>" + badge
+   overflows, rather than clipping operational truth. */
+.enm-app[data-app-size="compact"] .enm-overview-meta,
+body[data-app-size="compact"] .enm-app .enm-overview-meta {
+    flex-wrap: wrap;
 }
 
 /* ============================================================

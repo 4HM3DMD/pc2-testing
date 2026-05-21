@@ -148,6 +148,10 @@
         this._sparklines = {};   // chainId → EnmSparkline instance
         this._sparkUnsubs = {};  // chainId → unsubscribe fn from heightSeries
         this._destroyed = false;
+        // P2.2 — a single in-flight quick action (start/stop/restart) across
+        // the whole pane. While set, SSE re-render is suppressed so the
+        // pending button isn't wiped by a wholesale innerHTML rebuild.
+        this._pendingAction = null;
     }
 
     EnmMultiChainOverviewPane.prototype.mount = function (parent) {
@@ -251,6 +255,11 @@
             return;
         }
         this._lastSnap = snap;
+        // P2.2 — while a quick action is in flight, keep the latest snapshot
+        // but skip the wholesale innerHTML rebuild (it would wipe the pending
+        // button mid-action). The action's completion handler re-fetches and
+        // renders the fresh state.
+        if (this._pendingAction) { return; }
         this._render(snap);
     };
 
@@ -309,17 +318,24 @@
         html.push('</div>');
         this._root.innerHTML = html.join('');
 
-        // Wire row clicks → chain-selector dispatch.
+        // Wire row clicks → chain-selector dispatch. A click on a quick-action
+        // button runs the action instead of routing; a click anywhere else on
+        // the row (including the explicit open button, which bubbles here)
+        // routes. v0.5.187 a11y — the row is no longer role="button"/tabindex,
+        // so there's no row keydown handler: the open button + action buttons
+        // are native <button>s and handle Enter/Space themselves (their click
+        // bubbles to this handler).
         var rowEls = this._root.querySelectorAll('.enm-overview-row');
         Array.prototype.forEach.call(rowEls, function (row) {
-            row.addEventListener('click', function () {
-                self._routeToChain(row.dataset.chainId);
-            });
-            row.addEventListener('keydown', function (ev) {
-                if (ev.key === 'Enter' || ev.key === ' ') {
-                    ev.preventDefault();
-                    self._routeToChain(row.dataset.chainId);
+            row.addEventListener('click', function (ev) {
+                var actionBtn = ev.target && ev.target.closest
+                    ? ev.target.closest('.enm-overview-action') : null;
+                if (actionBtn) {
+                    ev.stopPropagation();
+                    self._onAction(actionBtn.dataset.action, actionBtn.dataset.chainId, actionBtn);
+                    return;
                 }
+                self._routeToChain(row.dataset.chainId);
             });
         });
 
@@ -329,7 +345,12 @@
         this._reconcileSparklines(sorted);
     };
 
-    /** @private */
+    /** @private — v0.5.186 (Council Node UX P2.1) — control-center row: name +
+     * state chip + a class-specific operational line (height + sync badge for
+     * A/B, "relays for <parent>" for C) + uptime + sparkline + open-arrow. All
+     * values are real (from the Phase 1-enriched /council/overview); when a value
+     * is genuinely unknown (e.g. height before RPC warms) we show an honest
+     * "height pending…", never a guess. */
     EnmMultiChainOverviewPane.prototype._rowHtml = function (c) {
         var stateClass = 'state-' + escapeAttr(c.state || 'unknown');
         var uptime = c.uptimeSec != null ? formatUptime(c.uptimeSec) : '';
@@ -337,20 +358,167 @@
         var stateLabel = stateLabelFor(c.state);
         var ariaLabel = tFb('overview_pane.row_aria_open', 'Open {chainName} dashboard', { chainName: displayName });
         var chainIdAttr = escapeAttr(c.chainId);
-        var displayHtml = escapeHtml(displayName);
-        var stateLabelHtml = escapeHtml(stateLabel);
-        var uptimeHtml = uptime ? '<span class="enm-overview-uptime" title="Uptime since last start">' + escapeHtml(uptime) + '</span>' : '';
+        // Always render the uptime cell (empty when unknown) so the 5-column
+        // grid stays aligned — an empty cell keeps the open-arrow in its column.
+        var uptimeHtml = uptime
+            ? '<span class="enm-overview-uptime" title="Uptime since last start">' + escapeHtml(uptime) + '</span>'
+            : '<span class="enm-overview-uptime" aria-hidden="true"></span>';
+        // v0.5.187 a11y — the row is NOT role="button"/tabindex anymore: it
+        // contains real <button> quick-actions + an explicit open button, and
+        // interactive-inside-a-button is invalid ARIA. The row stays
+        // mouse-clickable (progressive enhancement); keyboard users reach the
+        // open button + action buttons directly.
         return '<li class="enm-overview-row" data-chain-id="' + chainIdAttr
-            + '" data-state="' + escapeAttr(c.state || 'unknown') + '"'
-            + ' tabindex="0" role="button"'
-            + ' aria-label="' + escapeAttr(ariaLabel) + '">'
+            + '" data-state="' + escapeAttr(c.state || 'unknown') + '">'
             + '<span class="enm-overview-dot ' + stateClass + '" aria-hidden="true"></span>'
-            + '<span class="enm-overview-name">' + displayHtml + '</span>'
-            + '<span class="enm-overview-state">' + stateLabelHtml + '</span>'
-            + uptimeHtml
+            + '<div class="enm-overview-main">'
+            +   '<div class="enm-overview-line1">'
+            +     '<span class="enm-overview-name">' + escapeHtml(displayName) + '</span>'
+            +     '<span class="enm-overview-state ' + stateClass + '">' + escapeHtml(stateLabel) + '</span>'
+            +   '</div>'
+            +   '<div class="enm-overview-meta">' + this._metaHtml(c) + '</div>'
+            + '</div>'
             + '<span class="enm-overview-spark" data-chain-id="' + chainIdAttr + '"></span>'
-            + '<span class="enm-overview-arrow" aria-hidden="true">›</span>'
+            + uptimeHtml
+            + this._actionsHtml(c)
+            + '<button type="button" class="enm-overview-open" data-chain-id="' + chainIdAttr + '"'
+            +   ' aria-label="' + escapeAttr(ariaLabel) + '">›</button>'
             + '</li>';
+    };
+
+    /** @private — v0.5.186 (Council Node UX P2.2) — state-gated compact quick
+     * actions. alive → Restart + Stop; stopped → Start; disabled/unconfigured →
+     * none (manage those in Settings). Buttons carry data-action + data-chain-id;
+     * the row delegate intercepts their clicks so acting on a chain never also
+     * navigates into it. Always rendered (the empty cell keeps the grid aligned)
+     * and always visible for touch discoverability. */
+    EnmMultiChainOverviewPane.prototype._actionsHtml = function (c) {
+        var cid = escapeAttr(c.chainId);
+        function btn(action, glyph, key, fallback, cls) {
+            var label = tFb(key, fallback);
+            return '<button type="button" class="enm-overview-action ' + cls + '"'
+                + ' data-action="' + action + '" data-chain-id="' + cid + '"'
+                + ' title="' + escapeAttr(label) + '" aria-label="' + escapeAttr(label) + '">'
+                + '<span aria-hidden="true">' + glyph + '</span>'
+                + '</button>';
+        }
+        var inner = '';
+        if (c.alive) {
+            inner += btn('restart', '⟳', 'chain_actions.restart', 'Restart', 'is-restart');
+            inner += btn('stop', '■', 'chain_actions.stop', 'Stop', 'is-stop');
+        } else if (c.state === 'stopped') {
+            inner += btn('start', '▶', 'chain_actions.start', 'Start', 'is-start');
+        }
+        return '<span class="enm-overview-actions">' + inner + '</span>';
+    };
+
+    /** @private — P2.2 quick action runner. Mirrors chain-card._do: pane-wide
+     * busy guard, pending button state, POST, success/fail toast (incl. 401
+     * suppression + 409 host-conflict remediation), then a fresh re-fetch.
+     * Disruptive actions (stop/restart) confirm first; start does not. */
+    EnmMultiChainOverviewPane.prototype._onAction = function (kind, chainId, btn) {
+        if (!kind || !chainId || !btn) { return; }
+        if (this._pendingAction) { return; }  // one action at a time, pane-wide
+        var displayName = chainNameFor(chainId, null);
+        if (kind === 'stop' || kind === 'restart') {
+            var confirmMsg = tFb(
+                'overview_pane.action_confirm',
+                'Are you sure you want to {action} {chainName}? In-progress sync work will be interrupted.',
+                { action: kind, chainName: displayName });
+            if (typeof root.confirm === 'function' && !root.confirm(confirmMsg)) { return; }
+        }
+        this._pendingAction = { chainId: chainId, kind: kind };
+        var self = this;
+        var glyphSpan = btn.querySelector('span');
+        var prevGlyph = glyphSpan ? glyphSpan.innerHTML : '';
+        btn.disabled = true;
+        btn.classList.add('is-busy');
+        var pastVerb = ({ start: 'started', stop: 'stopped', restart: 'restarted' })[kind] || kind;
+        this.api.post('/chains/' + chainId + '/' + kind).then(function () {
+            if (self.notifications && typeof self.notifications.info === 'function') {
+                self.notifications.info(displayName + ' ' + pastVerb, '');
+            }
+        }).catch(function (err) {
+            if (err && err.status === 401) { return; }  // boot path owns re-auth UX
+            if (!self.notifications) { return; }
+            if (err && err.body && Array.isArray(err.body.conflicts) && err.body.conflicts.length > 0) {
+                var blockers = err.body.conflicts.filter(function (cf) { return cf && cf.severity === 'CRITICAL'; });
+                var summary = blockers.map(function (cf) {
+                    var firstStep = cf.remediation && cf.remediation[0];
+                    var stepStr = (typeof firstStep === 'string' && firstStep.length > 0) ? firstStep : '';
+                    var descStr = (typeof cf.description === 'string' && cf.description.length > 0) ? cf.description : 'Host conflict';
+                    return '• ' + descStr + (stepStr ? ('\n   ' + stepStr) : '');
+                }).join('\n');
+                if (typeof self.notifications.critical === 'function') {
+                    self.notifications.critical('Cannot ' + kind + ' ' + displayName + ' — host conflicts', summary);
+                }
+            } else if (typeof self.notifications.warning === 'function') {
+                self.notifications.warning('Failed to ' + kind + ' ' + displayName, err && err.message ? err.message : String(err));
+            }
+        }).then(function () {
+            self._pendingAction = null;
+            if (self._destroyed) { return; }
+            // Restore the button in case the upcoming fetch is slow, then
+            // re-fetch fresh state (SSE was suppressed while pending).
+            btn.disabled = false;
+            btn.classList.remove('is-busy');
+            if (glyphSpan) { glyphSpan.innerHTML = prevGlyph; }
+            self._fetchInitial();
+        });
+    };
+
+    /** @private — the class-specific operational detail line. Truthful: only
+     * renders what the snapshot actually carries. */
+    EnmMultiChainOverviewPane.prototype._metaHtml = function (c) {
+        var klass = c.chainClass;
+        // Class C (oracle) — what EVM sidechain it relays for.
+        if (klass === 'C') {
+            if (c.parentChainId) {
+                return '<span class="enm-overview-relays">'
+                    + escapeHtml(tFb('overview_pane.relays_for', 'Relays for {parent}',
+                        { parent: chainNameFor(c.parentChainId, null) }))
+                    + '</span>';
+            }
+            return '';
+        }
+        // Class A / B — block height + sync badge (real, from SyncTracker enrichment).
+        if (klass === 'A' || klass === 'B') {
+            if (typeof c.height === 'number') {
+                return '<span class="enm-overview-height">'
+                    + escapeHtml(tFb('overview_pane.block', 'Block {n}', { n: formatNumber(c.height) }))
+                    + '</span>'
+                    + this._syncBadgeHtml(c);
+            }
+            if (c.alive) {
+                // alive but RPC hasn't reported height yet — honest, not a guess.
+                return '<span class="enm-overview-meta-muted">'
+                    + escapeHtml(tFb('overview_pane.height_pending', 'height pending…'))
+                    + '</span>';
+            }
+            return '';
+        }
+        // Class D (arbiter) / E / unknown — the state chip already carries status;
+        // no chain height exists for these services in the overview snapshot.
+        return '';
+    };
+
+    /** @private — sync-state badge from the real enriched syncState; empty when
+     * we have no network reference (we never fake "synced"). */
+    EnmMultiChainOverviewPane.prototype._syncBadgeHtml = function (c) {
+        if (c.syncState === 'synced') {
+            return '<span class="enm-sync-badge synced">'
+                + escapeHtml(tFb('overview_pane.synced', 'Synced')) + '</span>';
+        }
+        if (c.syncState === 'stalled') {
+            return '<span class="enm-sync-badge stalled">'
+                + escapeHtml(tFb('overview_pane.stalled', 'Stalled')) + '</span>';
+        }
+        if (c.syncState === 'syncing') {
+            var pct = (typeof c.syncPercent === 'number') ? (' ' + Math.floor(c.syncPercent) + '%') : '';
+            return '<span class="enm-sync-badge syncing">'
+                + escapeHtml(tFb('overview_pane.syncing', 'Syncing') + pct) + '</span>';
+        }
+        return '';
     };
 
     /** @private */
@@ -399,7 +567,7 @@
             );
             if (!holder) { return; }
             var sp = new root.EnmSparkline({
-                color: 'var(--state-healthy, #4caf50)',
+                color: 'var(--success)',
             });
             sp.mount(holder);
             self._sparklines[cId] = sp;
@@ -496,6 +664,19 @@
         if (sec < 3600)  { return Math.floor(sec / 60) + 'm'; }
         if (sec < 86400) { return Math.floor(sec / 3600) + 'h'; }
         return Math.floor(sec / 86400) + 'd';
+    }
+
+    // v0.5.186 (Council Node UX P2.1) — thousands-separated block height.
+    // Prefer the shared util when present (utils.js enmFormatNumber); fall
+    // back to a local Intl/regex grouping so the component still works in
+    // unit tests that don't load utils.js.
+    function formatNumber(n) {
+        if (typeof n !== 'number' || !isFinite(n)) { return String(n); }
+        if (typeof root.enmFormatNumber === 'function') {
+            try { return root.enmFormatNumber(n); } catch (_) { /* fall through */ }
+        }
+        try { return n.toLocaleString('en-US'); } catch (_) { /* fall through */ }
+        return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
     }
 
     function escapeHtml(s) {
