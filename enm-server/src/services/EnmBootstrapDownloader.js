@@ -74,6 +74,17 @@ const SNAPSHOT_PATHS = {
     mainchain: '/ela/ela-data-latest.tgz',
 };
 
+// P1 (v0.5.183) — snapshot redirects must stay on the publisher's domain.
+// Following a 30x Location to an arbitrary host is a supply-chain hijack
+// vector (the bytes are extracted + run as root). node-data.elastos.io's
+// only known redirect is HTTP→HTTPS on the same host, which this still
+// allows. Mirrors EnmSnapshotDownloader.isAllowedSnapshotHost.
+function isAllowedSnapshotHost(hostname) {
+    if (!hostname) { return false; }
+    const h = String(hostname).toLowerCase();
+    return h === 'elastos.io' || h.endsWith('.elastos.io');
+}
+
 // Safety margin: require (tarballSize × 4) + 5 GB free at the data dir.
 // 10 GB compressed → ~30 GB extracted → both files exist briefly during
 // the swap → buffer for ela's own logs. Better an honest "needs N GB"
@@ -301,17 +312,32 @@ class EnmBootstrapDownloader {
             }
             throw new Error(`Failed to apply snapshot to ${dataDst}: ${err.message}`);
         }
-        // Original moved out of the way — cleanup is async, no need to block.
-        if (fs.existsSync(dataBak)) {
-            fsp.rm(dataBak, { recursive: true, force: true }).catch(() => { /* tidy-up */ });
-        }
+        // P1 (v0.5.183) — DO NOT delete the .bak here. Keeping the old data
+        // dir aside until AFTER verify succeeds means a crash mid-apply (or a
+        // failed verify) can recover the operator's previous chain data instead
+        // of leaving them with a half-applied snapshot and nothing to fall back
+        // to. The .bak is cleaned only once verify passes (below).
 
         // ---- 5. VERIFYING — sanity check the applied data.
         s.phase = PHASES.VERIFYING;
         this._emit(chainId, PHASES.VERIFYING, 'Verifying snapshot...');
         const entries = await fsp.readdir(dataDst);
         if (entries.length === 0) {
+            // Verify failed — restore the original data dir from the .bak we
+            // deliberately kept, so the operator isn't left with an empty dir.
+            if (fs.existsSync(dataBak)) {
+                try {
+                    await fsp.rm(dataDst, { recursive: true, force: true });
+                    await fsp.rename(dataBak, dataDst);
+                } catch (_) { /* best effort — surface the original failure below */ }
+            }
             throw new Error('Snapshot data dir is empty after extract.');
+        }
+
+        // Verify passed — now it's safe to drop the previous data dir. Async,
+        // no need to block the operator on a multi-GB delete.
+        if (fs.existsSync(dataBak)) {
+            fsp.rm(dataBak, { recursive: true, force: true }).catch(() => { /* tidy-up */ });
         }
 
         // Clean up the tarball + the (now-empty) extract dir.
@@ -377,6 +403,11 @@ class EnmBootstrapDownloader {
                         res.resume();
                         try {
                             const u = new URL(loc, `https://${currentHost}${currentPath}`);
+                            // P1 (v0.5.183) — refuse a redirect off the publisher's
+                            // domain (supply-chain hijack guard; bytes run as root).
+                            if (!isAllowedSnapshotHost(u.hostname)) {
+                                return reject(new Error(`refusing snapshot redirect to disallowed host: ${u.host}`));
+                            }
                             return attempt(u.host, u.pathname + u.search, hops + 1);
                         } catch (e) { return reject(e); }
                     }
@@ -451,6 +482,18 @@ class EnmBootstrapDownloader {
                         res.pipe(fileStream);
                         fileStream.on('finish', () => {
                             fileStream.close(() => {
+                                // P1 (v0.5.183) — truncation guard. A stream that
+                                // finishes "cleanly" but delivered fewer bytes than
+                                // Content-Length (proxy/CDN cutoff, short read) would
+                                // otherwise be renamed into place and extracted as if
+                                // complete → truncated/corrupt archive applied to the
+                                // chain. Reject instead. Mirrors EnmSnapshotDownloader.
+                                if (total > 0 && got !== total) {
+                                    fs.rm(tmp, { force: true }, () => reject(new Error(
+                                        `truncated download: got ${got} of ${total} bytes`,
+                                    )));
+                                    return;
+                                }
                                 fs.rename(tmp, dest, (renameErr) => {
                                     if (renameErr) {
                                         fs.rm(tmp, { force: true }, () => reject(renameErr));

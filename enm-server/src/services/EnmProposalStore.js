@@ -41,6 +41,46 @@ const STATUS = Object.freeze({
 const DEFAULT_TTL_SEC = 3600;
 const MAX_TTL_SEC = 7 * 24 * 3600;
 
+// P1 (v0.5.183) — default retention for resolved (terminal-status) proposals.
+const RESOLVED_RETENTION_DAYS = 30;
+
+// P1 (v0.5.183) — terminal statuses eligible for pruning. Pending/approved rows
+// are live and must never be deleted by the cleanup tick.
+const TERMINAL_STATUSES = Object.freeze([
+    STATUS.EXECUTED,
+    STATUS.REJECTED,
+    STATUS.EXPIRED,
+    STATUS.FAILED,
+    STATUS.AUTO_RESOLVED,
+]);
+
+/**
+ * P1 (v0.5.183) — create the auxiliary tables this store + the SelfHealingEngine
+ * own that aren't in EnmDb.initSchema. Idempotent (CREATE TABLE IF NOT EXISTS),
+ * safe to call on every boot.
+ *
+ * `enm_restart_budget` persists the engine's per-chain auto-restart budget across
+ * ENM restarts. Without it the in-memory budget reset on every ENM bounce, so a
+ * deep-broken chain on a flapping host got a fresh 3-restarts/10min window each
+ * time — defeating the escalation cap that exists to stop thundering-herd loops.
+ *
+ * @param {object} db extension.import('data').db
+ */
+async function initSchema(db) {
+    if (!db || typeof db.write !== 'function') {
+        throw new Error('EnmProposalStore.initSchema: invalid db handle (missing .write)');
+    }
+    // Pass [] explicitly for parameterless DDL — PC2's param wrapper does
+    // params.map(...) without an undefined guard (see EnmDb.initSchema note).
+    await db.write(`
+        CREATE TABLE IF NOT EXISTS enm_restart_budget (
+            chain_id TEXT PRIMARY KEY,
+            count INTEGER NOT NULL,
+            first_at INTEGER NOT NULL
+        )
+    `, []);
+}
+
 /**
  * @typedef {object} ProposalInput
  * @property {string} walletAddress  owner wallet (lowercased EVM)
@@ -336,6 +376,59 @@ async function sweepExpired(db) {
 }
 
 /**
+ * P1 (v0.5.183) — delete resolved (terminal-status) proposals older than the
+ * retention window so enm_proposals doesn't grow monotonically. Live rows
+ * (pending_approval / approved) are never touched.
+ *
+ * Mirrors EnmDb.cleanupOldAuditLogs: rowid-bounded batched DELETE so a large
+ * reduction doesn't lock the DB, and skipped entirely when olderThanDays<=0
+ * ("keep forever"). Age is measured against the most recent terminal timestamp
+ * (executed_at / rejected_at) falling back to proposed_at for legacy rows that
+ * predate those columns being populated.
+ *
+ * Needs wiring into a periodic tick by the caller (e.g. alongside the
+ * audit-cleanup sweep in server.js). Exported so that wiring can call it.
+ *
+ * @param {object} db
+ * @param {number} [olderThanDays]  default 30; 0 means keep forever (no-op)
+ * @returns {Promise<number>} rows deleted
+ */
+async function pruneResolvedProposals(db, olderThanDays) {
+    if (!db || typeof db.write !== 'function') {
+        return 0;
+    }
+    const days = (olderThanDays === undefined) ? RESOLVED_RETENTION_DAYS : olderThanDays;
+    if (!Number.isFinite(days) || days <= 0) {
+        return 0; // keep forever
+    }
+    const BATCH = 10_000;
+    const cutoff = Date.now() - (days * 24 * 60 * 60 * 1000);
+    const placeholders = TERMINAL_STATUSES.map(() => '?').join(', ');
+    let total = 0;
+    // SQLite (better-sqlite3) doesn't support DELETE ... LIMIT unless compiled
+    // with SQLITE_ENABLE_UPDATE_DELETE_LIMIT, so bound by rowid like the
+    // audit-log cleanup does.
+    while (true) {
+        // eslint-disable-next-line no-await-in-loop
+        const res = await db.write(
+            `DELETE FROM enm_proposals WHERE rowid IN (
+                 SELECT rowid FROM enm_proposals
+                 WHERE status IN (${placeholders})
+                   AND COALESCE(executed_at, rejected_at, proposed_at) < ?
+                 LIMIT ?
+             )`,
+            [...TERMINAL_STATUSES, cutoff, BATCH],
+        );
+        const changes = (res && typeof res.changes === 'number') ? res.changes : 0;
+        total += changes;
+        if (changes < BATCH) {
+            break;
+        }
+    }
+    return total;
+}
+
+/**
  * @param {number|undefined} ttlSec
  * @returns {number}
  */
@@ -369,6 +462,8 @@ module.exports = {
     STATUS,
     DEFAULT_TTL_SEC,
     MAX_TTL_SEC,
+    RESOLVED_RETENTION_DAYS,
+    initSchema,
     create,
     getById,
     listPending,
@@ -379,5 +474,6 @@ module.exports = {
     markExecuted,
     markAutoResolved,
     sweepExpired,
+    pruneResolvedProposals,
     decodePayload,
 };

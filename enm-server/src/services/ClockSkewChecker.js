@@ -33,6 +33,15 @@ const DEFAULT_ENDPOINTS = Object.freeze([
 ]);
 const DEFAULT_TIMEOUT_MS = 5_000;
 
+// P1 (v0.5.183) — sanity bound on a single endpoint's computed skew. We trust
+// a remote HTTP `Date:` header; a hijacked/misconfigured/buggy endpoint could
+// report a wildly wrong time and scare the operator into "fixing" a perfectly
+// good NTP clock. A real host-vs-internet skew that matters for F13 is on the
+// order of seconds (the Schnorr window is ~4.2s); anything past an hour is far
+// likelier a bad endpoint than a real clock that drifted that far unnoticed.
+// Such a result is treated as untrusted and we fall through to the next endpoint.
+const MAX_PLAUSIBLE_SKEW_MS = 60 * 60 * 1000; // 1 hour
+
 /**
  * @typedef {object} SkewResult
  * @property {boolean} ok            true if we got a server time
@@ -107,8 +116,18 @@ function probeOne(endpoint, timeoutMs) {
 }
 
 /**
- * Public probe — tries each default endpoint in order, returns the first
- * success. If all endpoints fail, returns ok=false with the last reason.
+ * Public probe — tries each endpoint in order. A successful probe whose
+ * computed skew exceeds MAX_PLAUSIBLE_SKEW_MS is treated as untrusted (likely
+ * a bad/hijacked endpoint, not a real clock that drifted an hour unnoticed):
+ * we discard it and fall through to the next endpoint.
+ *
+ * P1 (v0.5.183) — corroboration: a single HTTP Date endpoint is a single point
+ * of trust. When >=2 endpoints are configured we require TWO independent
+ * plausible successes before reporting ok, and return the lower-RTT (more
+ * accurate) of the two. If only ONE endpoint is configured we keep working off
+ * that single result (back-compat for callers that pin one endpoint).
+ *
+ * If no endpoint yields a trusted result, returns ok=false with the last reason.
  * Caller decides whether to escalate (we recommend WARNING tier — see header).
  *
  * @param {object} [opts]
@@ -120,14 +139,39 @@ async function check(opts) {
     const endpoints = (opts && Array.isArray(opts.endpoints) && opts.endpoints.length > 0)
         ? opts.endpoints : DEFAULT_ENDPOINTS;
     const timeout = (opts && Number.isInteger(opts.timeoutMs)) ? opts.timeoutMs : DEFAULT_TIMEOUT_MS;
+    // Require corroboration only when there's more than one endpoint to corroborate with.
+    const requiredAgreements = endpoints.length >= 2 ? 2 : 1;
+
     let last = null;
+    const trusted = [];
     for (const ep of endpoints) {
         // eslint-disable-next-line no-await-in-loop
         const res = await probeOne(ep, timeout);
         last = res;
-        if (res.ok) {
-            return res;
+        if (!res.ok) { continue; }
+        if (Math.abs(res.skewMs) > MAX_PLAUSIBLE_SKEW_MS) {
+            // Implausible — distrust this endpoint and keep looking.
+            last = {
+                ok: false,
+                endpoint: ep,
+                reason: `${ep}: implausible skew ${res.skewMs}ms (> ${MAX_PLAUSIBLE_SKEW_MS}ms) — endpoint distrusted`,
+            };
+            continue;
         }
+        trusted.push(res);
+        if (trusted.length >= requiredAgreements) {
+            // Prefer the lowest-RTT sample — its ½-RTT compensation is tightest.
+            return trusted.reduce((best, r) => (r.rtt < best.rtt ? r : best));
+        }
+    }
+    // Got at least one trusted sample but couldn't corroborate it.
+    if (trusted.length > 0) {
+        return {
+            ok: false,
+            endpoint: trusted[0].endpoint,
+            reason: `could not corroborate clock skew across ${requiredAgreements} endpoints `
+                + `(${trusted.length} of ${endpoints.length} responded with a plausible time)`,
+        };
     }
     return last || { ok: false, reason: 'no endpoints' };
 }
@@ -137,4 +181,5 @@ module.exports = {
     probeOne,
     DEFAULT_ENDPOINTS,
     DEFAULT_TIMEOUT_MS,
+    MAX_PLAUSIBLE_SKEW_MS,
 };

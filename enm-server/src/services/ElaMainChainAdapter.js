@@ -36,6 +36,19 @@ const KEYSTORE_FILENAME = 'keystore.dat';
 const KEYSTORE_PASSWORD_FILE = 'keystore-password.txt';
 const CHAIN_CONFIG_FILENAME = 'config.json';
 
+// P1 (v0.5.183) — grace delay before feeding the keystore password to ela's
+// stdin. Lets the freshly-spawned child reach its stdin prompt-read state so
+// the immediate end()-of-pipe inside writeStdin() can't deliver EOF before
+// the prompt has been read (which would truncate it and hang BPoS unlock).
+// Small enough to be invisible to the operator, large enough to clear the
+// spawn → first-read window on a loaded host.
+const STDIN_FEED_GRACE_MS = 1500;
+
+/** Promise-based sleep used for the stdin-feed grace delay. */
+function _sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 class ElaMainChainAdapter extends ChainAdapter {
     constructor(deps) {
         super(deps);
@@ -275,6 +288,22 @@ class ElaMainChainAdapter extends ChainAdapter {
                     + 'Re-import the keystore via Settings → Reinstall my node.',
                 );
             }
+            // P1 (v0.5.183) — stdin handshake robustness. writeStdin() writes
+            // the password then immediately end()s the pipe (closes EOF).
+            // Today this works only by pipe-buffering luck: ela reads its
+            // password prompt from stdin a moment AFTER spawn, and the bytes
+            // happen to still be buffered. On a slow host — or a future ela
+            // build that reads stdin differently — an end() that fires before
+            // ela has started reading can deliver EOF first and TRUNCATE the
+            // prompt read, so ela hangs on an empty password while start()
+            // already returned "success". We can't watch ela's stdout for a
+            // "password" marker here (NativeProcessService owns the child's
+            // stdout sink and doesn't surface it to the adapter), so we use
+            // the pragmatic, non-breaking guard the task calls for: a short
+            // grace delay BEFORE writing + ending, giving the freshly-spawned
+            // child time to reach its stdin read. Best-effort — if the child
+            // already died, writeStdin() below returns false and we handle it.
+            await _sleep(STDIN_FEED_GRACE_MS);
             const wrote = this.processService.writeStdin(this.chainId, plaintext);
             if (!wrote) {
                 // Same logic: writeStdin failed → ela never gets the

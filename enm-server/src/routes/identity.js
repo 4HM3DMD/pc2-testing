@@ -211,6 +211,27 @@ function build(deps) {
             }
             // Producer-state guard.
             const producer = await KeystoreIdentity.getProducerState(CHAIN_ID);
+            // P1 (v0.5.183) — getProducerState() returns null both for
+            // "confirmed not-registered" AND for "couldn't determine" (RPC
+            // down, adapter not wired, chain stopped — all collapse to null
+            // via the .catch in EnmKeystoreIdentity.getProducerState). If a
+            // keystore identity exists, a null is INDETERMINATE: the node may
+            // be an Active producer whose state we just failed to read. Wiping
+            // it then would orphan the on-chain registration + lose rewards.
+            // Block on indeterminate unless the operator passes force.
+            const indeterminate = await _producerStateIndeterminate(producer);
+            if (indeterminate && !force) {
+                return res.status(412).json({
+                    ...errorBody(
+                        'Couldn\'t verify the on-chain producer state (the mainchain RPC may be '
+                        + 'briefly unreachable). Importing a different keystore now could orphan an '
+                        + 'Active producer registration and lose block-production rewards. Retry once '
+                        + 'the node is synced and reachable, or acknowledge the rewards-loss warning '
+                        + 'to proceed anyway.',
+                    ),
+                    code: 'PRODUCER_STATE_UNVERIFIED',
+                });
+            }
             if (producer && LOCKED_IN_PRODUCER_STATES.has(producer.state) && !force) {
                 return res.status(412).json({
                     ...errorBody(
@@ -296,6 +317,22 @@ function build(deps) {
         }
         // Producer-state guard.
         const producer = await KeystoreIdentity.getProducerState(CHAIN_ID);
+        // P1 (v0.5.183) — see _producerStateIndeterminate: a null state with an
+        // existing keystore identity means the on-chain producer record
+        // couldn't be verified (likely RPC down). Resetting then could wipe an
+        // Active producer keystore. Block unless force=true.
+        const indeterminate = await _producerStateIndeterminate(producer);
+        if (indeterminate && !value.force) {
+            return res.status(412).json({
+                ...errorBody(
+                    'Couldn\'t verify the on-chain producer state (the mainchain RPC may be '
+                    + 'briefly unreachable). Resetting the keystore now could orphan an Active '
+                    + 'producer registration and lose block-production rewards. Retry once the node '
+                    + 'is synced and reachable, or acknowledge the rewards-loss warning to proceed anyway.',
+                ),
+                code: 'PRODUCER_STATE_UNVERIFIED',
+            });
+        }
         if (producer && LOCKED_IN_PRODUCER_STATES.has(producer.state) && !value.force) {
             return res.status(412).json({
                 ...errorBody(
@@ -400,6 +437,35 @@ function build(deps) {
     });
 
     return router;
+}
+
+/**
+ * P1 (v0.5.183) — decide whether a null producer state is INDETERMINATE
+ * (RPC couldn't confirm) versus genuinely "not a registered producer".
+ *
+ * getProducerState() flattens both cases to null. We disambiguate from
+ * what the route can observe: if a keystore identity exists (cached
+ * pubkey on disk), the node MIGHT be a registered producer whose state
+ * we just failed to read — so a null is treated as indeterminate and the
+ * destructive op is blocked unless force=true. If no identity exists yet,
+ * there is nothing on-chain to orphan, so a null is safe to proceed on.
+ *
+ * A non-null producer is, by definition, a confirmed read — never
+ * indeterminate.
+ *
+ * @param {object|null} producer  result of KeystoreIdentity.getProducerState
+ * @returns {Promise<boolean>}
+ */
+async function _producerStateIndeterminate(producer) {
+    if (producer) { return false; }
+    try {
+        const cached = await KeystoreIdentity.getCachedIdentity(CHAIN_ID);
+        return !!(cached && cached.publicKey);
+    } catch (_) {
+        // If we can't even read the identity cache, fail safe: treat as
+        // indeterminate so we don't wipe a possibly-registered keystore.
+        return true;
+    }
 }
 
 /**

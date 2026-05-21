@@ -643,28 +643,110 @@ function _buildTeardownScript(opts) {
 }
 
 /**
- * Copy keystore.dat to PC2_DATA_DIR/backups/elastos-node-manager/
- * keystore-<iso>.dat. Returns the backup path or null if there's no
- * keystore to back up (pre-setup operator). Idempotent and safe.
+ * Copy the chain's signing/mining identity to
+ * PC2_DATA_DIR/backups/elastos-node-manager/ before a destructive resync.
+ * Returns the backup path (or, for EVM, the FIRST copied path) or null if
+ * there's nothing to back up (pre-setup operator). Idempotent and safe.
+ *
+ * P1 (v0.5.183) — class-aware identity backup. The mainchain (class A) keeps
+ * its identity in <chainDir>/keystore.dat. EVM sidechains (esc/eid/pg, class
+ * B) keep their MINING identity in <chainDir>/data/keystore/UTC--* (geth's
+ * standard keystore layout) — there is NO keystore.dat for them. Before this
+ * fix, _backupKeystoreNow looked only for keystore.dat, so a resync of an EVM
+ * chain returned null and the operator's mining key was NEVER backed up ahead
+ * of the wipe. We now also copy the EVM UTC--* key file(s). The resync wipe
+ * list already preserves data/keystore (P1-7), so this is defence-in-depth —
+ * but it makes the backup honest about what it captured.
+ *
+ * We also mirror the AES master key (encryption.key) so a backups-only
+ * migration can still decrypt the operator's stored passwords — same
+ * data-loss rationale as the keystore-import archive path.
  */
 async function _backupKeystoreNow(chainId, log) {
-    const src = path.join(DataDir.chainDir(chainId), KEYSTORE_FILENAME);
-    if (!fs.existsSync(src)) {
-        log.info(`${ENM_LOG_PREFIX} maintenance: no keystore at ${src} to back up`);
-        return null;
-    }
+    const cdir = DataDir.chainDir(chainId);
     // PC2_DATA_DIR convention from server.js — fall back to two levels
     // above enmDataDir so we land at /var/lib/pc2/data/backups/...
     const pc2Data = process.env.PC2_DATA_DIR
         || path.dirname(path.dirname(DataDir.enmDataDir()));
     const backupRoot = path.join(pc2Data, 'backups', 'elastos-node-manager');
-    await fsp.mkdir(backupRoot, { recursive: true, mode: 0o700 });
     const ts = new Date().toISOString().replace(/[:.]/g, '-');
-    const dst = path.join(backupRoot, `keystore-${ts}.dat`);
-    await fsp.copyFile(src, dst);
-    await fsp.chmod(dst, 0o600);
-    log.info(`${ENM_LOG_PREFIX} maintenance: keystore backed up → ${dst}`);
-    return dst;
+
+    // Determine chain class. Prefer the adapter's declared class; fall back
+    // to a filesystem probe (data/keystore exists ⇒ treat as EVM) so a
+    // missing/odd adapter can't silently skip an EVM key backup.
+    let isEvm = false;
+    try {
+        const adapter = ChainRegistry.getAdapter(chainId);
+        isEvm = adapter && adapter.chainClass === 'B';
+    } catch (_) { /* adapter unavailable — fall through to fs probe */ }
+    const evmKeystoreDir = path.join(cdir, 'data', 'keystore');
+    if (!isEvm && fs.existsSync(evmKeystoreDir)) { isEvm = true; }
+
+    // --- Class A (mainchain): keystore.dat ---
+    const ksDat = path.join(cdir, KEYSTORE_FILENAME);
+    let firstBackup = null;
+    if (fs.existsSync(ksDat)) {
+        await fsp.mkdir(backupRoot, { recursive: true, mode: 0o700 });
+        const dst = path.join(backupRoot, `keystore-${chainId}-${ts}.dat`);
+        await fsp.copyFile(ksDat, dst);
+        await fsp.chmod(dst, 0o600);
+        log.info(`${ENM_LOG_PREFIX} maintenance: keystore backed up → ${dst}`);
+        firstBackup = dst;
+    }
+
+    // --- Class B (EVM esc/eid/pg): data/keystore/UTC--* mining key(s) ---
+    if (isEvm) {
+        try {
+            const entries = await fsp.readdir(evmKeystoreDir).catch(() => []);
+            const utcFiles = entries.filter((n) => n.startsWith('UTC--'));
+            if (utcFiles.length > 0) {
+                await fsp.mkdir(backupRoot, { recursive: true, mode: 0o700 });
+            }
+            for (const name of utcFiles) {
+                const keyDst = path.join(backupRoot, `evm-keystore-${chainId}-${ts}-${name}`);
+                await fsp.copyFile(path.join(evmKeystoreDir, name), keyDst);
+                await fsp.chmod(keyDst, 0o600);
+                log.info(`${ENM_LOG_PREFIX} maintenance: EVM mining key backed up → ${keyDst}`);
+                if (!firstBackup) { firstBackup = keyDst; }
+            }
+        } catch (err) {
+            log.warn(`${ENM_LOG_PREFIX} maintenance: EVM keystore backup failed: ${err.message}`);
+        }
+    }
+
+    if (!firstBackup) {
+        log.info(`${ENM_LOG_PREFIX} maintenance: no keystore/mining key for ${chainId} to back up`);
+        return null;
+    }
+
+    // P1 (v0.5.183) — mirror the AES master key so the backup is self-
+    // sufficient for password decryption after a host migration. Best-effort.
+    await _backupEncryptionKeyInto(backupRoot, ts, log);
+    return firstBackup;
+}
+
+/**
+ * P1 (v0.5.183) — copy encryption.key into the backup dir (mode 0600) so a
+ * config+backups-only migration can still decrypt stored passwords. Mirrors
+ * EnmKeystoreIdentity._backupEncryptionKeyInto. Idempotent + best-effort:
+ * returns null on any failure so it never aborts a keystore backup.
+ */
+async function _backupEncryptionKeyInto(backupRoot, ts, log) {
+    try {
+        const keySrc = DataDir.encryptionKeyPath();
+        if (!fs.existsSync(keySrc)) { return null; }
+        const keyDst = path.join(backupRoot, `encryption-key-${ts}.key`);
+        await fsp.copyFile(keySrc, keyDst);
+        await fsp.chmod(keyDst, 0o600);
+        log.info(`${ENM_LOG_PREFIX} maintenance: backed up encryption.key → ${keyDst}`);
+        return keyDst;
+    } catch (err) {
+        log.warn(
+            `${ENM_LOG_PREFIX} maintenance: encryption.key backup failed (${err.message}) — `
+            + 'keystore archived, but stored passwords may be unrecoverable if the master key is lost',
+        );
+        return null;
+    }
 }
 
 function _noopLog() {

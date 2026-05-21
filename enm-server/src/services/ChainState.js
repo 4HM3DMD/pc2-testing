@@ -52,6 +52,31 @@ const { enmDataDir, chainDir, pidFilePath } = require('./DataDir');
 // In-process cache for binaryVersion (--version output) to avoid spawning
 // every snapshot call. Invalidated when the binary's mtime changes.
 const _versionCache = new Map(); // binaryPath -> { mtimeMs, version }
+// P2 (v0.5.183) — bound the version cache. Keyed by binaryPath, it would
+// otherwise accumulate one stale entry per binary path seen across months
+// of upgrades (each update lands the binary at a new versioned path), and
+// nothing ever evicted. ~8 chains × a handful of historical paths each
+// fits comfortably under this cap; on overflow we drop the oldest insert
+// (Map preserves insertion order, so the first key is the oldest).
+const _VERSION_CACHE_MAX = 64;
+
+/**
+ * Set into _versionCache with a simple size cap. On overflow, evict the
+ * oldest-inserted key before adding the new one.
+ */
+function _versionCacheSet(binaryPath, entry) {
+    if (!_versionCache.has(binaryPath) && _versionCache.size >= _VERSION_CACHE_MAX) {
+        const oldest = _versionCache.keys().next().value;
+        if (oldest !== undefined) { _versionCache.delete(oldest); }
+    }
+    _versionCache.set(binaryPath, entry);
+}
+
+// P2 (v0.5.183) — per-chainId cache of the located binary path so the hot
+// snapshot() path doesn't run a recursive readdirSync walk on every health
+// tick. Disk stays the source of truth: a cached path is only returned
+// after an existsSync() check confirms it's still there; any miss re-walks.
+const _binaryPathCache = new Map(); // chainId -> absolute binary path
 
 /**
  * @param {string} chainId
@@ -66,7 +91,7 @@ function snapshot(chainId) {
     const cDir = chainDir(chainId);
 
     // ---- binary + cli ----
-    const binaryPath = _locate(binDir, _binaryNameFor(chainId));
+    const binaryPath = _locateBinaryCached(chainId, binDir, _binaryNameFor(chainId));
     const cliPath = chainId === 'mainchain' ? _locate(binDir, 'ela-cli') : null;
     const installed = !!binaryPath && _isExecutable(binaryPath);
     const binaryVersion = installed ? _versionFor(binaryPath) : null;
@@ -192,6 +217,30 @@ function _binaryNameFor(chainId) {
     }
 }
 
+/**
+ * P2 (v0.5.183) — cached wrapper around _locate() for the per-chain binary,
+ * keyed by chainId. snapshot() is on the hot path (called per chain per
+ * health tick); without this it ran a recursive readdirSync walk every
+ * time. Disk remains the source of truth: a cached path is validated with
+ * existsSync() before being returned, and any miss (no cache entry, or the
+ * cached path no longer exists) falls through to a fresh _locate() walk and
+ * re-populates / clears the cache. This changes only WHEN we walk, never
+ * the disk-truth result.
+ */
+function _locateBinaryCached(chainId, rootDir, basename) {
+    const cached = _binaryPathCache.get(chainId);
+    if (cached && fs.existsSync(cached)) {
+        return cached;
+    }
+    const found = _locate(rootDir, basename);
+    if (found) {
+        _binaryPathCache.set(chainId, found);
+    } else {
+        _binaryPathCache.delete(chainId);
+    }
+    return found;
+}
+
 function _locate(rootDir, basename) {
     if (!fs.existsSync(rootDir)) return null;
     const stack = [rootDir];
@@ -252,7 +301,7 @@ function _smokeTest(binaryPath) {
             const output = (stdout || stderr || '').trim();
             try {
                 const mtimeMs = fs.statSync(binaryPath).mtimeMs;
-                _versionCache.set(binaryPath, { mtimeMs, version: _extractVersion(output) });
+                _versionCacheSet(binaryPath, { mtimeMs, version: _extractVersion(output) });
             } catch (_) { /* cache miss is fine */ }
             resolve({ ok: true, output });
         });
@@ -284,4 +333,6 @@ module.exports = {
     reconcileOnBoot,
     // exposed for tests + the rare consumer that needs the raw binary version sync
     _versionCache,
+    // P2 (v0.5.183) — exposed for tests (cap eviction + path-cache invalidation)
+    _binaryPathCache,
 };

@@ -359,6 +359,10 @@ async function main() {
     // auto-backs-up the keystore every N days (default 7) per
     // cfg.global.backup.keystoreIntervalDays. Operator never has to
     // run a manual rotate or backup; both are scheduled and idempotent.
+    // P2 (v0.5.183) — retain the handle so the shutdown path can stop its
+    // boot/interval timers. Previously start()'s result was discarded and
+    // stop() was never called, leaking the 24h interval across hot-reloads.
+    let storageMaintenanceHandle = null;
     try {
         const { EnmStorageMaintenance } = require('./services/EnmStorageMaintenance');
         const storageMaintenance = new EnmStorageMaintenance({
@@ -366,6 +370,7 @@ async function main() {
             listChains: () => ChainRegistry.listChains(),
         });
         storageMaintenance.start();
+        storageMaintenanceHandle = storageMaintenance;
     } catch (err) {
         log('error', `storage maintenance init failed: ${err.message}`);
     }
@@ -426,6 +431,19 @@ async function main() {
             return 365;
         };
         const sweep = async () => {
+            // P1 (v0.5.183) — prune resolved self-heal proposals (own 30-day
+            // retention, independent of audit-log retention) so enm_proposals
+            // doesn't grow unbounded. Runs even when audit retention is "forever".
+            try {
+                const ProposalStore = require('./services/EnmProposalStore');
+                if (typeof ProposalStore.pruneResolvedProposals === 'function') {
+                    const pruned = await ProposalStore.pruneResolvedProposals(db, 30);
+                    if (pruned > 0) { log('info', `proposal cleanup: pruned ${pruned} resolved proposals`); }
+                }
+            } catch (err) {
+                log('error', `proposal cleanup failed: ${err.message}`);
+            }
+
             const days = await getRetention();
             if (!days || days <= 0) {
                 log('info', 'audit cleanup: retention=forever, skipping sweep');
@@ -484,6 +502,13 @@ async function main() {
                 if (flushed > 0) { log('info', `${signal}: sent SIGINT flush to ${flushed} child(ren)`); }
             } catch (err) {
                 log('warn', `${signal}: shutdown chain handling failed (non-fatal): ${err.message}`);
+            }
+            // P2 (v0.5.183) — stop the storage-maintenance timers so they
+            // don't keep the event loop alive past shutdown. Best-effort.
+            try {
+                if (storageMaintenanceHandle) { storageMaintenanceHandle.stop(); }
+            } catch (err) {
+                log('warn', `${signal}: storage-maintenance stop failed (non-fatal): ${err.message}`);
             }
             // Don't process.exit() — let the natural exit path run so any
             // pending writes complete. The Node process exits when the

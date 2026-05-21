@@ -42,6 +42,17 @@ const { ENM_LOG_PREFIX } = require('./EnmConstants');
 const HEARTBEAT_MS = 25_000;
 const SUBSCRIBE_LIMIT_PER_RESPONSE = 16;
 
+// P1 (v0.5.183) — connection ceilings + write backpressure.
+// Hundreds of operators each hold one long-lived SSE connection from the
+// dashboard. Without caps a connection leak (or a malicious client opening
+// many) exhausts file descriptors / memory. A slow client whose TCP buffer
+// fills makes res.write() return false and Node buffers the SSE frames in
+// the socket unboundedly. EventSource auto-reconnects, so ending an
+// over-budget or backed-up connection is safe — the client just comes back.
+const MAX_SSE_CONNECTIONS = 200; // global ceiling across all wallets
+const MAX_SSE_PER_WALLET = 8;    // per-wallet ceiling (multi-tab / multi-device)
+const MAX_SSE_BUFFER_BYTES = 4 * 1024 * 1024; // 4 MB socket backlog → drop slow client
+
 class SseHub {
     /**
      * @param {object} deps
@@ -104,6 +115,35 @@ class SseHub {
             }
         }
 
+        // P1 (v0.5.183) — enforce connection ceilings BEFORE we set SSE headers
+        // or register the response. Over-budget connections get a plain 503 +
+        // Retry-After; EventSource honors the reconnect delay so the client
+        // backs off and returns once capacity frees up. We reject (not queue)
+        // because a queued slow client is exactly the resource we're protecting.
+        const walletAddress = (opts && opts.walletAddress) || null;
+        if (this.connections.size >= MAX_SSE_CONNECTIONS) {
+            this._rejectOverCapacity(
+                res,
+                `${ENM_LOG_PREFIX} SseHub.subscribe: global cap ${MAX_SSE_CONNECTIONS} reached`,
+            );
+            return;
+        }
+        if (walletAddress) {
+            let walletCount = 0;
+            for (const sub of this.connections.values()) {
+                if (sub.walletAddress === walletAddress) {
+                    walletCount += 1;
+                }
+            }
+            if (walletCount >= MAX_SSE_PER_WALLET) {
+                this._rejectOverCapacity(
+                    res,
+                    `${ENM_LOG_PREFIX} SseHub.subscribe: per-wallet cap ${MAX_SSE_PER_WALLET} reached`,
+                );
+                return;
+            }
+        }
+
         // SSE response headers — `text/event-stream` triggers EventSource on the
         // browser side. `Cache-Control: no-cache` prevents proxies from buffering.
         res.setHeader('Content-Type', 'text/event-stream');
@@ -118,7 +158,7 @@ class SseHub {
 
         const subscription = {
             topics: new Set(topics),
-            walletAddress: (opts && opts.walletAddress) || null,
+            walletAddress,
         };
         this.connections.set(res, subscription);
 
@@ -132,9 +172,35 @@ class SseHub {
         }
 
         // Disconnect cleanup. close = client closed; finish = we ended.
+        // P1 (v0.5.183) — also bind 'finish': when WE end the response
+        // (over-capacity 503 path, slow-client drop, close()) 'close' may
+        // not fire on every Node version, so 'finish' guarantees the Map
+        // entry is removed. _unsubscribe is idempotent (no-op if absent).
         const cleanup = () => this._unsubscribe(res);
         res.on('close', cleanup);
         res.on('error', cleanup);
+        res.on('finish', cleanup);
+    }
+
+    /**
+     * @private
+     * P1 (v0.5.183) — reject an over-capacity SSE connection with a 503 +
+     * Retry-After so EventSource backs off and reconnects later. The response
+     * was never registered in the Maps, so there is nothing to unsubscribe.
+     *
+     * @param {import('express').Response} res
+     * @param {string} reason  log line explaining which cap tripped
+     */
+    _rejectOverCapacity(res, reason) {
+        this.extensionHandle.log.warn(reason);
+        try {
+            if (!res.headersSent) {
+                res.statusCode = 503;
+                res.setHeader('Content-Type', 'text/plain');
+                res.setHeader('Retry-After', '30');
+            }
+            res.end('SSE connection limit reached. Retrying shortly.\n');
+        } catch (_) { /* swallow — client may already be gone */ }
     }
 
     /**
@@ -154,16 +220,7 @@ class SseHub {
         const frame = `event: ${topic}\nid: ${id}\ndata: ${payload}\n\n`;
 
         for (const res of subs) {
-            try {
-                res.write(frame);
-            } catch (err) {
-                // Broken pipe / write after end — drop the subscriber. cleanup
-                // below removes them properly on the next tick.
-                this.extensionHandle.log.debug(
-                    `${ENM_LOG_PREFIX} SseHub.publish: subscriber write failed: ${err.message}`,
-                );
-                this._unsubscribe(res);
-            }
+            this._send(res, frame, 'publish');
         }
     }
 
@@ -201,14 +258,7 @@ class SseHub {
             if (!sub || !sub.walletAddress || sub.walletAddress !== walletAddress) {
                 continue;
             }
-            try {
-                res.write(frame);
-            } catch (err) {
-                this.extensionHandle.log.debug(
-                    `${ENM_LOG_PREFIX} SseHub.publishToWallet: subscriber write failed: ${err.message}`,
-                );
-                this._unsubscribe(res);
-            }
+            this._send(res, frame, 'publishToWallet');
         }
     }
 
@@ -281,11 +331,52 @@ class SseHub {
         const id = ++this.eventId;
         const frame = `event: enm:heartbeat\nid: ${id}\ndata: ${now}\n\n`;
         for (const res of this.connections.keys()) {
-            try {
-                res.write(frame);
-            } catch (_) {
+            this._send(res, frame, 'heartbeat');
+        }
+    }
+
+    /**
+     * @private
+     * P1 (v0.5.183) — single guarded write path for every SSE frame
+     * (publish / publishToWallet / heartbeat). Two failure modes are
+     * handled here so a misbehaving client can't take the process down:
+     *
+     *   1. Throw (broken pipe / write-after-end) — drop the subscriber.
+     *   2. Backpressure — a slow client whose TCP send buffer is full makes
+     *      res.write() return false and Node queues the bytes in the socket.
+     *      Left unchecked the queue grows without bound (one stuck client can
+     *      pin megabytes per frame). If the buffered byte count crosses
+     *      MAX_SSE_BUFFER_BYTES we end + unsubscribe; EventSource reconnects,
+     *      which resets the buffer and re-subscribes a healthy socket.
+     *
+     * We check writableLength AFTER the write so the threshold reflects the
+     * frame we just queued. res.write returning false alone is normal (it
+     * just means "buffered, not flushed"); we only act when the backlog is
+     * genuinely large, to avoid dropping clients on transient congestion.
+     *
+     * @param {import('express').Response} res
+     * @param {string} frame  fully-formatted SSE frame
+     * @param {string} where  caller label for log lines
+     */
+    _send(res, frame, where) {
+        try {
+            res.write(frame);
+            if (typeof res.writableLength === 'number'
+                && res.writableLength > MAX_SSE_BUFFER_BYTES) {
+                this.extensionHandle.log.warn(
+                    `${ENM_LOG_PREFIX} SseHub.${where}: dropping slow client `
+                    + `(buffered ${res.writableLength} bytes > ${MAX_SSE_BUFFER_BYTES})`,
+                );
                 this._unsubscribe(res);
+                try { res.end(); } catch (_) { /* swallow */ }
             }
+        } catch (err) {
+            // Broken pipe / write after end — drop the subscriber. The bound
+            // cleanup handlers also fire, but _unsubscribe is idempotent.
+            this.extensionHandle.log.debug(
+                `${ENM_LOG_PREFIX} SseHub.${where}: subscriber write failed: ${err.message}`,
+            );
+            this._unsubscribe(res);
         }
     }
 }
@@ -294,4 +385,8 @@ module.exports = {
     SseHub,
     HEARTBEAT_MS,
     SUBSCRIBE_LIMIT_PER_RESPONSE,
+    // P1 (v0.5.183)
+    MAX_SSE_CONNECTIONS,
+    MAX_SSE_PER_WALLET,
+    MAX_SSE_BUFFER_BYTES,
 };

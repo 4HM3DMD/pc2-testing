@@ -466,9 +466,57 @@ async function _archiveOne(src, log) {
     const dst = path.join(backupRoot, `keystore-${ts}.dat`);
     await fsp.copyFile(src, dst);
     await fsp.chmod(dst, 0o600);
+    // P1 (v0.5.183) — CRITICAL data-loss fix. The keystore.dat is encrypted
+    // at rest, but its decryption (and every RPC/keystore password envelope)
+    // depends on the AES master key at DataDir.encryptionKeyPath(). If that
+    // key is lost (volume gone, host migration that copies only this
+    // backups/ dir), the backed-up keystore.dat is still openable with the
+    // operator's wallet password, BUT every password ENM stored for them
+    // (RPC pass, keystore-password.enc) becomes permanently undecryptable.
+    // So we mirror encryption.key alongside EVERY keystore archive, mode
+    // 0600, in the same backup dir. Best-effort: a missing key (pre-first-
+    // run) or copy failure must not abort the keystore archive itself.
+    await _backupEncryptionKeyInto(backupRoot, ts, log);
     await fsp.unlink(src);
     log.info(`${ENM_LOG_PREFIX} identity: archived ${src} → ${dst}`);
     return dst;
+}
+
+/**
+ * P1 (v0.5.183) — copy the AES master key (encryption.key) into the keystore
+ * backup dir so a config+backups migration carries everything needed to
+ * decrypt the operator's stored passwords. Without it, keystore.dat survives
+ * but RPC/keystore password envelopes are unrecoverable on a new host.
+ *
+ * Idempotent + best-effort: returns null (and logs a warning) on any failure
+ * so it can never abort the keystore archive that calls it. The copy is
+ * timestamp-suffixed to match its sibling keystore archive, written 0600.
+ *
+ * @param {string} backupRoot  the backups/elastos-node-manager dir
+ * @param {string} ts          the same ISO timestamp used for the keystore archive
+ * @param {object} log
+ * @returns {Promise<string|null>} the key backup path, or null if skipped
+ */
+async function _backupEncryptionKeyInto(backupRoot, ts, log) {
+    try {
+        const keySrc = DataDir.encryptionKeyPath();
+        if (!fs.existsSync(keySrc)) {
+            // No master key yet (operator hasn't stored any secret). Nothing
+            // to back up — silently skip.
+            return null;
+        }
+        const keyDst = path.join(backupRoot, `encryption-key-${ts}.key`);
+        await fsp.copyFile(keySrc, keyDst);
+        await fsp.chmod(keyDst, 0o600);
+        log.info(`${ENM_LOG_PREFIX} identity: backed up encryption.key → ${keyDst}`);
+        return keyDst;
+    } catch (err) {
+        log.warn(
+            `${ENM_LOG_PREFIX} identity: encryption.key backup failed (${err.message}) — `
+            + 'keystore archived, but stored passwords may be unrecoverable if the master key is lost',
+        );
+        return null;
+    }
 }
 
 /**
@@ -515,6 +563,7 @@ module.exports = {
     _internals: {
         _walletAccountAt,
         _archiveExistingKeystore,
+        _backupEncryptionKeyInto, // P1 (v0.5.183)
         MAX_IMPORT_BYTES,
     },
 };

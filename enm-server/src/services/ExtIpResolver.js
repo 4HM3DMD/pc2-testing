@@ -34,6 +34,37 @@ const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 const IPV4_REGEX = /^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$/;
 
+/**
+ * P1 (v0.5.183) — true iff `ip` is a well-formed, GLOBALLY ROUTABLE IPv4.
+ * The resolved value is advertised to DPoS peers as our dial-back address;
+ * a private/loopback/link-local/CGNAT address is unroutable from the public
+ * internet, so peers silently fail to connect (the "0 inbound peers" symptom).
+ * An echo-IP service returning such a value means we saw a NAT/proxy hop, not
+ * our real edge IP — reject it and try the next endpoint.
+ *
+ * Rejected ranges:
+ *   10.0.0.0/8      private (RFC 1918)
+ *   172.16.0.0/12   private (RFC 1918)
+ *   192.168.0.0/16  private (RFC 1918)
+ *   127.0.0.0/8     loopback
+ *   169.254.0.0/16  link-local (RFC 3927)
+ *   100.64.0.0/10   carrier-grade NAT (RFC 6598)
+ *
+ * @param {string} ip
+ * @returns {boolean}
+ */
+function isPublicIpv4(ip) {
+    if (typeof ip !== 'string' || !IPV4_REGEX.test(ip)) { return false; }
+    const o = ip.split('.').map((p) => parseInt(p, 10));
+    if (o[0] === 10) { return false; }
+    if (o[0] === 172 && o[1] >= 16 && o[1] <= 31) { return false; }
+    if (o[0] === 192 && o[1] === 168) { return false; }
+    if (o[0] === 127) { return false; }
+    if (o[0] === 169 && o[1] === 254) { return false; }
+    if (o[0] === 100 && o[1] >= 64 && o[1] <= 127) { return false; }
+    return true;
+}
+
 let cache = null; // { ip, fetchedAt }
 
 /**
@@ -114,6 +145,12 @@ async function probeEndpoint(endpoint, timeoutMs) {
     if (!IPV4_REGEX.test(text)) {
         return { ok: false, reason: `External IP probe returned a non-IPv4 string (${truncate(text, 64)}).` };
     }
+    // P1 (v0.5.183) — reject a private/loopback/CGNAT result. Advertising one of
+    // those to DPoS peers is unroutable (silent inbound-peer collapse); it also
+    // signals the probe saw a NAT hop, not our edge IP. Try the next endpoint.
+    if (!isPublicIpv4(text)) {
+        return { ok: false, reason: `External IP probe returned a non-public IPv4 (${truncate(text, 64)}).` };
+    }
     return { ok: true, ip: text };
 }
 
@@ -121,8 +158,14 @@ async function probeEndpoint(endpoint, timeoutMs) {
  * Validate an operator-supplied IP or hostname. Hostnames are accepted because
  * DPoS supports DDNS (Rev 5 audit: `normalizeAddress` accepts FQDN).
  *
+ * P1 (v0.5.183) — a private/loopback/CGNAT IPv4 override is accepted (ok:true)
+ * but flagged with `warning` in the return shape: some operators legitimately
+ * run on a private network behind their own routing/VPN, so we don't hard-block,
+ * but the value is unroutable from the public DPoS mesh in the common case and
+ * the caller should surface the warning so it isn't set by mistake.
+ *
  * @param {string} value
- * @returns {{ ok: boolean, kind?: 'ipv4'|'hostname', reason?: string }}
+ * @returns {{ ok: boolean, kind?: 'ipv4'|'hostname', reason?: string, warning?: string }}
  */
 function validateOverride(value) {
     if (typeof value !== 'string' || value.trim().length === 0) {
@@ -130,6 +173,15 @@ function validateOverride(value) {
     }
     const trimmed = value.trim();
     if (IPV4_REGEX.test(trimmed)) {
+        if (!isPublicIpv4(trimmed)) {
+            return {
+                ok: true,
+                kind: 'ipv4',
+                warning: `"${truncate(trimmed, 32)}" is a private/loopback/CGNAT address — `
+                    + 'DPoS peers on the public internet cannot dial back to it. '
+                    + 'Use this only if you route inbound traffic to it yourself.',
+            };
+        }
         return { ok: true, kind: 'ipv4' };
     }
     // If the input *looks* like a dotted-quad (4 numeric parts) but failed the
@@ -155,6 +207,7 @@ function _resetCacheForTests() { cache = null; }
 module.exports = {
     resolve,
     validateOverride,
+    isPublicIpv4,
     _resetCacheForTests,
     DEFAULT_ENDPOINT,
     CACHE_TTL_MS,

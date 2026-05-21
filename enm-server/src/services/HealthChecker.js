@@ -143,6 +143,23 @@ class HealthChecker {
 
     /** @private */
     async _fastTick() {
+        // P1 (v0.5.183) — per-tick re-entrancy guard. The setInterval timers
+        // fire on a fixed cadence regardless of how long the previous tick
+        // took; a slow tick (RPC at the 10s per-call timeout × N chains) would
+        // otherwise overlap the next, doubling load and racing the per-chain
+        // ruleState timeline. Skip this fire if the previous one is still
+        // in flight; the next interval picks it up.
+        if (this._fastInFlight) return;
+        this._fastInFlight = true;
+        try {
+            await this._fastTickBody();
+        } finally {
+            this._fastInFlight = false;
+        }
+    }
+
+    /** @private */
+    async _fastTickBody() {
         const cfg = await this._loadConfigSafe();
         for (const chainInfo of this.listChains()) {
             const chainId = chainInfo.chainId;
@@ -308,6 +325,20 @@ class HealthChecker {
 
     /** @private */
     async _mediumTick() {
+        // P1 (v0.5.183) — per-tick re-entrancy guard (see _fastTick). The
+        // medium tick does the per-chain RPC summaries, so it's the most
+        // likely to run long when several chains are slow to answer.
+        if (this._mediumInFlight) return;
+        this._mediumInFlight = true;
+        try {
+            await this._mediumTickBody();
+        } finally {
+            this._mediumInFlight = false;
+        }
+    }
+
+    /** @private */
+    async _mediumTickBody() {
         const cfg = await this._loadConfigSafe();
         const cfgValidation = await this._validateConfigSafe(cfg);
 
@@ -465,6 +496,21 @@ class HealthChecker {
 
     /** @private */
     async _slowTick() {
+        // P1 (v0.5.183) — per-tick re-entrancy guard (see _fastTick). The slow
+        // tick runs binary --version smoke-tests + disk + clock-skew probes,
+        // each with their own timeouts; on a busy host it can outlast the next
+        // 5-min fire.
+        if (this._slowInFlight) return;
+        this._slowInFlight = true;
+        try {
+            await this._slowTickBody();
+        } finally {
+            this._slowInFlight = false;
+        }
+    }
+
+    /** @private */
+    async _slowTickBody() {
         const cfg = await this._loadConfigSafe();
         // F13 — host clock check, runs once per slow tick (not per chain).
         const clockSkew = await this._checkClockSkew();
@@ -1056,53 +1102,119 @@ class HealthChecker {
             const cfg = await this._loadConfigSafe();
             const chain = cfg && cfg.chains && cfg.chains[chainId];
             if (!chain) return { ok: false, errCode: 'no-config' };
-            const client = adapter.rpcClient(chain);
-            const t0 = Date.now();
-            // Defensive: a future client variant or a test fake may not
-            // implement every method. Guard each call with optional access
-            // so a missing method becomes `null`, not a thrown TypeError.
-            const callOrNull = (fn) => {
-                if (typeof fn !== 'function') return Promise.resolve(null);
-                try { return Promise.resolve(fn()).catch(() => null); }
-                catch { return Promise.resolve(null); }
-            };
-            const [height, peers, nodeState] = await Promise.all([
-                callOrNull(client.getblockcount && client.getblockcount.bind(client)),
-                callOrNull(client.getconnectioncount && client.getconnectioncount.bind(client)),
-                callOrNull(client.getnodestate && client.getnodestate.bind(client)),
-            ]);
 
-            // F18 input — count inbound vs outbound from getnodestate.Neighbors.
-            // peerMaxHeight (for SyncTracker) — max of any height field peers
-            // report. Defensive: the schema may evolve; guard each access.
+            // P1 (v0.5.183) — class-aware summary (medium-tick analogue of the
+            // C19 bug). The old body hardcoded ELA Bitcoin-style verbs
+            // (getblockcount / getconnectioncount / getnodestate) on EVERY
+            // chain via the adapter's rpcClient. Those methods ONLY exist on
+            // the mainchain's EnmRpcClient. For Class B (EVM esc/eid/pg) the
+            // rpcClient is an EthRpcClient and for Class C (oracle) there is
+            // no chain RPC, so every call returned null → ok=false, height /
+            // peers / sync NEVER tracked for non-mainchain chains. That left
+            // the sparkline, ETA, and peer-stall timelines dead AND starved
+            // the medium-tick rules of real data.
+            //
+            // Fix: drive height/peers from the adapter's class-correct
+            // primaryHeight() (Bitcoin-RPC for A, eth_* for B, getspvheight
+            // for D, parent-height for C — see ChainAdapter / EvmSidechain
+            // Adapter / ArbiterAdapter / OracleAdapter). Only the mainchain
+            // (Class A) keeps the getnodestate neighbor-walk for the rich
+            // inbound/outbound peer detail F18 needs and the peerMaxHeight
+            // SyncTracker feed.
+            //
+            // Per-class population (kept in lock-step with how F3/F4/F16/F18
+            // consume the summary — each already early-returns on missing
+            // data):
+            //   A (mainchain) — height + peers from primaryHeight, PLUS the
+            //                    neighbor-walk (inbound/outbound/peerMaxHeight).
+            //   B (EVM)       — height + peers from primaryHeight. These chains
+            //                    legitimately HAVE peers + an advancing height,
+            //                    so F3/F4/F16 may fire on a real stall. F18
+            //                    stays quiet because inbound/outboundCount are
+            //                    left undefined (no getnodestate on geth).
+            //   C/D (oracle / arbiter) — PID-only: ok:true with NO height/peers
+            //                    so no height-stall or peer rule can fire (the
+            //                    arbiter's spv height + oracle's parent height
+            //                    are read-only hero telemetry, not a sync gate).
+            const t0 = Date.now();
+            const chainClass = (adapter && adapter.chainClass) || null;
+
+            // primaryHeight is the class-correct, never-throwing probe shared
+            // with the route layer. {height, peers, networkHeight, synced}.
+            let primary = null;
+            try {
+                if (typeof adapter.primaryHeight === 'function') {
+                    primary = await adapter.primaryHeight(chain);
+                }
+            } catch (_) { /* never throws by contract; belt-and-braces */ }
+
+            // Class C/D — process is alive (medium tick only runs on alive
+            // chains), but there is no per-chain sync to track. Report ok:true
+            // with no height/peers so the height-stall (F4) and peer (F3/F16/
+            // F18) rules all early-return.
+            if (chainClass === 'C' || chainClass === 'D') {
+                return { ok: true, latencyMs: Date.now() - t0 };
+            }
+
+            const height = primary && typeof primary.height === 'number'
+                ? primary.height : undefined;
+            const peers = primary && typeof primary.peers === 'number'
+                ? primary.peers : undefined;
+
+            // Mainchain (Class A) only — the getnodestate neighbor-walk powers
+            // F18's inbound/outbound split and the SyncTracker peerMaxHeight
+            // network-best feed. EVM/oracle/arbiter clients don't serve it.
             let inboundCount;
             let outboundCount;
             let peerMaxHeight;
-            const neighbors = nodeState && Array.isArray(nodeState.neighbors)
-                ? nodeState.neighbors
-                : (nodeState && Array.isArray(nodeState.Neighbors) ? nodeState.Neighbors : null);
-            if (Array.isArray(neighbors)) {
-                inboundCount = 0;
-                outboundCount = 0;
-                for (const n of neighbors) {
-                    if (!n || typeof n !== 'object') continue;
-                    const isInbound = (n.Inbound === true || n.inbound === true);
-                    if (isInbound) inboundCount += 1;
-                    else outboundCount += 1;
-                    const h = typeof n.height === 'number' ? n.height
-                            : typeof n.Height === 'number' ? n.Height
-                            : typeof n.lastHeight === 'number' ? n.lastHeight
-                            : null;
-                    if (h != null && (peerMaxHeight == null || h > peerMaxHeight)) {
-                        peerMaxHeight = h;
+            if (chainClass === 'A') {
+                const client = adapter.rpcClient(chain);
+                // Defensive: a future client variant or a test fake may not
+                // implement getnodestate. A missing method becomes `null`,
+                // not a thrown TypeError.
+                const callOrNull = (fn) => {
+                    if (typeof fn !== 'function') return Promise.resolve(null);
+                    try { return Promise.resolve(fn()).catch(() => null); }
+                    catch { return Promise.resolve(null); }
+                };
+                const nodeState = await callOrNull(
+                    client.getnodestate && client.getnodestate.bind(client),
+                );
+
+                // F18 input — count inbound vs outbound from
+                // getnodestate.Neighbors. peerMaxHeight (for SyncTracker) — max
+                // of any height field peers report. Defensive: the schema may
+                // evolve; guard each access.
+                const neighbors = nodeState && Array.isArray(nodeState.neighbors)
+                    ? nodeState.neighbors
+                    : (nodeState && Array.isArray(nodeState.Neighbors) ? nodeState.Neighbors : null);
+                if (Array.isArray(neighbors)) {
+                    inboundCount = 0;
+                    outboundCount = 0;
+                    for (const n of neighbors) {
+                        if (!n || typeof n !== 'object') continue;
+                        const isInbound = (n.Inbound === true || n.inbound === true);
+                        if (isInbound) inboundCount += 1;
+                        else outboundCount += 1;
+                        const h = typeof n.height === 'number' ? n.height
+                                : typeof n.Height === 'number' ? n.Height
+                                : typeof n.lastHeight === 'number' ? n.lastHeight
+                                : null;
+                        if (h != null && (peerMaxHeight == null || h > peerMaxHeight)) {
+                            peerMaxHeight = h;
+                        }
                     }
                 }
             }
 
+            // P1 (v0.5.183) — ok semantics: a Class A/B chain is ok when it
+            // reports both a numeric height and peer count from its class-
+            // correct probe (matches the old getblockcount+getconnectioncount
+            // contract for A, and is the right signal for B).
             return {
                 ok: typeof height === 'number' && typeof peers === 'number',
-                height: typeof height === 'number' ? height : undefined,
-                peers: typeof peers === 'number' ? peers : undefined,
+                height,
+                peers,
                 inboundCount,
                 outboundCount,
                 peerMaxHeight,

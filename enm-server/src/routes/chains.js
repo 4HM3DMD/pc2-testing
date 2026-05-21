@@ -34,6 +34,13 @@ const LogCompactor = require('../services/LogCompactor');
 const ChainState = require('../services/ChainState');
 const EnmBposService = require('../services/EnmBposService');
 const { decrypt } = require('../services/EnmEncryption');
+// P1 (v0.5.183) — per-chain mutex for destructive maintenance ops (TOCTOU fix).
+const { withChainLock } = require('../services/withChainLock');
+
+// P1 (v0.5.183) — in-flight guard for BPoS activate. Two concurrent activate
+// POSTs for the same chain share temp files in the chain dir; a Set of chainIds
+// currently running an activate lets the second caller fail fast with 409.
+const activateInFlight = new Set();
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
@@ -1235,25 +1242,39 @@ function build(extensionHandle) {
         try {
             const adapter = adapterOr404(req, res, extensionHandle);
             if (!adapter) return undefined;
-            // Gate: require chain to be stopped before re-downloading the
-            // binary. Replacing a binary while ela has it open is unsafe
-            // (file descriptor caching, partial reads, signed-section
-            // mismatches) — the operator's flow should be Stop → Update
-            // → Start. Front end can still bypass by stopping first.
-            const status = ChainRegistry.getProcessService().statusSync(adapter.chainId);
-            if (status && status.alive) {
+            // P1 (v0.5.183) — hold the per-chain lock across the alive-check +
+            // binary swap. Without it, a concurrent /start or a HealthChecker
+            // auto-start between statusSync() and downloader.start() could open
+            // the binary while we replace it on disk (TOCTOU → corrupt swap).
+            // This handler does not call adapter.start/stop/restart, so the
+            // non-reentrant lock cannot deadlock.
+            const update = await withChainLock(adapter.chainId, async () => {
+                // Gate: require chain to be stopped before re-downloading the
+                // binary. Replacing a binary while ela has it open is unsafe
+                // (file descriptor caching, partial reads, signed-section
+                // mismatches) — the operator's flow should be Stop → Update
+                // → Start. Front end can still bypass by stopping first.
+                const status = ChainRegistry.getProcessService().statusSync(adapter.chainId);
+                if (status && status.alive) {
+                    return { conflict: true };
+                }
+                const downloader = ChainRegistry.getBinaryDownloader();
+                if (!downloader) {
+                    return { unavailable: true };
+                }
+                return { result: await downloader.start(adapter.chainId) };
+            });
+            if (update.conflict) {
                 return res.status(409).json(errorBody(
                     'Stop the chain before updating the binary. Click Stop on the chain card, wait for the badge to change to "Stopped", then run Update again.',
                 ));
             }
-            const downloader = ChainRegistry.getBinaryDownloader();
-            if (!downloader) {
+            if (update.unavailable) {
                 return res.status(503).json(errorBody('Binary downloader is not available.'));
             }
-            const result = await downloader.start(adapter.chainId);
             return res.json(successBody({
-                alreadyRunning: result.alreadyRunning,
-                status: result.status,
+                alreadyRunning: update.result.alreadyRunning,
+                status: update.result.status,
             }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} POST /chains/${req.params.chainId}/update: ${err.message}`);
@@ -1287,22 +1308,36 @@ function build(extensionHandle) {
         try {
             const adapter = adapterOr404(req, res, extensionHandle);
             if (!adapter) return undefined;
-            // Same gate as /update — applying a snapshot while ela holds the
-            // data dir open would corrupt the chain. Operator stops first.
-            const status = ChainRegistry.getProcessService().statusSync(adapter.chainId);
-            if (status && status.alive) {
+            // P1 (v0.5.183) — hold the per-chain lock across the alive-check +
+            // snapshot apply. Without it, a concurrent /start or a HealthChecker
+            // auto-start between statusSync() and downloader.start() could open
+            // the data dir while we overwrite it (TOCTOU → corrupt data dir).
+            // This handler does not call adapter.start/stop/restart, so the
+            // non-reentrant lock cannot deadlock.
+            const boot = await withChainLock(adapter.chainId, async () => {
+                // Same gate as /update — applying a snapshot while ela holds the
+                // data dir open would corrupt the chain. Operator stops first.
+                const status = ChainRegistry.getProcessService().statusSync(adapter.chainId);
+                if (status && status.alive) {
+                    return { conflict: true };
+                }
+                const downloader = ChainRegistry.getBootstrapDownloader();
+                if (!downloader) {
+                    return { unavailable: true };
+                }
+                return { result: await downloader.start(adapter.chainId) };
+            });
+            if (boot.conflict) {
                 return res.status(409).json(errorBody(
                     'Stop the chain before bootstrapping. Click Stop on the chain card, wait for the badge to change to "Stopped", then run Bootstrap again.',
                 ));
             }
-            const downloader = ChainRegistry.getBootstrapDownloader();
-            if (!downloader) {
+            if (boot.unavailable) {
                 return res.status(503).json(errorBody('Bootstrap downloader is not available.'));
             }
-            const result = await downloader.start(adapter.chainId);
             return res.json(successBody({
-                alreadyRunning: result.alreadyRunning,
-                status: result.status,
+                alreadyRunning: boot.result.alreadyRunning,
+                status: boot.result.status,
             }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} POST /chains/${req.params.chainId}/bootstrap: ${err.message}`);
@@ -1366,6 +1401,16 @@ function build(extensionHandle) {
                     + `'${chainId}' is class ${adapter.chainClass || 'unknown'} — operation not implemented.`,
                 ));
             }
+            // P1 (v0.5.183) — in-flight guard. Concurrent activates for the same
+            // chain race on shared temp files in the chain dir; reject the second
+            // with 409. Released in the finally below.
+            if (activateInFlight.has(chainId)) {
+                return res.status(409).json(errorBody(
+                    'A reactivation is already in progress for this chain.',
+                ));
+            }
+            activateInFlight.add(chainId);
+            try {
             const snapshot = await ChainState.snapshot(chainId);
             if (!snapshot.cliPath) {
                 return res.status(400).json(errorBody(
@@ -1440,6 +1485,27 @@ function build(extensionHandle) {
                     `Cannot verify sync status (RPC error: ${rpcErr.message}). Refusing to submit reactivation while chain state is unclear.`,
                 ));
             }
+            // P1 (v0.5.183) — producer-state gate. Reactivation only applies to
+            // an Inactive producer (dpos/state/state.go state machine). Mirror
+            // EnmKeystoreIdentity.getProducerState / HealthRules F12: read the
+            // producer record via getproducerinfo(ourPubkey) and inspect .state.
+            // Only hard-block when state is determinable AND not 'Inactive'; an
+            // RPC error / null / missing state leaves it indeterminate, so we
+            // let the operator-initiated activate proceed rather than false-block.
+            try {
+                const rpc = adapter.rpcClient(chainCfg);
+                if (rpc && typeof rpc.getproducerinfo === 'function' && snapshot.publicKey) {
+                    const p = await rpc.getproducerinfo(snapshot.publicKey).catch(() => null);
+                    const state = p && p.state ? p.state : null;
+                    if (state && state !== 'Inactive') {
+                        return res.status(409).json(errorBody(
+                            `Producer is not Inactive (state=${state}) — reactivation only applies to an inactive producer.`,
+                        ));
+                    }
+                }
+            } catch (_) {
+                // Indeterminate producer state — allow the activate to proceed.
+            }
             const envelope = chainCfg && chainCfg.dpos && chainCfg.dpos.keystorePasswordEncrypted;
             if (!envelope) {
                 return res.status(400).json(errorBody(
@@ -1478,6 +1544,11 @@ function build(extensionHandle) {
                 buildOutput: result.buildOutput,
                 sendOutput: result.sendOutput,
             }));
+            } finally {
+                // P1 (v0.5.183) — always release the in-flight guard, even on
+                // an early return or thrown error inside the body above.
+                activateInFlight.delete(chainId);
+            }
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} POST /chains/${req.params.chainId}/bpos/activate: ${err.message}`);
             return res.status(500).json(errorBody('Producer reactivation failed. Try running the activate command via ela-cli manually.'));
@@ -1895,6 +1966,13 @@ async function runChainRollback(adapter, extensionHandle, opts) {
             + 'For most "chain stuck" cases, use chain-resync + bootstrap instead.',
         );
     }
+    // P1 (v0.5.183) — hold the per-chain lock across the alive-check + the
+    // ela-cli rollback that rewrites the data dir. Without it, a concurrent
+    // /start or a HealthChecker auto-start between proc.statusSync() and the
+    // rollback could bring ela up against the data dir mid-rewrite (TOCTOU →
+    // corrupt FFLDB/UTXO state). This helper does not call
+    // adapter.start/stop/restart, so the non-reentrant lock cannot deadlock.
+    return withChainLock(adapter.chainId, async () => {
     const proc = ChainRegistry.getProcessService();
     if (proc.statusSync(adapter.chainId).alive) {
         throw new Error('Chain is alive — stop the chain before rollback.');
@@ -1967,6 +2045,7 @@ async function runChainRollback(adapter, extensionHandle, opts) {
         height,
         backupPath,
     };
+    }); // P1 (v0.5.183) — end withChainLock
 }
 
 /**

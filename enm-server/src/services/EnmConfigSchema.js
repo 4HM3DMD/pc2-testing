@@ -41,6 +41,13 @@ const rpcSchema = Joi.object({
     whiteIPList: Joi.array().items(
         Joi.alternatives().try(
             Joi.string().ip({ version: ['ipv4'], cidr: 'optional' }),
+            // P1 (v0.5.183) — accept IPv6+CIDR too. The request schema
+            // (EnmRequestSchemas.mainchainBody.whiteIPList) already accepts
+            // IPv6, so without this the config schema REJECTED an IPv6 entry
+            // the form had accepted → ConfigStore.save() threw → PUT
+            // /config/mainchain returned 500. Both layers now accept identical
+            // input.
+            Joi.string().ip({ version: ['ipv6'], cidr: 'optional' }),
             Joi.valid('127.0.0.1'),
         ),
     ).default(['127.0.0.1']),

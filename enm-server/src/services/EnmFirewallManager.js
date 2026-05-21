@@ -117,12 +117,44 @@ function execCapture(cmd, args, timeoutMs) {
 }
 
 /**
+ * P1 (v0.5.183) — when UFW isn't usable (not installed / inactive / no perms),
+ * best-effort probe for ANOTHER active host firewall. We don't manage these
+ * (firewalld/nftables/raw iptables stay out of scope per this module's header),
+ * but knowing one is active lets the CALLER surface an actionable start-time
+ * warning ("a non-UFW firewall is active — open ports 20338/20339 yourself")
+ * instead of silently skipping and leaving the operator at 0 inbound peers.
+ *
+ * Detection is intentionally conservative + never throws:
+ *   - firewalld: `firewall-cmd --state` exits 0 and prints "running".
+ *   - iptables:  `iptables -L INPUT -n` shows a default-DROP/REJECT INPUT policy
+ *     (a default-ACCEPT INPUT chain isn't blocking inbound P2P, so we don't warn).
+ *
+ * @returns {Promise<{active: boolean, alt: 'firewalld'|'iptables'|null}>}
+ */
+async function _detectOtherFirewall() {
+    // firewalld — authoritative + cheap when present.
+    const fw = await execCapture('firewall-cmd', ['--state']);
+    if (fw.code === 0 && /running/i.test(`${fw.stdout} ${fw.stderr}`)) {
+        return { active: true, alt: 'firewalld' };
+    }
+    // Raw iptables — only treat as "active firewall" when the INPUT chain
+    // defaults to DROP/REJECT (i.e. it actually blocks unmatched inbound).
+    const ipt = await execCapture('iptables', ['-L', 'INPUT', '-n']);
+    if (ipt.code === 0 && /^Chain INPUT \(policy (DROP|REJECT)\)/im.test(ipt.stdout || '')) {
+        return { active: true, alt: 'iptables' };
+    }
+    return { active: false, alt: null };
+}
+
+/**
  * Detect UFW state on this host.
  *
  * @returns {Promise<{
  *   tool: 'ufw'|null,
  *   active: boolean,
  *   allowedTcp: Set<number>,  // ports with an `ALLOW IN  ... tcp` rule
+ *   otherFirewallActive?: boolean,  // P1 (v0.5.183) — a non-UFW firewall is up
+ *   alt?: 'firewalld'|'iptables',   // which one, when otherFirewallActive
  *   raw?: string
  * }>}
  */
@@ -134,12 +166,24 @@ async function detect() {
     // exit 0 only when UFW is installed AND the user has perms to read state.
     // exit 1 / EACCES → we can't determine. Treat as "not eligible".
     if (probe.code !== 0) {
-        return { tool: null, active: false, allowedTcp: new Set(), allowedUdp: new Set(), raw: probe.stderr };
+        // P1 (v0.5.183) — UFW unusable; see if a different firewall is blocking.
+        const other = await _detectOtherFirewall();
+        return {
+            tool: null, active: false, allowedTcp: new Set(), allowedUdp: new Set(),
+            otherFirewallActive: other.active, alt: other.alt || undefined,
+            raw: probe.stderr,
+        };
     }
     const out = probe.stdout || '';
     const active = /Status:\s*active/i.test(out);
     if (!active) {
-        return { tool: 'ufw', active: false, allowedTcp: new Set(), allowedUdp: new Set(), raw: out };
+        // P1 (v0.5.183) — UFW present but off; another firewall may still be on.
+        const other = await _detectOtherFirewall();
+        return {
+            tool: 'ufw', active: false, allowedTcp: new Set(), allowedUdp: new Set(),
+            otherFirewallActive: other.active, alt: other.alt || undefined,
+            raw: out,
+        };
     }
     // Parse allowed TCP ports. Match lines like:
     //   22/tcp                     ALLOW IN    Anywhere

@@ -214,6 +214,44 @@ function build(extensionHandle) {
             if (!chain) {
                 return res.status(409).json(errorBody('Main chain not configured.'));
             }
+            chain.rpc = chain.rpc || {};
+            // P1 (v0.5.183) — reject world-open whitelist entries. The form
+            // accepts any IPv4/IPv6+CIDR, but 0.0.0.0/0 and ::/0 mean "every
+            // host on the internet can hit the RPC" — that's never what an
+            // operator intends and silently opens the node to the world. We
+            // gate it here (not in the schema) so the operator gets a clear,
+            // actionable 400 instead of a generic "invalid" rejection.
+            if (Array.isArray(body.whiteIPList)) {
+                const BROAD_CIDRS = ['0.0.0.0/0', '::/0'];
+                const broad = body.whiteIPList.filter(
+                    (entry) => typeof entry === 'string'
+                        && BROAD_CIDRS.includes(entry.trim()),
+                );
+                if (broad.length) {
+                    return res.status(400).json(errorBody(
+                        `Whitelist entry "${broad[0]}" is too broad — it allows `
+                        + 'every host on the internet. List the specific IPs or '
+                        + 'subnets that need RPC access instead.',
+                    ));
+                }
+            }
+            // P1 (v0.5.183) — refuse to open external RPC without a password.
+            // Enabling RPC (rpcEnabled=true) while no password has ever been
+            // set would expose an unauthenticated RPC endpoint to whatever the
+            // whitelist allows. Require a password first — either already on
+            // disk (chain.rpc.passwordEncrypted) or supplied in this same
+            // request (body.rpcPassword, encrypted below).
+            if (body.rpcEnabled === true) {
+                const hasStoredPassword = typeof chain.rpc.passwordEncrypted === 'string'
+                    && chain.rpc.passwordEncrypted.length > 0;
+                const suppliesPassword = typeof body.rpcPassword === 'string'
+                    && body.rpcPassword.length > 0;
+                if (!hasStoredPassword && !suppliesPassword) {
+                    return res.status(409).json(errorBody(
+                        'Set an RPC password before enabling external RPC access.',
+                    ));
+                }
+            }
             // Joi validated types already — these checks are now just
             // "did the operator send the field?" presence guards.
             if (body.logLevel != null)     { chain.logLevel = body.logLevel; }
@@ -234,6 +272,15 @@ function build(extensionHandle) {
             if (body.rpcEnabled != null) {
                 chain.rpc.enabled = body.rpcEnabled;
             }
+            // P1 (v0.5.183) — a running ela only re-reads RpcConfiguration
+            // (RpcServiceLevel / WhiteIPList) on (re)start, so toggling RPC or
+            // editing the whitelist here does NOT take effect until the chain
+            // restarts. We do NOT auto-restart (that would interrupt sync /
+            // signing); we just signal it so the UI can surface a "Restart
+            // required" prompt. Computed before save so it reflects exactly
+            // what the operator changed in this request.
+            const rpcSettingChanged = body.rpcEnabled != null
+                || body.whiteIPList != null;
             if (body.rpcUser) {
                 chain.rpc.user = body.rpcUser;
             }
@@ -304,7 +351,12 @@ function build(extensionHandle) {
                 }
             }
 
-            return res.json(successBody({ ok: true }));
+            // P1 (v0.5.183) — surface restart requirement for RPC-setting
+            // changes (rpcEnabled / whiteIPList). Omitted entirely otherwise
+            // so unrelated saves (logLevel etc.) don't nag.
+            return res.json(successBody(
+                rpcSettingChanged ? { ok: true, restartRequired: true } : { ok: true },
+            ));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} PUT /config/mainchain: ${err.message}`);
             return res.status(500).json(errorBody('Could not save Main chain settings. Try again.'));

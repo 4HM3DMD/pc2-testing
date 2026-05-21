@@ -58,6 +58,16 @@ class SelfHealingEngine {
         this.ownerWallet = deps.ownerWallet || null;
         /** @type {Map<string, { count: number, firstAt: number }>} */
         this._restartBudget = new Map();
+        // P1 (v0.5.183) — the restart budget is now PERSISTED in the
+        // enm_restart_budget table so it survives ENM restarts. The
+        // in-memory Map above is kept as a write-through cache for speed;
+        // it's rehydrated from the table on first budget access via
+        // _ensureBudgetHydrated(). Before this, the budget was in-memory
+        // only, so a deep-broken chain on a flapping host got a fresh
+        // 3-restarts/10min window on every ENM bounce — defeating the
+        // escalation cap that exists to stop thundering-herd restart loops.
+        /** @type {Promise<void>|null} memoized one-time table-create + rehydrate */
+        this._budgetHydration = null;
         // beta.3.57 — per-(chainId,ruleId) "last proposal" timestamp.
         // Defense-in-depth: even if the DB-level dedupe in
         // _applyOwnerConfirms fails for any reason (race with
@@ -368,7 +378,7 @@ class SelfHealingEngine {
                 // reset) so a transient fault self-recovers. The proposal stays
                 // open for visibility; a genuinely-broken chain just keeps failing
                 // + re-escalating on this slow cadence instead of staying dead.
-                if (!this._maybeRetryFromEscalation(chainId, det.ruleId, pendingProp)) {
+                if (!(await this._maybeRetryFromEscalation(chainId, det.ruleId, pendingProp))) {
                     return; // still within the backoff window — defer to operator
                 }
                 // past backoff → fall through to the restart below (the budget was
@@ -377,7 +387,7 @@ class SelfHealingEngine {
                 // Note: F1's detectF1 in HealthRules.js already gates on
                 // snap.processExit.manualStop, so a manually-stopped chain
                 // never reaches this path.
-                const allowed = this._consumeRestartBudget(chainId);
+                const allowed = await this._consumeRestartBudget(chainId);
                 if (!allowed) {
                     // Escalate: convert this AUTOMATED-SAFE into an OWNER-CONFIRMS.
                     this.extensionHandle.log.warn(
@@ -499,7 +509,7 @@ class SelfHealingEngine {
      * subsequent ones off the last retry we attempted.
      * @private
      */
-    _maybeRetryFromEscalation(chainId, ruleId, pendingProp) {
+    async _maybeRetryFromEscalation(chainId, ruleId, pendingProp) {
         const ESCALATION_RETRY_BACKOFF_MS = 30 * 60_000; // 30 min
         const key = `${chainId}:${ruleId}`;
         const lastRetry = this._lastEscalationRetryAt.get(key);
@@ -510,7 +520,7 @@ class SelfHealingEngine {
             return false;
         }
         this._lastEscalationRetryAt.set(key, Date.now());
-        this._resetRestartBudget(chainId);
+        await this._resetRestartBudget(chainId);
         this.extensionHandle.log.warn(
             `${ENM_LOG_PREFIX} ${chainId}/${ruleId} escalated + idle ≥`
             + `${Math.round(ESCALATION_RETRY_BACKOFF_MS / 60_000)}min — attempting one `
@@ -519,9 +529,85 @@ class SelfHealingEngine {
         return true;
     }
 
-    /** @private — clear a chain's restart budget so the next consume starts fresh. */
-    _resetRestartBudget(chainId) {
+    /**
+     * P1 (v0.5.183) — ensure the enm_restart_budget table exists and the
+     * in-memory cache has been rehydrated from it. Memoized so the
+     * CREATE + SELECT runs at most once per engine lifetime; subsequent
+     * budget operations resolve the cached promise immediately.
+     *
+     * getDb() returns the { write, read } wrapper (async). We rehydrate so
+     * a chain's count carries across the ENM bounce that just reconstructed
+     * this engine. Best-effort: a DB hiccup here must not block healing, so
+     * on failure we proceed with whatever the in-memory Map holds (the
+     * pre-3.183 behaviour) rather than throwing.
+     * @private
+     */
+    _ensureBudgetHydrated() {
+        if (this._budgetHydration) {
+            return this._budgetHydration;
+        }
+        this._budgetHydration = (async () => {
+            const db = this.getDb();
+            await ProposalStore.initSchema(db);
+            const rows = await db.read(
+                'SELECT chain_id, count, first_at FROM enm_restart_budget',
+                [],
+            );
+            if (Array.isArray(rows)) {
+                for (const r of rows) {
+                    if (r && r.chain_id != null) {
+                        this._restartBudget.set(String(r.chain_id), {
+                            count: Number(r.count) || 0,
+                            firstAt: Number(r.first_at) || 0,
+                        });
+                    }
+                }
+            }
+        })().catch((err) => {
+            this.extensionHandle.log.warn(
+                `${ENM_LOG_PREFIX} restart-budget hydrate failed (non-fatal): ${err.message}`,
+            );
+        });
+        return this._budgetHydration;
+    }
+
+    /**
+     * P1 (v0.5.183) — write-through a chain's budget row to the persisted
+     * table. Best-effort: a failed persist falls back to in-memory-only
+     * (no worse than the pre-3.183 behaviour). @private
+     */
+    async _persistBudget(chainId, entry) {
+        try {
+            const db = this.getDb();
+            await db.write(
+                `INSERT INTO enm_restart_budget (chain_id, count, first_at)
+                 VALUES (?, ?, ?)
+                 ON CONFLICT(chain_id) DO UPDATE SET count = excluded.count, first_at = excluded.first_at`,
+                [String(chainId), entry.count, entry.firstAt],
+            );
+        } catch (err) {
+            this.extensionHandle.log.warn(
+                `${ENM_LOG_PREFIX} ${chainId} restart-budget persist failed (non-fatal): ${err.message}`,
+            );
+        }
+    }
+
+    /**
+     * P1 (v0.5.183) — clear a chain's restart budget so the next consume
+     * starts fresh. Now also deletes the persisted row (write-through).
+     * @private
+     */
+    async _resetRestartBudget(chainId) {
+        await this._ensureBudgetHydrated();
         this._restartBudget.delete(chainId);
+        try {
+            const db = this.getDb();
+            await db.write('DELETE FROM enm_restart_budget WHERE chain_id = ?', [String(chainId)]);
+        } catch (err) {
+            this.extensionHandle.log.warn(
+                `${ENM_LOG_PREFIX} ${chainId} restart-budget reset persist failed (non-fatal): ${err.message}`,
+            );
+        }
     }
 
     // beta.3.78 — _isStateRestoreAction + _executeStateRestore removed
@@ -529,8 +615,15 @@ class SelfHealingEngine {
     // driven: F22 alerts with manual steps (stop chain, delete corrupt
     // cp_dpos checkpoint, restart, let ela rebuild from blocks).
 
-    /** @private */
-    _consumeRestartBudget(chainId) {
+    /**
+     * @private
+     * P1 (v0.5.183) — async because the budget is now persisted (write-through
+     * to enm_restart_budget) so it survives ENM restarts. Window math
+     * (PROCESS_RESTART_BUDGET_WINDOW_MS, PROCESS_MAX_RESTART_ATTEMPTS) is
+     * unchanged.
+     */
+    async _consumeRestartBudget(chainId) {
+        await this._ensureBudgetHydrated();
         // Rolling window per Rev 9 plan: at most PROCESS_MAX_RESTART_ATTEMPTS
         // automated restarts per PROCESS_RESTART_BUDGET_WINDOW_MS. Beyond
         // that, the engine escalates to OWNER-CONFIRMS so the operator can
@@ -543,13 +636,16 @@ class SelfHealingEngine {
         // count as still hot, leaving the operator stuck in budget-
         // exhausted state until the next restart bumped it past).
         if (!cur || (now - cur.firstAt) >= PROCESS_RESTART_BUDGET_WINDOW_MS) {
-            this._restartBudget.set(chainId, { count: 1, firstAt: now });
+            const entry = { count: 1, firstAt: now };
+            this._restartBudget.set(chainId, entry);
+            await this._persistBudget(chainId, entry);
             return true;
         }
         if (cur.count >= PROCESS_MAX_RESTART_ATTEMPTS) {
             return false;
         }
         cur.count += 1;
+        await this._persistBudget(chainId, cur);
         return true;
     }
 
