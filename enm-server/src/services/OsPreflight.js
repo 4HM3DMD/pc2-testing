@@ -2,15 +2,16 @@
  * Copyright (C) 2026-present Elacity
  * SPDX-License-Identifier: AGPL-3.0
  *
- * OsPreflight — Ubuntu/Debian detection.
+ * OsPreflight — host OS capability check.
  *
- * v0.1 supports Ubuntu/Debian only. We detect via /etc/os-release (the standard
- * cross-distro identification file) and refuse other OSes during setup.
+ * v0.5.181 (P0-10): supports ANY glibc Linux. The only hard block is musl libc
+ * (Alpine), because the Elastos chain binaries + the Node runtime tarball are
+ * glibc-built. Non-Debian glibc distros (RHEL/Fedora/Rocky/Alma/Amazon/Arch/…)
+ * are allowed with a non-blocking `warning` (less-tested path). The previous
+ * Debian-family-only gate false-blocked most capable hosts.
  *
- * Reads ID and ID_LIKE per https://www.freedesktop.org/software/systemd/man/os-release.html
- *
- * Returns a structured result so the setup wizard can surface platform-specific
- * guidance ("we detected Fedora; v0.1 is Ubuntu/Debian only — see roadmap").
+ * Reads ID and ID_LIKE from /etc/os-release per
+ * https://www.freedesktop.org/software/systemd/man/os-release.html
  */
 
 'use strict';
@@ -43,41 +44,68 @@ function check() {
         return {
             ok: false,
             platform: mapPlatform(platform),
-            reason: `Elastos Node Manager v0.1 supports Ubuntu/Debian only. Detected ${platform}. macOS/Windows support is planned for v0.2.`,
+            reason: `Elastos Node Manager runs on Linux only. Detected ${platform}.`,
         };
     }
 
     const release = readOsRelease();
-    if (!release) {
+    const distroId = (release && release.ID || '').toLowerCase().trim();
+    const distroLike = (release && release.ID_LIKE || '').toLowerCase().trim();
+    const version = release && release.VERSION_ID;
+
+    // P0-10 (v0.5.181) — the ONLY hard OS incompatibility is the C library: the
+    // Elastos chain binaries AND the Node runtime tarball are glibc-built and will
+    // not run on musl (Alpine). Every other glibc distro (RHEL/Fedora/Rocky/Alma/
+    // Amazon Linux/Arch/openSUSE/…) runs the same binaries fine. The old
+    // Debian-family-only gate hard-blocked the majority of "hundreds of operators"
+    // on perfectly capable hosts. Now we block only musl and let any glibc Linux
+    // proceed (with a non-blocking warning for non-Debian, less-tested distros).
+    if (_isMuslSystem(distroId, distroLike)) {
         return {
             ok: false,
             platform: 'linux',
-            reason: 'Could not read /etc/os-release. Cannot verify this is Ubuntu/Debian.',
+            distroId,
+            distroLike,
+            version,
+            reason: 'This host uses musl libc (Alpine). The Elastos chain binaries and '
+                + 'the Node runtime are glibc-built and will not run here. Use a glibc '
+                + 'distro (Ubuntu, Debian, RHEL, Fedora, Rocky, Alma, etc.).',
         };
     }
 
-    const distroId = (release.ID || '').toLowerCase().trim();
-    const distroLike = (release.ID_LIKE || '').toLowerCase().trim();
-    const version = release.VERSION_ID;
-
-    if (SUPPORTED_DISTROS.includes(distroId)) {
-        return { ok: true, platform: 'linux', distroId, distroLike, version };
+    const debianFamily = SUPPORTED_DISTROS.includes(distroId)
+        || (distroLike && SUPPORTED_LIKE.some((s) => distroLike.includes(s)));
+    const result = { ok: true, platform: 'linux', distroId, distroLike, version };
+    if (!release) {
+        result.warning = 'Could not read /etc/os-release; proceeding on the assumption this '
+            + 'is a glibc Linux.';
+    } else if (!debianFamily) {
+        result.warning = `Detected ${distroId || 'an unknown distro'} (not Debian-family). `
+            + 'ENM is most tested on Ubuntu/Debian but runs on any glibc Linux — proceeding.';
     }
+    return result;
+}
 
-    // Some operators run derivatives (Linux Mint, Pop!_OS, Kali) that ID_LIKE=debian.
-    // Allow them — they share the same APT/glibc/systemd assumptions.
-    if (distroLike && SUPPORTED_LIKE.some((s) => distroLike.includes(s))) {
-        return { ok: true, platform: 'linux', distroId, distroLike, version };
+/**
+ * Detect a musl-libc system (Alpine + variants). musl is the one glibc-binary
+ * incompatibility we must hard-block. Best-effort + never throws.
+ *
+ * @param {string} distroId
+ * @param {string} distroLike
+ * @returns {boolean}
+ */
+function _isMuslSystem(distroId, distroLike) {
+    if (distroId === 'alpine' || (distroLike && distroLike.includes('alpine'))) {
+        return true;
     }
-
-    return {
-        ok: false,
-        platform: 'linux',
-        distroId,
-        distroLike,
-        version,
-        reason: `Elastos Node Manager v0.1 supports Ubuntu/Debian only. Detected ${distroId || 'unknown'}.`,
-    };
+    try {
+        if (fs.existsSync('/etc/alpine-release')) { return true; }
+    } catch { /* ignore */ }
+    // The musl dynamic loader lives at /lib/ld-musl-<arch>.so.1 on musl systems.
+    try {
+        if (fs.readdirSync('/lib').some((f) => f.startsWith('ld-musl-'))) { return true; }
+    } catch { /* /lib unreadable — assume glibc */ }
+    return false;
 }
 
 /**

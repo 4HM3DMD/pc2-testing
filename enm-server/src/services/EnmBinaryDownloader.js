@@ -76,12 +76,16 @@ const CHAINS = Object.freeze({
         fallbackVersion: 'v1.2.4',
     },
     // beta.4.02 (Wave M3.8) — PG entry added. PG is closed-source per
-    // plan §11 risk #2; the URL slug follows the elastos-* convention
-    // even though releases are pinned via the M5.1 operator-supplied
-    // SHA256 manifest (we don't trust GitHub Releases auto-resolution
-    // alone for PG; verifyChecksum will reject any mismatch). Until
-    // M5.1 ships the manifest verification, this entry is reachable
-    // only by an explicit POST /setup/install/pg.
+    // plan §11 risk #2; the URL slug follows the elastos-* convention.
+    // P0-13 (v0.5.181) CORRECTION: an earlier comment here claimed
+    // "verifyChecksum will reject any mismatch" — that method DOES NOT
+    // EXIST. PG (like every binary today) is fetched with the same
+    // TLS-only posture as the others, now hardened with a redirect
+    // host allow-list + Content-Length truncation guard (see _download)
+    // and the post-extract --version smoke test. Real SHA256-manifest
+    // verification remains a TODO (was scoped as "M5.1"); until it ships
+    // there is NO content integrity check beyond TLS + size. This entry
+    // is reachable only by an explicit POST /setup/install/pg.
     pg: {
         urlSlug: 'elastos-pg',
         binary:  'pg',
@@ -470,6 +474,14 @@ class EnmBinaryDownloader {
                             res.resume();
                             try {
                                 const u = new URL(loc, `https://${currentHost}${currentPath}`);
+                                // P0-13 — only follow redirects that stay on the
+                                // publisher's domain. A 30x to an arbitrary host is a
+                                // supply-chain hijack vector — the bytes are chmod +x'd
+                                // and executed as the chain process (root).
+                                const h = u.hostname.toLowerCase();
+                                if (!(h === 'elastos.io' || h.endsWith('.elastos.io'))) {
+                                    return reject(new Error(`refusing binary redirect to disallowed host: ${u.host}`));
+                                }
                                 return attempt(u.host, u.pathname + u.search, hops + 1);
                             } catch (e) { return reject(e); }
                         }
@@ -487,6 +499,17 @@ class EnmBinaryDownloader {
                         res.pipe(fileStream);
                         fileStream.on('finish', () => {
                             fileStream.close(() => {
+                                // P0-13 — truncation guard. A stream that finishes
+                                // "cleanly" but delivered fewer bytes than Content-Length
+                                // (proxy/CDN cutoff, short read) would otherwise be renamed
+                                // to dest and extracted/executed as if complete. Reject so
+                                // the caller re-downloads instead of running a partial binary.
+                                if (total > 0 && got !== total) {
+                                    fs.rm(tmp, { force: true }, () => reject(new Error(
+                                        `truncated download: got ${got} of ${total} bytes for ${urlPath}`,
+                                    )));
+                                    return;
+                                }
                                 // Atomic-ish: rename only after a clean close.
                                 // Any reader that was watching dest sees either
                                 // the previous version or the new one — never

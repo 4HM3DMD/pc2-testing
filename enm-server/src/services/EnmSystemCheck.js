@@ -68,7 +68,12 @@ const THRESHOLDS_STRICT = Object.freeze({
         cpuCoresMin: 8,
         ramMinGb: 42,
         ramRecommendedGb: 64,
-        diskFreeGbMin: 1024,
+        // P0-16 (v0.5.181) — was 1024 (1 TB), which false-blocked the majority of
+        // standard 500–512 GB NVMe VPS hosts a full Council actually fits on. A
+        // full Council (ela + esc/eid/pg + arbiter, with snapshot install headroom)
+        // realistically needs a few hundred GB; 400 leaves growth room without
+        // rejecting capable hosts. Per-value env override below for edge cases.
+        diskFreeGbMin: 400,
         ramRemediableExactGb: null,
     }),
     bpos: Object.freeze({
@@ -95,7 +100,44 @@ const THRESHOLDS_RELAXED = Object.freeze({
         ramRemediableExactGb: 8,
     }),
 });
-const THRESHOLDS = RELAX ? THRESHOLDS_RELAXED : THRESHOLDS_STRICT;
+const THRESHOLDS_BASE = RELAX ? THRESHOLDS_RELAXED : THRESHOLDS_STRICT;
+
+/**
+ * P0-16 (v0.5.181) — read a non-negative numeric env override, else fall back.
+ * Lets an operator tune ONE threshold for their host without a code patch and
+ * without the blunt all-or-nothing RELAX flag (the documented pain point).
+ *
+ * @param {string} name
+ * @param {number} fallback
+ * @returns {number}
+ */
+function _envNum(name, fallback) {
+    const v = process.env[name];
+    if (v === undefined || v === '') { return fallback; }
+    const n = Number(v);
+    return (Number.isFinite(n) && n >= 0) ? n : fallback;
+}
+
+// Final thresholds = base (strict or relaxed) with per-value env overrides
+// applied to the gating values (CPU / RAM-min / disk-free). Honored env vars:
+//   ENM_COUNCIL_CPU_CORES_MIN, ENM_COUNCIL_RAM_MIN_GB, ENM_COUNCIL_DISK_FREE_GB
+//   ENM_BPOS_CPU_CORES_MIN,    ENM_BPOS_RAM_MIN_GB,    ENM_BPOS_DISK_FREE_GB
+const THRESHOLDS = Object.freeze({
+    council: Object.freeze({
+        cpuCoresMin: _envNum('ENM_COUNCIL_CPU_CORES_MIN', THRESHOLDS_BASE.council.cpuCoresMin),
+        ramMinGb: _envNum('ENM_COUNCIL_RAM_MIN_GB', THRESHOLDS_BASE.council.ramMinGb),
+        ramRecommendedGb: THRESHOLDS_BASE.council.ramRecommendedGb,
+        diskFreeGbMin: _envNum('ENM_COUNCIL_DISK_FREE_GB', THRESHOLDS_BASE.council.diskFreeGbMin),
+        ramRemediableExactGb: THRESHOLDS_BASE.council.ramRemediableExactGb,
+    }),
+    bpos: Object.freeze({
+        cpuCoresMin: _envNum('ENM_BPOS_CPU_CORES_MIN', THRESHOLDS_BASE.bpos.cpuCoresMin),
+        ramMinGb: _envNum('ENM_BPOS_RAM_MIN_GB', THRESHOLDS_BASE.bpos.ramMinGb),
+        ramRecommendedGb: THRESHOLDS_BASE.bpos.ramRecommendedGb,
+        diskFreeGbMin: _envNum('ENM_BPOS_DISK_FREE_GB', THRESHOLDS_BASE.bpos.diskFreeGbMin),
+        ramRemediableExactGb: THRESHOLDS_BASE.bpos.ramRemediableExactGb,
+    }),
+});
 
 /**
  * Round bytes → whole GB. Truncate (Math.floor) so "31.9 GB" doesn't

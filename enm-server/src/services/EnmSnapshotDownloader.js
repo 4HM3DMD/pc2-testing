@@ -91,6 +91,21 @@ const PROGRESS_THROTTLE_MS = 500;
 // in case the CDN inserts more in front of us.
 const MAX_REDIRECTS = 5;
 
+// P0-11/12/13 (v0.5.181):
+// Completion sentinel — written into the chain data dir ONLY after a verified
+// extract. isSnapshotApplied() gates on this, NOT "dir is non-empty", so an
+// interrupted/partial extract is never mistaken for a finished snapshot (which
+// would boot the chain on corrupt data → silent genesis resync / crash-loop).
+const SNAPSHOT_COMPLETE_SENTINEL = '.enm-snapshot-complete';
+// Disk-footprint multiplier over the COMPRESSED size estimate: during extract the
+// tarball (compressed) and the extracted tree coexist, so peak ≈ 3-4×.
+const EXTRACT_FOOTPRINT_FACTOR = 4;
+const BYTES_PER_GB = 1024 * 1024 * 1024;
+// Bounded retries for a transient download/extract failure (network drop, 5xx).
+const MAX_DOWNLOAD_ATTEMPTS = 3;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 /**
  * Resolve the staging directory where in-flight .tgz tarballs land
  * before extraction. Sibling of _oracle-scripts/ for consistency.
@@ -99,6 +114,37 @@ const MAX_REDIRECTS = 5;
  */
 function snapshotsDir() {
     return path.join(enmDataDir(), '_snapshots');
+}
+
+/** Free space (GB) on the filesystem holding `dir`. null if undeterminable. */
+async function freeGb(dir) {
+    try {
+        const st = await fsp.statfs(dir);
+        return (Number(st.bavail) * Number(st.bsize)) / BYTES_PER_GB;
+    } catch (_) {
+        return null;
+    }
+}
+
+/**
+ * P0-13 — snapshot redirects must stay on the publisher's domain. Following a
+ * 30x Location to an arbitrary host is a supply-chain hijack vector (the bytes
+ * are run as root after extract). node-data.elastos.io's only known redirect is
+ * HTTP→HTTPS on the same host, which this still allows.
+ */
+function isAllowedSnapshotHost(urlStr) {
+    try {
+        const h = new URL(urlStr).hostname.toLowerCase();
+        return h === 'elastos.io' || h.endsWith('.elastos.io');
+    } catch (_) {
+        return false;
+    }
+}
+
+/** Heuristic: is a download/extract error worth retrying (transient network)? */
+function looksTransient(err) {
+    const m = (err && err.message ? err.message : String(err)).toLowerCase();
+    return /timeout|econnreset|econnrefused|socket hang up|enetunreach|etimedout|network|http 5\d\d/.test(m);
 }
 
 /**
@@ -117,11 +163,13 @@ function snapshotsDir() {
  * @returns {boolean}
  */
 function isSnapshotApplied(targetDataDir) {
+    // P0-11 (v0.5.181) — gate on the completion sentinel, NOT "dir is non-empty".
+    // An interrupted extract (disk full, SIGKILL, network drop) leaves a partial
+    // datadir; the old non-empty check treated that as "applied" → the chain
+    // booted on corrupt/incomplete data → silent genesis resync or crash-loop with
+    // no clear cause. The sentinel is written only after a verified-complete extract.
     try {
-        const st = fs.statSync(targetDataDir);
-        if (!st.isDirectory()) return false;
-        const entries = fs.readdirSync(targetDataDir);
-        return entries.length > 0;
+        return fs.existsSync(path.join(targetDataDir, SNAPSHOT_COMPLETE_SENTINEL));
     } catch (_) {
         return false;
     }
@@ -164,65 +212,78 @@ async function downloadAndExtract(chainId, targetDataDir, opts) {
     await fsp.mkdir(snapshotsDir(), { recursive: true, mode: 0o755 });
     await fsp.mkdir(targetDataDir, { recursive: true, mode: 0o755 });
 
-    const tarballPath = path.join(snapshotsDir(), `${chainId}-data-latest.tgz`);
-    const startedAt = Date.now();
-
-    let bytesDownloaded = 0;
-
-    try {
-        // --- Phase 1: stream .tgz to disk -----------------------------------
-        bytesDownloaded = await streamDownload(src.url, tarballPath, (got, total) => {
-            const percent = total > 0 ? Math.floor((got / total) * 100) : 0;
-            onProgress({
-                chainId,
-                phase: 'download',
-                bytesDownloaded: got,
-                totalBytes: total,
-                percent,
-            });
-        });
-
-        // --- Phase 2: extract via system tar --------------------------------
-        onProgress({
-            chainId,
-            phase: 'extract',
-            bytesDownloaded,
-            totalBytes: bytesDownloaded,
-            percent: 0,
-        });
-        await extractTarball(tarballPath, targetDataDir);
-
-        // --- Phase 3: verify extraction non-empty ---------------------------
-        const populated = fs.readdirSync(targetDataDir);
-        if (populated.length === 0) {
-            throw new Error(
-                `extraction left "${targetDataDir}" empty — upstream tarball may be malformed`,
-            );
-        }
-
-        // Drop the staging tarball — it has done its job and would
-        // chew disk space the operator needs for live chain growth.
-        await fsp.rm(tarballPath, { force: true });
-
-        return {
-            chainId,
-            targetDataDir,
-            bytesDownloaded,
-            durationMs: Date.now() - startedAt,
-        };
-    } catch (err) {
-        // Best-effort cleanup of any partial tarball + .partial
-        // sibling left by streamDownload. We deliberately do NOT
-        // wipe targetDataDir — extraction may have written a few
-        // files before failing, and the operator can inspect them.
-        await fsp.rm(tarballPath, { force: true }).catch(() => {});
-        await fsp.rm(`${tarballPath}.partial`, { force: true }).catch(() => {});
-        const wrapped = new Error(
-            `EnmSnapshotDownloader[${chainId}]: ${err && err.message ? err.message : String(err)}`,
+    // P0-12 — disk preflight. A multi-GB extract that fills the disk mid-way
+    // corrupts the datadir (and can wedge the host). Refuse up front when free
+    // space is below the estimated peak footprint (compressed + extracted).
+    const requiredGb = (src.sizeEstimateGb || 0) * EXTRACT_FOOTPRINT_FACTOR;
+    const avail = await freeGb(snapshotsDir());
+    if (avail != null && avail < requiredGb) {
+        throw new Error(
+            `not enough disk for the ${chainId} snapshot: need ~${requiredGb} GB free `
+            + `(≈${src.sizeEstimateGb} GB compressed × ${EXTRACT_FOOTPRINT_FACTOR}), have ${Math.floor(avail)} GB`,
         );
-        if (err && err.stack) wrapped.stack = err.stack;
-        throw wrapped;
     }
+
+    const tarballPath = path.join(snapshotsDir(), `${chainId}-data-latest.tgz`);
+    const sentinelPath = path.join(targetDataDir, SNAPSHOT_COMPLETE_SENTINEL);
+    const startedAt = Date.now();
+    let bytesDownloaded = 0;
+    let lastErr = null;
+
+    // P0-12 — bounded retry. A transient network drop used to fail the whole step
+    // (the snapshot path had NO retry). Now we re-download (streamDownload cleans
+    // its own .partial) up to MAX_DOWNLOAD_ATTEMPTS for transient errors.
+    for (let attempt = 1; attempt <= MAX_DOWNLOAD_ATTEMPTS; attempt += 1) {
+        try {
+            // --- Phase 1: stream .tgz to disk -------------------------------
+            bytesDownloaded = await streamDownload(src.url, tarballPath, (got, total) => {
+                const percent = total > 0 ? Math.floor((got / total) * 100) : 0;
+                onProgress({ chainId, phase: 'download', bytesDownloaded: got, totalBytes: total, percent });
+            });
+
+            // --- Phase 2: extract via system tar ----------------------------
+            onProgress({ chainId, phase: 'extract', bytesDownloaded, totalBytes: bytesDownloaded, percent: 0 });
+            await extractTarball(tarballPath, targetDataDir);
+
+            // --- Phase 3: verify extraction non-empty -----------------------
+            const populated = fs.readdirSync(targetDataDir);
+            if (populated.length === 0) {
+                throw new Error(`extraction left "${targetDataDir}" empty — upstream tarball may be malformed`);
+            }
+
+            // P0-11 — mark complete ONLY now, after a verified non-empty extract.
+            // isSnapshotApplied() keys off this sentinel, so a partial/interrupted
+            // extract is never mistaken for a finished snapshot.
+            await fsp.writeFile(
+                sentinelPath,
+                `${new Date().toISOString()} ${chainId} bytes=${bytesDownloaded}\n`,
+                { mode: 0o644 },
+            );
+            // Drop the staging tarball — it has done its job.
+            await fsp.rm(tarballPath, { force: true });
+
+            return { chainId, targetDataDir, bytesDownloaded, durationMs: Date.now() - startedAt };
+        } catch (err) {
+            lastErr = err;
+            // Clean the partial tarball before a retry or before giving up. We do
+            // NOT wipe targetDataDir; the missing sentinel already prevents a
+            // partial extract from being treated as applied, and a retry's tar
+            // overwrites it.
+            await fsp.rm(tarballPath, { force: true }).catch(() => {});
+            await fsp.rm(`${tarballPath}.partial`, { force: true }).catch(() => {});
+            if (attempt < MAX_DOWNLOAD_ATTEMPTS && looksTransient(err)) {
+                await sleep(2000 * attempt);
+                continue;
+            }
+            break;
+        }
+    }
+
+    const wrapped = new Error(
+        `EnmSnapshotDownloader[${chainId}]: ${lastErr && lastErr.message ? lastErr.message : String(lastErr)}`,
+    );
+    if (lastErr && lastErr.stack) wrapped.stack = lastErr.stack;
+    throw wrapped;
 }
 
 /**
@@ -244,6 +305,24 @@ async function downloadAll(targetDirsByChain, opts) {
     const onProgress = typeof o.onProgress === 'function' ? o.onProgress : () => {};
 
     const startedAt = Date.now();
+
+    // P0-12 — summed disk preflight. downloadAll runs the chains in PARALLEL, so
+    // their extracts share one filesystem; each individually "fitting" doesn't mean
+    // they collectively fit. Refuse up front if free space is below the sum of the
+    // selected chains' peak footprints (a mid-extract disk-full corrupts datadirs).
+    const totalRequiredGb = chainIds.reduce((sum, cid) => {
+        const s = SNAPSHOT_SOURCES[cid];
+        return sum + ((s && s.sizeEstimateGb ? s.sizeEstimateGb : 0) * EXTRACT_FOOTPRINT_FACTOR);
+    }, 0);
+    const avail = await freeGb(snapshotsDir());
+    if (avail != null && avail < totalRequiredGb) {
+        throw new Error(
+            `EnmSnapshotDownloader.downloadAll: not enough disk for ${chainIds.length} snapshot(s): `
+            + `need ~${totalRequiredGb} GB free, have ${Math.floor(avail)} GB. `
+            + 'Free space or install fewer chains at once.',
+        );
+    }
+
     const tasks = chainIds.map((cid) => {
         const target = targetDirsByChain && targetDirsByChain[cid];
         if (!target) {
@@ -309,6 +388,16 @@ function streamDownload(url, destPath, onByteProgress) {
                         } catch (e) {
                             return reject(new Error(`Bad redirect Location: ${res.headers.location}`));
                         }
+                        // P0-13 — only follow redirects that stay on the publisher's
+                        // domain. Following a 30x to an arbitrary host is a supply-chain
+                        // hijack vector (the bytes are extracted + run as root).
+                        if (!isAllowedSnapshotHost(next)) {
+                            return reject(new Error(
+                                `refusing snapshot redirect to disallowed host: ${(() => {
+                                    try { return new URL(next).host; } catch (_) { return next; }
+                                })()}`,
+                            ));
+                        }
                         return attempt(next, hops + 1);
                     }
                     if (status < 200 || status >= 300) {
@@ -336,6 +425,17 @@ function streamDownload(url, destPath, onByteProgress) {
                             // Emit a final tick at 100% so SSE consumers
                             // don't get stuck on the last throttled value.
                             try { onByteProgress(got, total || got); } catch (_) {}
+                            // P0-13 — truncation guard. A stream that finishes "cleanly"
+                            // but delivered fewer bytes than Content-Length (proxy/CDN
+                            // cutoff, short read) would otherwise be renamed to the final
+                            // path and extracted as if complete → corrupt datadir. Reject
+                            // so the bounded retry re-downloads.
+                            if (total > 0 && got !== total) {
+                                fs.rm(tmp, { force: true }, () => reject(new Error(
+                                    `truncated download: got ${got} of ${total} bytes`,
+                                )));
+                                return;
+                            }
                             fs.rename(tmp, destPath, (renameErr) => {
                                 if (renameErr) {
                                     fs.rm(tmp, { force: true }, () => reject(renameErr));
