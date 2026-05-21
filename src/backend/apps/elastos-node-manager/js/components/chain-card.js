@@ -70,17 +70,9 @@
     // strip are Class A only. Mirror of ChainAdapter.CHAIN_ID_TO_CLASS
     // (backend) so the frontend doesn't need to wait for the first /chain
     // API roundtrip to decide which sections to render.
-    var CHAIN_ID_TO_CLASS = {
-        mainchain:    'A',
-        esc:          'B',
-        eid:          'B',
-        pg:           'B',
-        'esc-oracle': 'C',
-        'eid-oracle': 'C',
-        'pg-oracle':  'C',
-        arbiter:      'D',
-        spv:          'E',
-    };
+    // P1.6 (v0.5.189) — single source of truth in utils.js (root.enmChainClass);
+    // was a verbatim duplicate of the same map in app.js + settings-tab.js.
+    var CHAIN_ID_TO_CLASS = root.enmChainClass;
 
     function ChainCard(opts) {
         if (!opts || !opts.chainId || !opts.api || !opts.notifications) {

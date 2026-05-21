@@ -603,4 +603,20 @@
     root.enmCopyToClipboard = copyToClipboard;
     root.enmCopyButton = copyButton;
     root.enmLoadScript = loadScript;
+    // v0.5.189 (P1.6) — single source of truth for the chainId → class map
+    // (A=mainchain, B=EVM sidechain, C=oracle, D=arbiter/cross-chain, E=SPV).
+    // Mirrors the backend ChainAdapter.CHAIN_ID_TO_CLASS. Was duplicated verbatim
+    // in app.js (×2), settings-tab.js and chain-card.js; consolidated here so chains
+    // are added in ONE place. utils.js loads before every consumer (index.html), so
+    // module-scope references resolve safely.
+    root.enmChainClass = Object.freeze({
+        mainchain: 'A',
+        esc: 'B', eid: 'B', pg: 'B',
+        'esc-oracle': 'C', 'eid-oracle': 'C', 'pg-oracle': 'C',
+        arbiter: 'D',
+        spv: 'E',
+    });
+    root.enmChainClassFor = function (chainId) {
+        return root.enmChainClass[chainId] || null;
+    };
 }(typeof window !== 'undefined' ? window : globalThis));

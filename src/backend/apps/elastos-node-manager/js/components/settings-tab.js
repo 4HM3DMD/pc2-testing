@@ -105,17 +105,9 @@
     // passed chainClass explicitly. Used by the constructor to route
     // _renderShell → per-class mount method without waiting for a server
     // roundtrip. No ECO entry per H3.
-    var CHAIN_ID_TO_CLASS = {
-        mainchain:    'A',
-        esc:          'B',
-        eid:          'B',
-        pg:           'B',
-        'esc-oracle': 'C',
-        'eid-oracle': 'C',
-        'pg-oracle':  'C',
-        arbiter:      'D',
-        spv:          'E',
-    };
+    // P1.6 (v0.5.189) — single source of truth in utils.js (root.enmChainClass);
+    // was a verbatim duplicate of the same map in app.js + chain-card.js.
+    var CHAIN_ID_TO_CLASS = root.enmChainClass;
 
     function SettingsTab(opts) {
         if (!opts || !opts.api || !opts.notifications) {

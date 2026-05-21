@@ -539,11 +539,7 @@
         // (PaneRouter init defaults _activeChainId to 'mainchain'
         // when nothing's stored in localStorage).
         var chainId = this._activeChainId || 'mainchain';
-        var CHAIN_CLASS = {
-            mainchain: 'A', esc: 'B', eid: 'B', pg: 'B',
-            'esc-oracle': 'C', 'eid-oracle': 'C', 'pg-oracle': 'C',
-            arbiter: 'D', spv: 'E',
-        };
+        var CHAIN_CLASS = root.enmChainClass; // P1.6 — single source (utils.js)
         this._settingsTab = new root.EnmSettingsTab({
             api: this.services.api,
             notifications: this.services.notifications,
@@ -1298,11 +1294,7 @@
         // the first /chains/<id> API roundtrip. mainchain → 'A' for
         // the only chain we actively render today; non-A chains hit
         // the stub branch below.
-        var CHAIN_CLASS = {
-            mainchain: 'A', esc: 'B', eid: 'B', pg: 'B',
-            'esc-oracle': 'C', 'eid-oracle': 'C', 'pg-oracle': 'C',
-            arbiter: 'D', spv: 'E',
-        };
+        var CHAIN_CLASS = root.enmChainClass; // P1.6 — single source (utils.js)
         var chainClass = CHAIN_CLASS[chainId] || null;
         var common = {
             api: this.services.api,
