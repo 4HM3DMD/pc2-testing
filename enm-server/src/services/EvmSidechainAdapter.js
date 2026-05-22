@@ -134,28 +134,33 @@ const ESC_FROZEN_ACCOUNTS = Object.freeze([
     '0xA7cDb922183f826489707E1E41b68174BFdDbdDC',
 ]);
 
-// v0.5.196 — SHIPPED default --bootnodes per EVM chain. So a fresh install peers
+// v0.5.197 — SHIPPED default --bootnodes per EVM chain. So a fresh install peers
 // out of the box without depending on the binary's (potentially dead) built-in
 // foundation bootnodes. Unioned with operator config + the harvested cache in
 // buildSpawnArgs (operator wins on dedupe; cache adds known-live peers; this
 // list is the last-resort fallback for never-peered nodes).
 //
 // Why this is DDoS-safe even though the list is in open source: bootnodes are
-// MEANT to be public (every chain ships theirs in their repo); the real
-// mitigation is the per-node peer cache (EnmPeerCache) making these
-// FIRST-CONTACT-ONLY — once a node has peered, it re-peers from its own cache
-// and never depends on these seeds again, so attacking them can't take down the
-// running network.
+// MEANT to be public (every chain ships theirs in its repo); the real mitigation
+// is the per-node peer cache (EnmPeerCache) making these FIRST-CONTACT-ONLY —
+// once a node has peered, it re-peers from its own cache and never depends on
+// these seeds again, so attacking them can't take down the running network.
 //
-// CONTENT:
-//   esc — Elastos.ELA.SideChain.ESC/params/bootnodes.go :20630 hosts (empirically
-//         alive; esc peers off them when nothing else is set). 4 hosts; if even
-//         1 answers, esc gets a foothold + the cache harvests the rest.
-//   eid — pending live enodes (the foundation :20640 set verified DEAD).
-//   pg  — pending live enodes.
+// CONTENT (extracted from the live chain binaries via `strings <bin> | grep enode`
+// on pc2new — the authoritative source since the chain repos aren't all public):
+//   esc: 9 foundation :20630 enodes (Elastos.ELA.SideChain.ESC v0.2.7.1) —
+//        AWS hosts across regions; empirically alive (pc2new peers off them OOTB).
+//   eid: 11 foundation :20640 enodes (Elastos.ELA.SideChain.EID v0.2.4) —
+//        same AWS host pool; have been flaky/dead at times, but harmless to ship
+//        (geth tries them via discv4 and moves on; cache + the same-operator-
+//        runs-all-chains effect handle the live peering).
+//   pg : 3 foundation :20670 enodes (Elastos.ELA.SideChain.PG v0.0.3.1) — the pg
+//        repo isn't public on GitHub, so the running binary's compiled-in set is
+//        the canonical source. (3 more entries in the binary have port :0 and
+//        are unusable placeholders; skipped.)
 //
-// Per the same-operator-runs-all-chains observation, one full enode per chain
-// is sufficient to seed: the cache then harvests the other ~11 multi-chain
+// Per the same-operator-runs-all-chains observation, even one alive enode per
+// chain is sufficient — the cache harvests the other ~11 multi-chain council
 // operators on each chain's network within the first 20-min tick.
 const DEFAULT_BOOTNODES = Object.freeze({
     esc: Object.freeze([
@@ -163,9 +168,30 @@ const DEFAULT_BOOTNODES = Object.freeze({
         'enode://152fae4134f4db49d24905762ade694fc86e0a24124c0927c9c1cbc816bb9929e790d4fba236c7a55c9d9817df72c1d23353c2dccc3796bd397d72320a722ef1@52.62.113.83:20630',
         'enode://dbfdb62b5cf4cb5a12ee1df68bfb4c0626ad5335ec5ee0c594c315b08a61e7f0bc8ce5b264136eec0db17db1e55f1bb0f1de67f9bb9c57bea77feef74f2baa2c@35.156.51.127:20630',
         'enode://a1a37849c8a0d5247870fc2d70da053fdae503b99498daf63905728bc801a57818577a88b02895763a5af8037ab5378b3ea12eb01ec2546712cf5ebaab3e94c6@35.177.89.244:20630',
+        'enode://30dc2b7986e2ec5902498ec26fad6fcecece617aa1652f227f684ede6a0939bb7a205ada1c91420d30b427c86bbdcc31fdfd6d955dd8f5854370f583025a0708@15.206.198.252:20630',
+        'enode://5e1d6f9f74e33b2d1e2fda87efaf60a788b338c08eefd3a435e9c7de98645bc041421c27d9ed3927c7b5195febd691aff30de881842749f3030089df0e135232@13.234.24.155:20630',
+        'enode://777e2a86687d675c05344acc6e24cefbd3e233759e8b89d7b3d101aeffc89e6292f66a115c5bfc30f250c120e6a2354a7a6ea304439cfded706de1c9ade61abf@3.111.241.201:20630',
+        'enode://b0357d45e9070c1660f63f077e0e3b0054a18d93785589d498586b6e0b7ec7c5b39ef608e82e7280ca95019db7c36455275d98a3e8684916ba8f3a7aab4ad38b@13.234.249.168:20630',
+        'enode://deb84117dada6c2c8f9c5d9d44f749b6fbbefdc987a1611b683ead6e4e2ce8e0d05a196591a713376eee5d9c165d3888d2e175e8eb842e5a381f273c0268edca@65.0.164.47:20630',
     ]),
-    eid: Object.freeze([]),
-    pg: Object.freeze([]),
+    eid: Object.freeze([
+        'enode://02acd3f3812d55d0e667427bf83dd1d5169800323c56e431750bbf55667cf45ef0cacd6a7c895a73170fe388524a7010a8063034a2212aefbe6cf2c7ef7c8b66@52.74.28.202:20640',
+        'enode://11c94a56ffb38ac466cb8d49c98359dffa24d268091ffc8804dcb70189440f8f6a1f0026b62453067395d49a9005d8035f2bb19e66fdfdebc612afaae5368870@15.206.198.252:20640',
+        'enode://1c57ab060416f968a1972e9713c2c433f4af77844ada4faede9926cf63858d4e4c347d3e703f1ef762cb5ecc29c047cff3e584c1b2dc73acbfab26c02661d54f@13.234.249.168:20640',
+        'enode://35fc836cc3f0300d889e9f7fb572c40ecc37848eb5d634ed6d89645392a2dcc21f12be46a02021980d32259449004956077a185c45ded5d4487b5c50155454c7@65.0.164.47:20640',
+        'enode://7ccf14cf7ca30177ac2533bd7c9c73fbacc59c4e8a012cb1fa1328da1f3ab06aef2dadbb378510d471a8a57d2c11c79585cfacfa8946fde55529c1db761a0910@3.111.241.201:20640',
+        'enode://8104ddf1c74b602229df91cf72361b4579b94d024521860c3ffa0e693f2c98f93c084bc1c7fb9e548d486e925a589beadd7dedbd39fd4372ef14993e3a1b0d6c@35.177.89.244:20640',
+        'enode://8839fc9b0cec7e63f0b3ffd0f6f6030ef05a0ccf2b47affdc59e8db5ac4b0ea2cbe52ac67b7e7a88060c38c1aa47f4eae2c12169b9f4c8d887bf6d3770aea206@35.156.51.127:20640',
+        'enode://ae29f21785c49231e4cc7f505c046ad13eaa2c3851b0241ba737cabea98950efab9f095b2cae52c042bb6b977ddbbd19eeeb2c9a1f990d46850138dfbefcffba@15.206.236.124:20640',
+        'enode://bcad5f7115806ded945d1d2dfb62fa1eb360466a962f8637348dd9e2a60c6b3d8d514b238a758c33502ba5a7487050880e0a575d36523b28189ab85f56a488df@34.229.27.111:20640',
+        'enode://d4165872fc56b6baa6b11a4ddb17eb2ebe5b1ad92fd29dee46895c4c99c23d3e4859ee43805ddf883bdbe652b96aac4c2461599f49598e474d50942c3c67ef4b@13.234.24.155:20640',
+        'enode://d82fae81d36b61afa01339c402992dc44434a9ad427ac0c7ea170fe650c86de49dde11c9ed57a4f7661534ccd130e6b420bb2f7db2bacbbce15ecec6427ed6e7@52.62.113.83:20640',
+    ]),
+    pg: Object.freeze([
+        'enode://138f5bddd685b8bdd203075499f48f022894cd95041e89812dd5160439f196af36869dc5d8cdb97e508ad9c9e4e80511a93707a65badda1a93dc18252f3cffab@15.206.198.252:20670',
+        'enode://e1a54ff3f8e3582d0fd7418024bf67b2ede860080b2f3cd450f856d94d8c9d8972eee0885a62d7d62d96201b90e47610e13922f9e410674e5a1b80af868bf422@13.234.249.168:20670',
+        'enode://f7ecb7705471b103d2e6aee61427f014e6f3c658e4e28416b7a96aebfb180c83869e46312e19e69711db15cdedef9e2ed1002bb9d8c5af634c43d26e3a6eca7a@13.234.24.155:20670',
+    ]),
 });
 const MAX_BOOTNODES = 50;
 
