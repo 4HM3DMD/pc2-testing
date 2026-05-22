@@ -63,6 +63,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const net = require('node:net'); // v0.5.193 — TCP probe to gate arbiter start on oracle readiness
 
 const ChainAdapter = require('./ChainAdapter');
 const { EnmRpcClient } = require('./EnmRpcClient');
@@ -549,6 +550,20 @@ class ArbiterAdapter extends ChainAdapter {
         // means we spawn only when the arbiter will actually succeed.
         await this._waitForMainchainRpc(allChainsCfg, mainchainRpcUser, mainchainRpcPass);
 
+        // v0.5.193 — ALSO wait for the oracle ports the arbiter dials. node.sh
+        // gates the arbiter on the oracles in TWO ways: arbiter_init refuses
+        // unless every oracle's .init exists (node.sh:5325-5349), and
+        // arbiter_start respawns `until pgrep -x arbiter` (node.sh:4961-4969)
+        // because the arbiter aborts at boot if any SideNodeList endpoint is
+        // unreachable. ENM previously waited ONLY for the mainchain RPC, so on a
+        // cold Council boot the arbiter spawned microseconds after the oracles
+        // and could exhaust its bounded retry before their Express ports bound
+        // (the `arbiter exited code=255` churn). The SideNodeList dials each
+        // sidechain's httpInfo (oracle) port — 20632/20642/20672 — so we poll
+        // exactly those before spawning. Bounded; on timeout we proceed and let
+        // the spawn-retry + self-heal cover it (never hang the orchestrator).
+        await this._waitForOracles(allChainsCfg);
+
         // Decrypt the mainchain keystore password BEFORE spawn so we can feed
         // it the instant the child exists (minimizing the prompt race below).
         const pbftPassword = await this.readMainchainKeystorePassword();
@@ -688,6 +703,80 @@ class ArbiterAdapter extends ChainAdapter {
         }
         if (log) {
             log.warn(`${ENM_LOG_PREFIX} arbiter: mainchain RPC still unreachable after ${timeoutMs}ms — attempting start anyway (bounded spawn-retry + self-heal will cover it)`);
+        }
+        return false;
+    }
+
+    /**
+     * v0.5.193 — poll the oracle ports the arbiter dials (the SideNodeList
+     * httpInfo ports: esc-oracle 20632 / eid-oracle 20642 / pg-oracle 20672)
+     * until each accepts a TCP connection, BEFORE spawning the arbiter. node.sh
+     * gates the arbiter on the oracles being up — arbiter_init refuses unless
+     * each oracle's .init exists (node.sh:5325-5349) and arbiter_start respawns
+     * `until pgrep -x arbiter` (node.sh:4961-4969) because the arbiter aborts at
+     * boot if any SideNodeList endpoint is unreachable. Without this gate a cold
+     * Council boot races the oracle Express servers and the arbiter exits
+     * (code=255) before they bind. We poll exactly the ports the SideNodeList
+     * dials. Bounded so it can never hang the orchestrator; on timeout we
+     * proceed and let the bounded spawn-retry + self-heal cover the residual.
+     *
+     * @param {object} allChainsCfg  cfg.chains
+     * @param {object} [opts]        { timeoutMs=120000, intervalMs=5000, connectMs=2000 }
+     * @returns {Promise<boolean>}
+     */
+    async _waitForOracles(allChainsCfg, opts) {
+        const log = this.extensionHandle && this.extensionHandle.log;
+        // Mirror the SideNodeList port computation exactly (httpInfo, falling
+        // back to the geth rpc port for older installs) so we wait on precisely
+        // what the arbiter will dial.
+        const targets = [];
+        for (const id of ['esc', 'eid', 'pg']) {
+            const cc = allChainsCfg && allChainsCfg[id];
+            const port = cc && cc.ports && (cc.ports.httpInfo || cc.ports.rpc);
+            if (port) { targets.push({ id: `${id}-oracle`, port }); }
+        }
+        if (targets.length === 0) { return true; }
+
+        const timeoutMs = (opts && opts.timeoutMs) || 120000;
+        const intervalMs = (opts && opts.intervalMs) || 5000;
+        const connectMs = (opts && opts.connectMs) || 2000;
+
+        const probe = (port) => new Promise((resolve) => {
+            const sock = net.connect({ host: '127.0.0.1', port });
+            let settled = false;
+            const finish = (ok) => {
+                if (settled) { return; }
+                settled = true;
+                try { sock.destroy(); } catch (_) { /* ignore */ }
+                resolve(ok);
+            };
+            sock.setTimeout(connectMs);
+            sock.once('connect', () => finish(true));
+            sock.once('timeout', () => finish(false));
+            sock.once('error', () => finish(false));
+        });
+
+        const deadline = Date.now() + timeoutMs;
+        let logged = false;
+        while (Date.now() < deadline) {
+            // eslint-disable-next-line no-await-in-loop
+            const results = await Promise.all(targets.map((t) => probe(t.port)));
+            const down = targets.filter((_, i) => !results[i]);
+            if (down.length === 0) {
+                if (logged && log) {
+                    log.info(`${ENM_LOG_PREFIX} arbiter: all oracle ports reachable (${targets.map((t) => t.port).join(', ')}) — proceeding to start`);
+                }
+                return true;
+            }
+            if (!logged && log) {
+                log.info(`${ENM_LOG_PREFIX} arbiter: waiting for oracle port(s) [${down.map((t) => `${t.id}:${t.port}`).join(', ')}] before start — the arbiter dials each oracle and aborts if any is unreachable (node.sh:4961-4969)`);
+                logged = true;
+            }
+            // eslint-disable-next-line no-await-in-loop
+            await sleep(intervalMs);
+        }
+        if (log) {
+            log.warn(`${ENM_LOG_PREFIX} arbiter: some oracle ports still unreachable after ${timeoutMs}ms — attempting start anyway (bounded spawn-retry + self-heal will cover it)`);
         }
         return false;
     }

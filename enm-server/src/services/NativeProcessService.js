@@ -545,12 +545,29 @@ class NativeProcessService extends EventEmitter {
                 childEnv[k] = v;
             }
         }
-        const child = spawn(binaryPath, spawnArgs, {
-            cwd,
-            env: childEnv,
-            stdio: ['pipe', 'pipe', 'pipe'],
-            detached: true,
-        });
+        // v0.5.193 — node.sh raises the open-file limit (`ulimit -n 40960`,
+        // set_env:62-68) before launching ANY chain, because ela/geth open
+        // hundreds of sockets + files and the inherited default (~1024 on stock
+        // Ubuntu) risks EMFILE under peer load. Node has no setrlimit binding, so
+        // we launch the binary under a minimal POSIX shell that raises the soft
+        // limit (best-effort: silenced + capped by the hard limit when
+        // unprivileged, exactly like node.sh's behavior) and then `exec`s the
+        // binary IN PLACE. `exec` replaces the shell image, so child.pid IS the
+        // chain process and /proc/<pid>/exe still resolves to binaryPath for the
+        // reattach cross-check (processUtils.isOurProcess). The shell reads no
+        // stdin, so the post-spawn keystore-password pipe (ela/arbiter) still
+        // reaches the chain. argv is forwarded verbatim ($0=binary, "$@"=args).
+        const NOFILE_SOFT_TARGET = 40960;
+        const child = spawn(
+            '/bin/sh',
+            ['-c', `ulimit -n ${NOFILE_SOFT_TARGET} 2>/dev/null; exec "$0" "$@"`, binaryPath, ...spawnArgs],
+            {
+                cwd,
+                env: childEnv,
+                stdio: ['pipe', 'pipe', 'pipe'],
+                detached: true,
+            },
+        );
         child.unref();
 
         if (!child.pid) {
