@@ -399,13 +399,26 @@
         this._wireTabs();
         this._wireCrossTabSync();
 
-        // Step 3 + 4: probe backend, then decide wizard vs dashboard.
-        return this.services.api.get('/health', { skipCache: true })
+        // Step 3 + 4: probe backend health and read setup state. v0.5.191 perf
+        // — these were sequential (health, THEN setup-state), adding a full RPC
+        // round-trip to every cold boot before anything could render. Fire both
+        // concurrently: each api.get() kicks off its request synchronously here,
+        // so they're in flight together. Health still GATES routing (we await it
+        // first) so a backend-unreachable failure keeps its 'health' tag and the
+        // dedicated offline/unreachable copy; setup-state just rides alongside
+        // instead of waiting its turn, and is consumed once health resolves.
+        var healthP = this.services.api.get('/health', { skipCache: true })
             .catch(function (err) {
                 throw withTag(err, 'health');
-            })
+            });
+        var setupP = this.services.api.get('/setup/state', { skipCache: true });
+        // Mark setupP as handled so a health-first failure (where we never reach
+        // `return setupP`) doesn't trip an unhandledRejection warning. The real
+        // setup error still surfaces through the chain below when health is OK.
+        setupP.catch(function () { /* observed via the routing chain below */ });
+        return healthP
             .then(function () {
-                return self.services.api.get('/setup/state', { skipCache: true });
+                return setupP;
             })
             .then(function (setupState) {
                 // Treat any truthy `completed` as "setup is done" — SQLite

@@ -145,6 +145,7 @@
         this._root = null;
         this._unsubSse = null;
         this._lastSnap = null;
+        this._lastHtml = null;   // v0.5.191 — last rendered markup, for render dedup
         this._sparklines = {};   // chainId → EnmSparkline instance
         this._sparkUnsubs = {};  // chainId → unsubscribe fn from heightSeries
         this._destroyed = false;
@@ -182,6 +183,7 @@
 
     /** @private */
     EnmMultiChainOverviewPane.prototype._renderLoading = function () {
+        this._lastHtml = null;  // invalidate render-dedup cache (DOM no longer shows rows)
         this._root.innerHTML = ''
             + '<div class="enm-overview-loading" role="status" aria-live="polite">'
             + '<p>' + escapeHtml(tFb('overview_pane.loading', 'Loading Council overview…')) + '</p>'
@@ -191,6 +193,7 @@
     /** @private */
     EnmMultiChainOverviewPane.prototype._renderError = function (msg) {
         if (!this._root) { return; }
+        this._lastHtml = null;  // invalidate render-dedup cache (DOM now shows the error pane)
         // 0.5.9 audit Session 9 — add Retry button. Pre-0.5.9 the error
         // pane was terminal: operator on a flaky network or transient
         // backend hiccup saw "Overview unavailable" with no recovery
@@ -316,28 +319,40 @@
             html.push('</div>');
         }
         html.push('</div>');
-        this._root.innerHTML = html.join('');
 
-        // Wire row clicks → chain-selector dispatch. A click on a quick-action
-        // button runs the action instead of routing; a click anywhere else on
-        // the row (including the explicit open button, which bubbles here)
-        // routes. v0.5.187 a11y — the row is no longer role="button"/tabindex,
-        // so there's no row keydown handler: the open button + action buttons
-        // are native <button>s and handle Enter/Space themselves (their click
-        // bubbles to this handler).
-        var rowEls = this._root.querySelectorAll('.enm-overview-row');
-        Array.prototype.forEach.call(rowEls, function (row) {
-            row.addEventListener('click', function (ev) {
-                var actionBtn = ev.target && ev.target.closest
-                    ? ev.target.closest('.enm-overview-action') : null;
-                if (actionBtn) {
-                    ev.stopPropagation();
-                    self._onAction(actionBtn.dataset.action, actionBtn.dataset.chainId, actionBtn);
-                    return;
-                }
-                self._routeToChain(row.dataset.chainId);
+        // v0.5.191 perf — dedup the wholesale rebuild. The full innerHTML swap
+        // destroys+rebuilds every row, tears down all sparkline canvases, and
+        // re-wires click handlers; it ran on every ~5s poll/SSE tick even when
+        // the rendered markup was byte-identical (the steady state for healthy
+        // chains). Skip the DOM churn + re-wire when nothing visible changed —
+        // sparklines still reconcile below (their membership diff is a no-op
+        // when unchanged), so live height plotting continues uninterrupted.
+        var joined = html.join('');
+        if (joined !== this._lastHtml) {
+            this._lastHtml = joined;
+            this._root.innerHTML = joined;
+
+            // Wire row clicks → chain-selector dispatch. A click on a quick-action
+            // button runs the action instead of routing; a click anywhere else on
+            // the row (including the explicit open button, which bubbles here)
+            // routes. v0.5.187 a11y — the row is no longer role="button"/tabindex,
+            // so there's no row keydown handler: the open button + action buttons
+            // are native <button>s and handle Enter/Space themselves (their click
+            // bubbles to this handler).
+            var rowEls = this._root.querySelectorAll('.enm-overview-row');
+            Array.prototype.forEach.call(rowEls, function (row) {
+                row.addEventListener('click', function (ev) {
+                    var actionBtn = ev.target && ev.target.closest
+                        ? ev.target.closest('.enm-overview-action') : null;
+                    if (actionBtn) {
+                        ev.stopPropagation();
+                        self._onAction(actionBtn.dataset.action, actionBtn.dataset.chainId, actionBtn);
+                        return;
+                    }
+                    self._routeToChain(row.dataset.chainId);
+                });
             });
-        });
+        }
 
         // Sparklines — only re-mount the diff. Tear down any chain that
         // disappeared from the snapshot or stopped being alive; mount
@@ -483,7 +498,10 @@
         }
         // Class A / B — block height + sync badge (real, from SyncTracker enrichment).
         if (klass === 'A' || klass === 'B') {
-            if (typeof c.height === 'number') {
+            // v0.5.191 — isFinite guard: a NaN/Infinity height (typeof 'number')
+            // would otherwise reach formatNumber and render "Block NaN". Treat
+            // it as not-yet-known and fall through to "height pending…".
+            if (typeof c.height === 'number' && isFinite(c.height)) {
                 return '<span class="enm-overview-height">'
                     + escapeHtml(tFb('overview_pane.block', 'Block {n}', { n: formatNumber(c.height) }))
                     + '</span>'
@@ -671,7 +689,10 @@
     // back to a local Intl/regex grouping so the component still works in
     // unit tests that don't load utils.js.
     function formatNumber(n) {
-        if (typeof n !== 'number' || !isFinite(n)) { return String(n); }
+        // v0.5.191 — never surface "NaN"/"undefined"/"null" to the operator;
+        // an em-dash is an honest "no value". Callers guard upstream, so this
+        // is a defensive last resort.
+        if (typeof n !== 'number' || !isFinite(n)) { return '—'; }
         if (typeof root.enmFormatNumber === 'function') {
             try { return root.enmFormatNumber(n); } catch (_) { /* fall through */ }
         }

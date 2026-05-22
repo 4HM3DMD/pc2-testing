@@ -848,7 +848,17 @@
         // 0.5.10 audit Session 10 — Class C oracle cards skip the height
         // block entirely (oracles have no chain); _chainHeight is null.
         if (this._chainHeight) {
-            this._chainHeight.textContent = formatPrimaryValue(t, coarse, height, null);
+            // v0.5.191 flicker fix — reuse the cached /sync snapshot so the metric
+            // keeps its final "local / network" shape and the 5s state-poll no longer
+            // re-flips it to height-only. For a syncing chain whose first /sync hasn't
+            // resolved yet, leave the placeholder ('—') instead of painting a bare
+            // height that _applySyncSnapshot would immediately re-format to
+            // "local / network" — that two-format double-render is the reported flicker.
+            var _snap = this._lastSyncSnapshot || null;
+            var _syncingLike = (coarse === 'syncing' || coarse === 'recovering' || coarse === 'starting');
+            if (_snap || !_syncingLike) {
+                this._chainHeight.textContent = formatPrimaryValue(t, coarse, height, _snap);
+            }
         }
         // The "Block height" label stays static in phase-03; in alpha.27
         // it swapped to "connecting to peers" while we waited for the
@@ -1166,6 +1176,10 @@
     ChainCard.prototype._applySyncSnapshot = function (data) {
         var t = root.enmTOrFallback;
         var coarse = this._lastCoarseState || 'unconfigured';
+        // v0.5.191 — cache the latest /sync snapshot so _applyState's 5s state-poll
+        // reuses it and renders the same "local / network" shape (no height↔slash
+        // flicker). null on a failed /sync → _applyState falls back to bare height.
+        this._lastSyncSnapshot = data || null;
 
         // Beta 3 hero — update the sync ring percent in place. Phase-03
         // mock shows the percent number + dashoffset together; we update

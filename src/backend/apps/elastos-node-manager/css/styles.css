@@ -540,6 +540,24 @@ body {
     grid-template-columns: 1fr;
 }
 
+/* v0.5.191 — one-time entrance fade for the dashboard/wizard. _revealContent()
+ * removes the [hidden] attribute (display:none → grid) and sets the app's
+ * data-state="ready"; the animation runs once on that first paint, so the
+ * content eases in instead of snapping from the boot spinner. data-state stays
+ * "ready" for the session (tab switches don't change it) so it never re-fires.
+ * Keyed on the app state — not on [hidden] removal — because display:none→grid
+ * isn't transitionable; a keyframe is. */
+.enm-app[data-state="ready"] .enm-content {
+    animation: enm-content-fade-in var(--motion-base) var(--ease-out);
+}
+@keyframes enm-content-fade-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .enm-app[data-state="ready"] .enm-content { animation: none; }
+}
+
 .enm-pane {
     grid-area: 1 / 1;
     width: 100%;

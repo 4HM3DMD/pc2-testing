@@ -97,6 +97,7 @@
         this._pollPauser  = null;
         this._pollTimer   = null;
         this._lastPayload = null;
+        this._lastHtml    = null;  // v0.5.191 — render-dedup cache
     }
 
     NodeIdentityCard.prototype.mount = function (parent) {
@@ -355,6 +356,15 @@
                 + '</div>';
         }
 
+        // v0.5.191 perf — skip the rebuild when the poll produced identical
+        // markup (the common steady state — the signing identity + producer
+        // registration rarely change). MUST early-return before the copy-button
+        // mount below, which appends (not replaces) — re-running it on unchanged
+        // DOM would stack duplicate copy buttons. Every render-relevant value
+        // (pubkey, addr via data-copy-value, producer state/votes/deposit) is
+        // already encoded in `html`.
+        if (html === this._lastHtml) { return; }
+        this._lastHtml = html;
         this.root.innerHTML = html;
 
         // Fill long monospace values via textContent (avoid wrapping

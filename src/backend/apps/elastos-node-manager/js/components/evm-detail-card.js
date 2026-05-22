@@ -61,6 +61,7 @@
         this._pollPauser = null;
         this._pollTimer  = null;
         this._lastMiner  = null;
+        this._lastHtml   = null;  // v0.5.191 — render-dedup cache
     }
 
     EvmDetailCard.prototype.mount = function (parent) {
@@ -139,6 +140,14 @@
             +   '<span class="enm-section-card-foot-status">Node output is in the Logs tab.</span>'
             + '</div>';
 
+        // v0.5.191 perf — skip the rebuild when the 60s poll produced identical
+        // markup (the common steady state — addresses + the mining flag rarely
+        // change). MUST early-return before the copy-button mount below, which
+        // appends (not replaces) — re-running it on unchanged DOM would stack
+        // duplicate copy buttons. Every render-relevant value (mining flag,
+        // both addresses via data-copy-value + is-empty) is in `html`.
+        if (html === this._lastHtml) { return; }
+        this._lastHtml = html;
         this.root.innerHTML = html;
 
         // Fill long monospace values via textContent (deterministic copy-by-selection).

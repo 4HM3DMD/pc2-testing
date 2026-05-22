@@ -64,6 +64,7 @@
         this._pollPauser  = null;
         this._pollTimer   = null;
         this._lastPayload = null;
+        this._lastHtml    = null;  // v0.5.191 — render-dedup cache
     }
 
     OracleStatusCard.prototype.mount = function (parent) {
@@ -125,7 +126,7 @@
             ? ('Relays cross-chain messages between ' + esc(parentName) + ' and the Main chain.')
             : 'Relays cross-chain messages between its parent EVM chain and the Main chain.';
 
-        var parentHeight = (oracle && typeof oracle.parentBlockHeight === 'number')
+        var parentHeight = (oracle && typeof oracle.parentBlockHeight === 'number' && isFinite(oracle.parentBlockHeight))
             ? formatNumber(oracle.parentBlockHeight) : null;
         var lastActivity = (oracle && typeof oracle.lastLogAt === 'number')
             ? relTime(oracle.lastLogAt) : null;
@@ -154,6 +155,12 @@
                         : '<span class="enm-section-card-foot-status success">No recent errors in the oracle log.</span>'))
             + '</div>';
 
+        // v0.5.191 perf — skip the innerHTML rebuild when the 30s poll produced
+        // byte-identical markup (the common steady state). The compare is over
+        // the whole string, so a genuine change (height moved, error appeared,
+        // reachability flipped) still repaints. Avoids needless DOM churn.
+        if (html === this._lastHtml) { return; }
+        this._lastHtml = html;
         this.root.innerHTML = html;
     };
 
@@ -185,7 +192,7 @@
 
     /** @private — thousands-separated integer via the shared util / fallback. */
     function formatNumber(n) {
-        if (typeof n !== 'number' || !isFinite(n)) { return String(n); }
+        if (typeof n !== 'number' || !isFinite(n)) { return '—'; }  // v0.5.191 — no "NaN" to operator
         if (typeof root.enmFormatNumber === 'function') {
             try { return root.enmFormatNumber(n); } catch (_) { /* fall through */ }
         }
