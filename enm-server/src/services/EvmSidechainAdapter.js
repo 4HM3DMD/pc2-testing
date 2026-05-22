@@ -134,6 +134,41 @@ const ESC_FROZEN_ACCOUNTS = Object.freeze([
     '0xA7cDb922183f826489707E1E41b68174BFdDbdDC',
 ]);
 
+// v0.5.196 — SHIPPED default --bootnodes per EVM chain. So a fresh install peers
+// out of the box without depending on the binary's (potentially dead) built-in
+// foundation bootnodes. Unioned with operator config + the harvested cache in
+// buildSpawnArgs (operator wins on dedupe; cache adds known-live peers; this
+// list is the last-resort fallback for never-peered nodes).
+//
+// Why this is DDoS-safe even though the list is in open source: bootnodes are
+// MEANT to be public (every chain ships theirs in their repo); the real
+// mitigation is the per-node peer cache (EnmPeerCache) making these
+// FIRST-CONTACT-ONLY — once a node has peered, it re-peers from its own cache
+// and never depends on these seeds again, so attacking them can't take down the
+// running network.
+//
+// CONTENT:
+//   esc — Elastos.ELA.SideChain.ESC/params/bootnodes.go :20630 hosts (empirically
+//         alive; esc peers off them when nothing else is set). 4 hosts; if even
+//         1 answers, esc gets a foothold + the cache harvests the rest.
+//   eid — pending live enodes (the foundation :20640 set verified DEAD).
+//   pg  — pending live enodes.
+//
+// Per the same-operator-runs-all-chains observation, one full enode per chain
+// is sufficient to seed: the cache then harvests the other ~11 multi-chain
+// operators on each chain's network within the first 20-min tick.
+const DEFAULT_BOOTNODES = Object.freeze({
+    esc: Object.freeze([
+        'enode://dee112e94b17b3b49366e5dec78d7e8a1ee342ff363b490819d40a55482046d333b2bd51b3d1ce250078c5315bf302758d13f63ac94fd8e43f6e54be8412c316@52.74.28.202:20630',
+        'enode://152fae4134f4db49d24905762ade694fc86e0a24124c0927c9c1cbc816bb9929e790d4fba236c7a55c9d9817df72c1d23353c2dccc3796bd397d72320a722ef1@52.62.113.83:20630',
+        'enode://dbfdb62b5cf4cb5a12ee1df68bfb4c0626ad5335ec5ee0c594c315b08a61e7f0bc8ce5b264136eec0db17db1e55f1bb0f1de67f9bb9c57bea77feef74f2baa2c@35.156.51.127:20630',
+        'enode://a1a37849c8a0d5247870fc2d70da053fdae503b99498daf63905728bc801a57818577a88b02895763a5af8037ab5378b3ea12eb01ec2546712cf5ebaab3e94c6@35.177.89.244:20630',
+    ]),
+    eid: Object.freeze([]),
+    pg: Object.freeze([]),
+});
+const MAX_BOOTNODES = 50;
+
 class EvmSidechainAdapter extends ChainAdapter {
     /**
      * @param {object} deps  forwarded to ChainAdapter base
@@ -467,21 +502,25 @@ class EvmSidechainAdapter extends ChainAdapter {
         // discovery with a known-good node (e.g. their own production node), so
         // discv4 finds the rest of the network through it. Empty by default
         // (binary bootnodes only) — exactly node.sh's behavior until populated.
-        // v0.5.195 — bootnode resolution order:
-        //   1. operator-set cfg.bootnodes (explicit; always wins), else
-        //   2. the local peer cache: last-known-good DIALABLE peers harvested
-        //      from prior runs (EnmPeerCache), persisted OUTSIDE the wiped data
-        //      dir. This makes the foundation seeds first-contact-only — once a
-        //      node has peered, it re-peers from its own remembered set instead
-        //      of depending on (often-dead) built-in bootnodes, and survives a
-        //      wipe/reinstall. Empty when the node has never peered (then the
-        //      binary's built-in bootnodes are the only seed, exactly as before).
-        // readCachedBootnodes is sync + never-throws. Operator config unchanged
-        // either way; this only ADDS dial candidates.
-        const seedBootnodes = (Array.isArray(cfg.bootnodes) && cfg.bootnodes.length > 0)
-            ? cfg.bootnodes
-            : EnmPeerCache.readCachedBootnodes(this.chainId);
-        if (Array.isArray(seedBootnodes) && seedBootnodes.length > 0) {
+        // v0.5.196 — bootnode resolution: UNION of all sources, deduped by node-id
+        // (operator's entries come FIRST in concat → kept on dedupe), capped at
+        // MAX_BOOTNODES.
+        //   1. operator cfg.bootnodes (explicit; always wins)
+        //   2. EnmPeerCache: harvested live dialable peers from prior runs
+        //      (purge-surviving local cache; the durability + DDoS-mitigation
+        //      layer that makes these seeds FIRST-CONTACT-ONLY).
+        //   3. DEFAULT_BOOTNODES per chain: shipped fallback so a never-peered
+        //      fresh install still gets working seeds. esc populated (foundation
+        //      :20630 — empirically alive); eid/pg pending live enodes (one
+        //      operator-pasted enode each suffices — the cache will harvest the
+        //      other ~11 multi-chain operators within the first 20-min tick).
+        const opBootnodes = (Array.isArray(cfg.bootnodes) && cfg.bootnodes.length > 0) ? cfg.bootnodes : [];
+        const cachedBootnodes = EnmPeerCache.readCachedBootnodes(this.chainId);
+        const defaultBootnodes = DEFAULT_BOOTNODES[this.chainId] || [];
+        const seedBootnodes = EnmPeerCache.dedupeByNodeId(
+            [].concat(opBootnodes, cachedBootnodes, defaultBootnodes),
+        ).slice(0, MAX_BOOTNODES);
+        if (seedBootnodes.length > 0) {
             args.push('--bootnodes', seedBootnodes.join(','));
         }
         // 0.5.157 — BUG-C8b: this geth fork reads the PBFT keystore password
