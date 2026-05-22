@@ -384,6 +384,21 @@ async function main() {
         log('error', `storage maintenance init failed: ${err.message}`);
     }
 
+    // v0.5.195 — EnmPeerCache: harvest each EVM chain's live dialable peers on a
+    // timer and persist them outside the wiped data dir, so a (re)started/wiped
+    // node re-peers from its last-known-good set instead of depending on dead
+    // foundation bootnodes (the adapter reads it at spawn). Local-only, no
+    // endpoint — zero new attack surface. Stopped in the shutdown handler below.
+    let peerCacheHandle = null;
+    try {
+        const { EnmPeerCache } = require('./services/EnmPeerCache');
+        const peerCache = new EnmPeerCache({ extensionHandle });
+        peerCache.start();
+        peerCacheHandle = peerCache;
+    } catch (err) {
+        log('error', `peer cache init failed: ${err.message}`);
+    }
+
     // beta.3.78 — EnmStateSnapshot service removed. The hourly cache-
     // file backup was a band-aid for an upstream ela bug (crash on
     // corrupt cp_dpos read) and auto-rollback risked masking real
@@ -531,6 +546,11 @@ async function main() {
                 if (storageMaintenanceHandle) { storageMaintenanceHandle.stop(); }
             } catch (err) {
                 log('warn', `${signal}: storage-maintenance stop failed (non-fatal): ${err.message}`);
+            }
+            try {
+                if (peerCacheHandle) { peerCacheHandle.stop(); }
+            } catch (err) {
+                log('warn', `${signal}: peer-cache stop failed (non-fatal): ${err.message}`);
             }
             // Don't process.exit() — let the natural exit path run so any
             // pending writes complete. The Node process exits when the

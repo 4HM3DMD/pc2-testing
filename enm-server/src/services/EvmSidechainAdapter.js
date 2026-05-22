@@ -84,6 +84,7 @@ const ConfigStore = require('./ConfigStore');
 const EnmCrypto = require('./EnmCrypto');
 const EnmFirewallManager = require('./EnmFirewallManager');
 const ExtIpResolver = require('./ExtIpResolver');
+const EnmPeerCache = require('./EnmPeerCache'); // v0.5.195 — last-known-good peer fallback
 
 // Standard subdirectory layout matching node.sh's per-chain conventions
 // (build/skeleton/node.sh paths).
@@ -466,8 +467,22 @@ class EvmSidechainAdapter extends ChainAdapter {
         // discovery with a known-good node (e.g. their own production node), so
         // discv4 finds the rest of the network through it. Empty by default
         // (binary bootnodes only) — exactly node.sh's behavior until populated.
-        if (Array.isArray(cfg.bootnodes) && cfg.bootnodes.length > 0) {
-            args.push('--bootnodes', cfg.bootnodes.join(','));
+        // v0.5.195 — bootnode resolution order:
+        //   1. operator-set cfg.bootnodes (explicit; always wins), else
+        //   2. the local peer cache: last-known-good DIALABLE peers harvested
+        //      from prior runs (EnmPeerCache), persisted OUTSIDE the wiped data
+        //      dir. This makes the foundation seeds first-contact-only — once a
+        //      node has peered, it re-peers from its own remembered set instead
+        //      of depending on (often-dead) built-in bootnodes, and survives a
+        //      wipe/reinstall. Empty when the node has never peered (then the
+        //      binary's built-in bootnodes are the only seed, exactly as before).
+        // readCachedBootnodes is sync + never-throws. Operator config unchanged
+        // either way; this only ADDS dial candidates.
+        const seedBootnodes = (Array.isArray(cfg.bootnodes) && cfg.bootnodes.length > 0)
+            ? cfg.bootnodes
+            : EnmPeerCache.readCachedBootnodes(this.chainId);
+        if (Array.isArray(seedBootnodes) && seedBootnodes.length > 0) {
+            args.push('--bootnodes', seedBootnodes.join(','));
         }
         // 0.5.157 — BUG-C8b: this geth fork reads the PBFT keystore password
         // from the --pbft.keystore.password flag, whose value is a FILE PATH
