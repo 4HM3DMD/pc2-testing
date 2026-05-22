@@ -1093,6 +1093,21 @@ class EvmSidechainAdapter extends ChainAdapter {
             } else if (s && typeof s === 'object') {
                 out.synced = false;
                 if (typeof s.highestBlock === 'number') { out.networkHeight = s.highestBlock; }
+                // v0.5.192 — data truth for fast-sync. During geth fast-sync the
+                // committed head (eth_blockNumber) stays at 0 until the pivot
+                // state commits at the very end, so reporting it as `height`
+                // makes a busy, peered, downloading chain look frozen at block 0
+                // (and pins syncPercent = localHeight / networkHeight at 0%). The
+                // real progress is eth_syncing.currentBlock — the block/receipt
+                // download front, which climbs startingBlock → highestBlock.
+                // Surface that as the height while catching up so the dashboard
+                // shows real movement. When fully synced the `s === false` branch
+                // above keeps height = eth_blockNumber (the true head); this only
+                // applies mid-sync, and only lifts the height (never lowers it).
+                if (typeof s.currentBlock === 'number'
+                    && (out.height == null || s.currentBlock > out.height)) {
+                    out.height = s.currentBlock;
+                }
             }
         }
         return out;
