@@ -418,8 +418,19 @@ class EvmSidechainAdapter extends ChainAdapter {
                 // keep 'admin' (used by ENM's own diagnostics / SPV reads). All
                 // loopback-bound (H25), so 'db' is harmless here.
                 || (cfg.miner.enabled === true
-                    ? 'db,eth,net,web3,admin,pbft,personal,txpool'
+                    // v0.5.194 — node.sh's EID miner branch uniquely adds the
+                    // `miner` RPC namespace (node.sh:4388) on top of the common
+                    // miner set; esc/pg do not. Mirror that per-chain.
+                    ? (this.chainId === 'eid'
+                        ? 'db,eth,miner,net,web3,admin,pbft,personal,txpool'
+                        : 'db,eth,net,web3,admin,pbft,personal,txpool')
                     : 'eth,net,web3,admin,txpool'),
+            // v0.5.194 — node.sh sets --rpcvhosts '*' on BOTH the miner and
+            // follower branches (esc_start:2151). Harmless while --rpcaddr stays
+            // 127.0.0.1 (the Host-header allowlist only bites once RPC is
+            // widened), but it matches node.sh and future-proofs the operator's
+            // RPC-access toggle so a widened RPC isn't rejected on its Host header.
+            '--rpcvhosts', '*',
             // No separate discovery-port flag in this geth fork; UDP discovery
             // shares the TCP --port above (cfg.ports.discovery is reserved for
             // future use / firewall rules, not a geth CLI arg here).

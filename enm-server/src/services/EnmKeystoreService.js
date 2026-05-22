@@ -26,12 +26,12 @@
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
-const crypto = require('node:crypto');
 const { execFile } = require('node:child_process');
 
 const { ENM_LOG_PREFIX } = require('./EnmConstants');
 const { enmDataDir, chainDir } = require('./DataDir');
 const { buildSafeChildEnv } = require('./processUtils');
+const EnmCrypto = require('./EnmCrypto'); // v0.5.194 — policy-guaranteed password generator
 
 const KEYSTORE_FILENAME = 'keystore.dat';
 // We pin the keystore to the chain's own dir so it sits next to the chain's
@@ -47,8 +47,14 @@ const DEFAULT_CHAIN = 'mainchain';
  * symbol prefix.
  */
 function generatePassword() {
-    const raw = crypto.randomBytes(48).toString('base64');
-    return raw.slice(0, 32);
+    // v0.5.194 — delegate to EnmCrypto.generatePassword, which GUARANTEES
+    // node.sh's gen_pass complexity policy (≥16 + upper + lower + digit +
+    // symbol, node.sh:423-434) by re-drawing until compliant. The previous
+    // base64(48).slice(0,32) had no guaranteed special char (~36% of draws
+    // contained none), so a generated keystore password could fail the policy
+    // ela-cli enforces on `wallet create -p`. Operator-supplied passwords are
+    // validated separately via EnmCrypto.validatePasswordComplexity.
+    return EnmCrypto.generatePassword(32);
 }
 
 class EnmKeystoreService {

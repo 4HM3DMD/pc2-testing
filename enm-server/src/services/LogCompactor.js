@@ -41,7 +41,7 @@ const { pipeline } = require('node:stream/promises');
 const { ENM_LOG_PREFIX } = require('./EnmConstants');
 const { chainDir } = require('./DataDir');
 
-const DEFAULT_GZIP_AFTER_DAYS = 7;
+const DEFAULT_GZIP_AFTER_DAYS = 1; // v0.5.194 — gzip inactive rotated logs after 1 day (was 7)
 const DEFAULT_PURGE_AFTER_DAYS = 90;
 // 'logs' covers ENM's per-chain stdout/stderr sink (chains/<id>/logs/<id>.log,
 // written by NativeProcessService for every chain) so it's gzipped + purged by

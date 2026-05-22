@@ -50,10 +50,16 @@ const ConfigStore = require('./ConfigStore');
 const LogCompactor = require('./LogCompactor');
 const { chainDir, enmDataDir } = require('./DataDir');
 
-const TICK_MS = 24 * 60 * 60 * 1000;
+// v0.5.194 — hourly (was 24h) so rotated chain logs are gzipped promptly,
+// closer to node.sh's */10 compress_log cron. The keystore backup shares this
+// timer but stays gated by its own multi-day interval, so it does not over-run.
+const TICK_MS = 60 * 60 * 1000;
 const BOOT_DELAY_MS = 90 * 1000;
 
-const DEFAULT_GZIP_AFTER_DAYS = 7;
+// v0.5.194 — gzip rotated logs after 1 day (was 7). mtime-based, so the active
+// log file is never touched; this just stops up to a week of inactive rotated
+// logs sitting uncompressed (node.sh gzips all-but-newest every 10 min).
+const DEFAULT_GZIP_AFTER_DAYS = 1;
 const DEFAULT_PURGE_AFTER_DAYS = 30;
 const DEFAULT_KEYSTORE_INTERVAL_DAYS = 7;
 const DEFAULT_KEYSTORE_KEEP = 4;
