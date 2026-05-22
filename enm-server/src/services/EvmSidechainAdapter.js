@@ -188,9 +188,18 @@ const DEFAULT_BOOTNODES = Object.freeze({
         'enode://d82fae81d36b61afa01339c402992dc44434a9ad427ac0c7ea170fe650c86de49dde11c9ed57a4f7661534ccd130e6b420bb2f7db2bacbbce15ecec6427ed6e7@52.62.113.83:20640',
     ]),
     pg: Object.freeze([
+        // 3 foundation :20670 enodes from the pg v0.0.3.1 binary scan.
         'enode://138f5bddd685b8bdd203075499f48f022894cd95041e89812dd5160439f196af36869dc5d8cdb97e508ad9c9e4e80511a93707a65badda1a93dc18252f3cffab@15.206.198.252:20670',
         'enode://e1a54ff3f8e3582d0fd7418024bf67b2ede860080b2f3cd450f856d94d8c9d8972eee0885a62d7d62d96201b90e47610e13922f9e410674e5a1b80af868bf422@13.234.249.168:20670',
         'enode://f7ecb7705471b103d2e6aee61427f014e6f3c658e4e28416b7a96aebfb180c83869e46312e19e69711db15cdedef9e2ed1002bb9d8c5af634c43d26e3a6eca7a@13.234.24.155:20670',
+        // v0.5.198 — 2 live :20678 operator-network enodes harvested from a
+        // production pg node's admin.peers (2026-05-22). Filtered per operator
+        // directive to EXCLUDE IPs that also appear in the production eid peer
+        // set (multi-chain council operators) — those 9 of 11 dialable were
+        // dropped to avoid making council infra a public ENM bootnode (load
+        // mitigation). These 2 are pg-only peers, safe to ship as defaults.
+        'enode://f57a9717c4cc39851477904da13a1f4fa32fe09da7ce298a8444afc34de42ef563dc7a7ec00cabef0fe2c4a9ccde2147949bbcccdde860448263cf033f2567d9@47.239.224.179:20678',
+        'enode://637237494d6cc765cbf5c8ec9489f0461b99989c419d942de9f896da4e588b7b083664f2926289f229e040b11e92d5889403ec2c1b0b7d54658f074e3b59ec95@47.83.8.127:20678',
     ]),
 });
 const MAX_BOOTNODES = 50;
