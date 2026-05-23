@@ -6,6 +6,19 @@
  * and apply it to a chain's data dir so the operator skips the 1–3 day
  * genesis sync.
  *
+ * NOTE (v0.5.199): this file is NOT the active install-path downloader.
+ * The Council install orchestrator (routes/setup.js) uses
+ * EnmSnapshotDownloader.js, which (a) handles disk preflight + retry +
+ * the .enm-snapshot-complete sentinel, and (b) post-v0.5.199 enforces
+ * a mainchain-only allow-list with a post-extract identity-key scrub
+ * (defense against the cycle-13 nodekey contamination). This file
+ * remains as an alternate SSE-driven path (`setup:bootstrap:<chainId>`
+ * topic, single-flight per chain) for any future route that needs the
+ * smaller surface — but it has ALWAYS been mainchain-only (see
+ * SNAPSHOT_PATHS below), so the cycle-13 lesson does not apply here.
+ * If you extend SNAPSHOT_PATHS, mirror EnmSnapshotDownloader's
+ * stripIdentityFiles() scrub in the apply phase.
+ *
  * Source pattern (verified via the upstream Elastos.Node script,
  * build/skeleton/node.sh:840-870 and the operator-facing FAQ):
  *

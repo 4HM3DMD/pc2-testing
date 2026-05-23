@@ -175,30 +175,30 @@
                 },
                 card_b2: {
                     title_idle:                 'Speed up first sync?',
-                    sub_idle:                   "Your node can either download the official Elastos snapshot (~15 min) or sync block-by-block from scratch (1–3 days). The snapshot is what most operators pick — the chain still verifies everything as it catches up to today.",
+                    sub_idle:                   "Your node can either download the official Elastos mainchain snapshot (~15-30 min) or sync the mainchain block-by-block from scratch (1–3 days). EVM sidechains always sync from peers regardless. Most operators pick the snapshot for the mainchain — it still verifies every block as it catches up to today.",
                     badge_recommended:          'Recommended',
-                    tile_bootstrap_title:       'Use official snapshot',
-                    tile_bootstrap_sub:         'Skip the wait. Your node will be ready in roughly 15 minutes.',
+                    tile_bootstrap_title:       'Use official mainchain snapshot',
+                    tile_bootstrap_sub:         'Skip the multi-day mainchain genesis sync. Your node will be reachable in roughly 15-30 minutes.',
                     tile_bootstrap_meta:        '~10 GB download · needs ~40 GB free',
                     tile_genesis_title:         'Sync from scratch',
-                    tile_genesis_sub:           'Verify every block from genesis. Slower, but no trust in anyone else’s files.',
+                    tile_genesis_sub:           'Verify every mainchain block from genesis. Slower, but no trust in anyone else’s files.',
                     tile_genesis_meta:          '1–3 days, depending on hardware',
                     cancel:                     'Cancel download',
                     advancing:                  'Saving your choice…',
                     advance_failed:             'Could not save your choice: {error}',
-                    title_running:              'Downloading the snapshot',
+                    title_running:              'Downloading the mainchain snapshot',
                     sub_running:                "Leave this open. We’ll move you on as soon as it’s ready.",
                     title_failed:               "Snapshot didn’t finish",
                     sub_failed:                 'Network or disk problem during the download.',
                     title_done:                 'Snapshot ready',
-                    sub_done:                   'Your node has the official chain data. Continue to the next step.',
+                    sub_done:                   'Your node has the official mainchain data. Continue to the next step.',
                     cta_retry:                  'Try again',
                     cta_fallback_genesis:       'Skip and sync from scratch instead',
                     cta_continue:               'Continue',
                     genesis_picked_title:       'Genesis sync chosen',
                     genesis_picked_sub:         'Your node will sync from block 0. This can take 1–3 days.',
                     phase_preparing:            'Getting ready…',
-                    phase_resolving:            'Checking the snapshot…',
+                    phase_resolving:            'Checking the mainchain snapshot…',
                     phase_downloading:          'Downloading',
                     phase_extracting:           'Unpacking…',
                     phase_applying:             'Moving files into place…',
@@ -486,13 +486,24 @@
                     title:           'Confirm and install',
                     sub:             'A quick pre-flight then we kick everything off. Council always '
                                    + 'installs Mainchain + ESC + EID + PG + 3 oracles + Arbiter — no '
-                                   + 'optional add-ons. Use the snapshot option to skip 1–3 days of '
-                                   + 'block-by-block sync.',
+                                   + 'optional add-ons. The mainchain snapshot below skips 1–3 days '
+                                   + 'of mainchain block-by-block sync; EVM sidechains cold-sync '
+                                   + 'from peers regardless.',
                     sub_bpos:        'A quick pre-flight then we kick the mainchain install off.',
                     rerun:           'Re-run pre-flight',
-                    snapshot_label:  'Use official snapshots for all 4 chains',
-                    snapshot_hint:   'Default ON. Downloads ~50 GB of verified snapshots so the chains '
-                                   + 'are ready in minutes instead of days. Needs ~200 GB free disk.',
+                    snapshot_label:  'Use official mainchain snapshot (recommended)',
+                    snapshot_hint:   'Default ON. Downloads ~10 GB so the ELA mainchain skips its '
+                                   + '1–3 day genesis sync. Needs ~220 GB free disk for the full '
+                                   + 'Council install (chaindata growth dominates, not the snapshot).',
+                    // v0.5.199 — explicit EVM-cold-sync disclosure. The Card 5
+                    // checkbox controls the mainchain snapshot only; the
+                    // upstream EVM snapshots embed a duplicate nodekey that
+                    // collides on the peer mesh (pc2new cycle-13 lockup,
+                    // 2026-05-23) so they are disabled by design.
+                    snapshot_evm_note: 'Mainchain only. EVM sidechains (esc, eid, pg) always '
+                                   + 'sync from peers — the official EVM snapshots embed an '
+                                   + 'identity key that collides on the network. Expect 3–7 '
+                                   + 'days of background EVM sync after install completes.',
                     cta:             'Install everything',
                     cta_bpos:        'Install mainchain',
                     cta_working:     'Starting install…',
@@ -520,9 +531,14 @@
                     // alone takes 30-90 min. Operators stared at the bar
                     // assuming it was hung. New copy matches real-world
                     // wall time on the supported hardware tier.
+                    // v0.5.199 — snapshot is mainchain-only now; install
+                    // completes faster (no EVM tarballs) but EVM sidechains
+                    // keep syncing for days in the background.
                     sub:             'ENM is installing all 4 chains, 3 oracles and the Arbiter. '
                                    + 'Real progress below — not a spinner. Usually 30 minutes to '
-                                   + '2 hours with snapshots on, 1–3 days without.',
+                                   + '1 hour with the mainchain snapshot on. EVM sidechains '
+                                   + 'continue syncing in the background for several days after '
+                                   + 'install completes.',
                     sub_bpos:        'ENM is installing the mainchain binary and configuration. '
                                    + 'Usually 2–5 minutes.',
                     // 0.5.143 audit Session 143 — operator-requested guidance
@@ -534,12 +550,16 @@
                     // upstream bandwidth) and operators previously had no
                     // signal that walking away or accidentally killing the
                     // device's connection would lose progress.
-                    snapshot_note_title: '⏱ This step takes 30 minutes to 2 hours',
+                    // v0.5.199 — mainchain-only snapshot; tighter time range
+                    // since only one tarball streams (~10 GB vs ~50 GB).
+                    snapshot_note_title: '⏱ Mainchain snapshot — 15 to 60 minutes',
                     snapshot_note_body:  'You can leave this page open and come back later — '
                                        + 'the download continues in the background. Don’t shut '
                                        + 'down your PC2 or disconnect its internet while this '
-                                       + 'runs; either will interrupt the download and you’ll '
-                                       + 'have to start the snapshot step over.',
+                                       + 'runs; either will interrupt the mainchain download '
+                                       + 'and you’ll have to start this step over. EVM sidechains '
+                                       + 'are not affected by this step — they begin cold-syncing '
+                                       + 'from peers separately once the install finishes.',
                     cta_done:        'Open dashboard',
                     cta_retry:       'Retry from failed step',
                     cta_working:     'Working…',

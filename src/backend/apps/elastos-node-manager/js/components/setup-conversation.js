@@ -1387,12 +1387,15 @@
     // ====================================================================
     //
     // Auto-runs GET /setup/install-council/preflight on mount, renders
-    // each check as a row. Below the list: a "use official snapshots"
-    // checkbox (default ON; ~50 GB download, ~200 GB free needed).
-    // Below that: the big "Install everything" button which POSTs to
-    // /setup/install-council with { masterPassword, sharedRewardAddress,
-    // useSnapshots, activeNet }. BPoS path skips install-council
-    // entirely and goes directly to /setup/install/mainchain.
+    // each check as a row. Below the list: a "use official mainchain
+    // snapshot" checkbox (default ON; ~10 GB download, ~220 GB free
+    // needed for chaindata growth). v0.5.199 — mainchain only; EVM
+    // chains always cold-sync from peers (see EnmSnapshotDownloader
+    // for the nodekey-contamination rationale). Below that: the big
+    // "Install everything" button which POSTs to /setup/install-council
+    // with { masterPassword, sharedRewardAddress, useSnapshots,
+    // activeNet }. BPoS path skips install-council entirely and goes
+    // directly to /setup/install/mainchain.
 
     /** @private */
     SetupConversation.prototype._renderCard5 = function (seq) {
@@ -1425,6 +1428,11 @@
             +       escapeHtml(t('friendly.setup.card_5.snapshot_label')) + '</span>'
             +     '<span class="enm-council-form-hint">'
             +       escapeHtml(t('friendly.setup.card_5.snapshot_hint')) + '</span>'
+            // v0.5.199 — second hint line that makes the mainchain-only
+            // policy EXPLICIT (toggle controls mainchain snapshot only;
+            // EVM sidechains always cold-sync from peers regardless).
+            +     '<span class="enm-council-form-hint enm-council-form-hint-evm">'
+            +       escapeHtml(t('friendly.setup.card_5.snapshot_evm_note')) + '</span>'
             +   '</span>'
             + '</label>';
 
@@ -1701,8 +1709,11 @@
     // Step labels track the server-side install-council PLAN exactly.
     // Always covers all 4 chains (PG opt-out removed by operator
     // directive 2026-05-19). install-binaries-parallel covers ESC +
-    // EID + PG + Arbiter binaries; download-snapshots-parallel covers
-    // all 4 snapshots if useSnapshots=true.
+    // EID + PG + Arbiter binaries.
+    // v0.5.199 — download-snapshots-parallel covers MAINCHAIN ONLY.
+    // EVM chains (esc/eid/pg) cold-sync from peers after install
+    // (the upstream EVM snapshots embed a duplicate nodekey — see
+    // EnmSnapshotDownloader.SNAPSHOT_SOURCES for the full rationale).
     //
     // 0.5.24 audit Session 24 — labels rewritten to progressive verb
     // form so every row reads as an action ("Installing X" rather
@@ -1718,7 +1729,7 @@
         'install-esc-cfg':            'Configuring Smart Chain (ESC)',
         'install-eid-cfg':            'Configuring Identity Chain (EID)',
         'install-pg-cfg':             'Configuring PG Chain',
-        'download-snapshots-parallel':'Downloading snapshots',
+        'download-snapshots-parallel':'Downloading mainchain snapshot',
         'install-binaries-parallel':  'Downloading sidechain binaries',
         'install-node-runtime':       'Setting up Node.js (for oracles)',
         'download-oracle-scripts':    'Downloading oracle scripts',

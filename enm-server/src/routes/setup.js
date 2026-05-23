@@ -1599,7 +1599,7 @@ function build(extensionHandle) {
     //
     // Checks (chain-state checks live in the orchestrator runStep
     // handlers, NOT here — preflight is environment/network only):
-    //   - disk-space               (≥ 250 GB free in enmDataDir)
+    //   - disk-space               (≥ 220 GB free in enmDataDir; v0.5.199)
     //   - github-reachable         (HEAD raw.githubusercontent.com)
     //   - elastos-downloads        (HEAD download.elastos.io)
     //   - node-data-reachable      (HEAD node-data.elastos.io)
@@ -2008,9 +2008,13 @@ async function runCouncilInstall(args) {
     // from download.elastos.io (same posture as ESC/EID), so the prior
     // PG opt-in escape hatch is gone.
     //
-    // NEW STEP `download-snapshots-parallel` runs BEFORE binary
-    // download. Snapshots are ~50 GB compressed across 4 chains, so
-    // we stream them while the operator is still on the wizard's
+    // STEP `download-snapshots-parallel` runs BEFORE binary download.
+    // v0.5.199 — mainchain only (~10 GB compressed). Pre-v0.5.199 this
+    // shipped snapshots for all 4 chains (~50 GB compressed); EVM
+    // chains now cold-sync from peers because the upstream EVM tarballs
+    // embed a duplicate nodekey (cycle-13 lockup). Step name kept for
+    // SSE topic stability; effectively single-chain now. The mainchain
+    // tarball streams while the operator is still on the wizard's
     // Card D, before any chain process starts. EnmSnapshotDownloader
     // is idempotent — already-populated data dirs are left alone.
     //
@@ -2519,14 +2523,19 @@ async function runCouncilInstall(args) {
             });
         }
 
-        // ---- NEW STEP — parallel snapshot downloads ----
-        // beta.0.4.7 — fetch the latest chain-data snapshots from
-        // node-data.elastos.io BEFORE the binaries land, so a freshly
-        // installed Council can come online inside an hour instead of
-        // replaying days of blocks from genesis. EnmSnapshotDownloader
-        // is idempotent: any data dir that already has content is left
-        // alone, so re-running the orchestrator is safe. When the
-        // operator picked "sync from scratch" we skip the step entirely.
+        // ---- STEP — mainchain snapshot download (v0.5.199 mainchain-only) ----
+        // Was multi-chain pre-v0.5.199; collapsed to mainchain after the
+        // pc2new cycle-13 nodekey-contamination lockup (2026-05-23). EVM
+        // chains (esc/eid/pg) now cold-sync from peers — slower (3-7 days
+        // each, in the background) but no shared-identity failure mode.
+        // SSE topic kept as 'download-snapshots-parallel' for frontend
+        // stability; the per-chain progress aggregator now reports a
+        // single chain.
+        //
+        // EnmSnapshotDownloader is idempotent: any data dir that already
+        // has content (via the .enm-snapshot-complete sentinel) is left
+        // alone, so re-running the orchestrator is safe. When the operator
+        // picked "sync from scratch" we skip the step entirely.
         await runStep('download-snapshots-parallel', async () => {
             const SnapshotDownloader = require('../services/EnmSnapshotDownloader');
             if (inputs.useSnapshots === false) {
@@ -2560,45 +2569,27 @@ async function runCouncilInstall(args) {
             // `<chainDir>/elastos/data/` where ela reads from. No
             // --strip-components flag needed.
             //
-            // 0.5.153 — BUG-C3: EVM snapshots double-nested → sidechains
-            // synced from genesis (the operator's "sidechains don't work /
-            // nothing changed" symptom). This was the v0.5.146 backlog item
-            // ("EVM tarball structure NOT yet verified") now traced + fixed.
+            // v0.5.199 — MAINCHAIN ONLY. The pre-v0.5.199 multi-chain
+            // setup is gone. esc/eid/pg used to ship snapshots here, but
+            // the upstream EVM tarballs embed the snapshot creator's
+            // data/<chain>/nodekey → duplicate geth node ID across every
+            // Council that applied them → 0 EVM peers → F1/F2 cascade →
+            // eventually panic/exit (eid). Root-cause-fixed by removing
+            // the EVM entries from EnmSnapshotDownloader.SNAPSHOT_SOURCES;
+            // this iteration matches the downloader (mainchain only) so
+            // the disk-preflight + UI sizing stay consistent.
             //
-            // Trace (cycle-1 fresh install): the upstream EVM tarballs
-            // (esc/eid/pg, node-data.elastos.io) wrap their payload in a
-            // top-level `data/` dir — SAME convention as the mainchain
-            // tarball. geth runs with `--datadir <chainDir>/data`
-            // (EvmSidechainAdapter:182,221) and reads keystore at
-            // `<chainDir>/data/keystore`, chaindata under `<chainDir>/data/`.
-            // Pre-0.5.153 relpath='data' set the extract target to
-            // `<chainDir>/data/`, so the tarball's own `data/` produced
-            // `<chainDir>/data/data/{keystore,store,header,...}` — one level
-            // too deep. geth saw an empty datadir → genesis sync. Confirmed
-            // on disk: `chains/pg/data/data/` held the snapshot while geth's
-            // datadir is `chains/pg/data`.
-            //
-            // Fix: relpath='' so the tarball's own `data/` lands at exactly
-            // `<chainDir>/data/` (path.join(chainDir, '') === chainDir; the
-            // EVM snapshot tarballs contain only `data/`, so nothing else in
-            // the chain dir is touched). Mirrors mainchain's 'elastos' →
-            // tarball-`data/` → `<chainDir>/elastos/data/` logic.
+            // Historic BUG-C3 / fix-of-the-fix comments preserved: the
+            // mainchain relpath is 'elastos' so the tarball's own `data/`
+            // lands at exactly `<chainDir>/elastos/data/` where ela reads
+            // from. No --strip-components flag needed.
             const SNAPSHOT_TARGET_RELPATH = {
                 mainchain: 'elastos',  // tarball's `data/` → <chainDir>/elastos/data/
-                esc:       '',         // tarball's `data/` → <chainDir>/data/ (geth --datadir)
-                eid:       '',         // (was 'data' → <chainDir>/data/data/ = BUG-C3)
-                pg:        '',
+                // v0.5.199 — esc/eid/pg intentionally absent. EVM chains
+                // cold-sync from peers; see SNAPSHOT_SOURCES rationale.
             };
-            for (const cid of ['mainchain', 'esc', 'eid', 'pg']) {
+            for (const cid of ['mainchain']) {
                 if (cfg2.chains && cfg2.chains[cid]) {
-                    // 0.5.155 — BUG-C3 fix-of-the-fix: use an explicit
-                    // hasOwnProperty lookup, NOT `|| 'data'`. The v0.5.153
-                    // change set esc/eid/pg to '' (extract into <chainDir>/ so
-                    // the tarball's own `data/` becomes <chainDir>/data/), but
-                    // `SNAPSHOT_TARGET_RELPATH[cid] || 'data'` evaluated `'' ||
-                    // 'data'` === 'data' (empty string is falsy in JS) — so the
-                    // relpath stayed 'data' and EVM snapshots STILL double-nested
-                    // at <chainDir>/data/data (confirmed on cycle-2 fresh install).
                     const rel = Object.prototype.hasOwnProperty.call(SNAPSHOT_TARGET_RELPATH, cid)
                         ? SNAPSHOT_TARGET_RELPATH[cid]
                         : 'data';
@@ -2607,11 +2598,14 @@ async function runCouncilInstall(args) {
             }
             // beta.0.4.12 — operator feedback "snapshots flicker soooo
             // fast!": EnmSnapshotDownloader fires onProgress ~every 500ms
-            // per chain. With 4 chains in parallel that's 8 SSE events/s
-            // each overwriting the step's message text — visually it's
+            // per chain. With 4 chains in parallel that was 8 SSE events/s
+            // each overwriting the step's message text — visually it was
             // strobe. Fix: aggregate per-chain percent in a closure +
-            // throttle the SSE publish to once per 1000ms with a
-            // multi-chain message that shows all 4 simultaneously.
+            // throttle the SSE publish to once per 1000ms with a message
+            // that shows all chains simultaneously.
+            // v0.5.199 — single chain (mainchain); the aggregator still
+            // works (it just has one key), and keeping the throttle in
+            // place means the wizard still sees smooth 0→100 transitions.
             const chainPercents = {};
             let lastPublishMs = 0;
             const publishThrottled = () => {
@@ -3090,10 +3084,11 @@ async function runCouncilPreflight(args) {
     // beta.0.5.0 — skip preflight when setup is already completed.
     // Pre-0.5.0, post-install navigation back to Card 5 would re-run the
     // preflight against current-disk-free (post-snapshot consumption) and
-    // block on the 250GB threshold; the operator had a working node and
-    // the preflight refused to acknowledge it. After install, the checks
-    // don't gate anything useful — surface a synthetic "previously verified"
-    // report and let the operator continue.
+    // block on the disk threshold (was 250GB pre-v0.5.199, now 220GB);
+    // the operator had a working node and the preflight refused to
+    // acknowledge it. After install, the checks don't gate anything
+    // useful — surface a synthetic "previously verified" report and let
+    // the operator continue.
     try {
         const cfg = await ConfigStore.load();
         if (cfg.setup && cfg.setup.completed === true) {
@@ -3131,16 +3126,22 @@ async function runCouncilPreflight(args) {
     // they need is missing — preflight just gates environment + network
     // readiness, not chain state.
 
-    // 3. Disk space ≥ 250 GB in enmDataDir.
-    // beta.0.4.7 — bumped from 20 GB. Council snapshots are ~50 GB
+    // 3. Disk space ≥ 220 GB in enmDataDir.
+    // beta.0.4.7 — bumped from 20 GB. Council snapshots WERE ~50 GB
     // compressed plus ~200 GB extracted across mainchain + ESC + EID
     // + PG; 20 GB was a hold-over from the mainchain-only era and
     // would let an under-provisioned host start the install and then
     // ENOSPC mid-extraction.
     // beta.0.5.0 — opt-in dev relaxation. `ENM_DEV_RELAX_SYSCHECK=true`
-    // lowers the threshold to 50 GB so the wizard can run on developer
-    // boxes; production keeps 250 GB.
-    const DISK_MIN = process.env.ENM_DEV_RELAX_SYSCHECK === 'true' ? 50 : 250;
+    // lowers the threshold so the wizard can run on developer boxes;
+    // production keeps the production floor.
+    // v0.5.199 — dropped 250 → 220 GB (prod) and 50 → 40 GB (dev). ENM
+    // now ships ONLY the mainchain snapshot (~10 GB compressed, ~30 GB
+    // extracted at peak); EVM chains cold-sync from peers (no snapshot
+    // download). The 220 GB floor is now dominated by EVM chaindata
+    // growth (esc/eid/pg full chain ~50 GB each after months of sync)
+    // rather than the install-time snapshot footprint.
+    const DISK_MIN = process.env.ENM_DEV_RELAX_SYSCHECK === 'true' ? 40 : 220;
     let diskOk = false;
     let diskMsg = 'unknown';
     try {
@@ -3196,14 +3197,18 @@ async function runCouncilPreflight(args) {
         severity: 'required',
     });
 
-    // beta.0.4.7 — snapshot host probe. Council install streams ~50 GB
-    // of compressed chain data from node-data.elastos.io before the
-    // binaries even start; if the host is unreachable we want the
-    // operator to know on Card D.5 rather than blow up mid-step.
+    // beta.0.4.7 — snapshot host probe. Council install streams the
+    // mainchain snapshot (~10 GB compressed; v0.5.199 mainchain-only)
+    // from node-data.elastos.io before the binaries even start; if the
+    // host is unreachable we want the operator to know on Card D.5
+    // rather than blow up mid-step. EVM chains do NOT use this host
+    // post-v0.5.199 (they cold-sync from peers), but the probe is still
+    // required because every Council install downloads the mainchain
+    // snapshot by default.
     const nodeDataProbe = await headProbe('https://node-data.elastos.io/ela/');
     checks.push({
         id: 'node-data-reachable',
-        label: 'node-data.elastos.io reachable (for snapshots)',
+        label: 'node-data.elastos.io reachable (for mainchain snapshot)',
         ok: nodeDataProbe.ok,
         message: nodeDataProbe.ok ? 'HEAD 200' : ('failed: ' + (nodeDataProbe.error || ('HTTP ' + nodeDataProbe.code))),
         severity: 'required',

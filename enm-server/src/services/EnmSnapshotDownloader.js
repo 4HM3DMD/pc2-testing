@@ -53,25 +53,34 @@ const { enmDataDir } = require('./DataDir');
 // (used by the Card D pre-flight to warn about disk free space
 // before kicking off the download).
 //
-// SNAPSHOT_SOURCES intentionally contains FOUR chains: mainchain,
-// esc, eid, pg. ECO is omitted on purpose — see file header H3
-// invariant.
+// v0.5.199 — MAINCHAIN ONLY.
+//
+// EVM chains (esc/eid/pg) were removed after the pc2new cycle-13
+// lockup (2026-05-23). The upstream EVM snapshot tarballs at
+// node-data.elastos.io/<esc|eid|pg>/...-data-latest.tgz embed the
+// snapshot creator's data/<chain>/nodekey — the 64-byte secp256k1
+// private key that derives the geth node ID on the EVM peer mesh.
+// Every operator who applied an EVM snapshot booted with a
+// DUPLICATE node ID (originally that of 18.190.98.27); the EVM
+// network rejects the duplicate → 0 peers → F1/F2 auto-heal
+// cascade → eventual panic/exit (eid: nil-pointer in
+// eth/downloader.synchronise). Diagnosed on pc2new 2026-05-23 and
+// recorded in ENM_QA_CATALOG.md under "CYCLE-13 RE-FINALIZATION".
+//
+// The ELA mainchain snapshot does NOT contain a node-identity
+// file (mainchain uses Bitcoin-style P2P with no persistent
+// nodekey), so it remains safe and high-value: a virgin Council
+// install replays ~3 M ELA blocks from genesis in 1-3 days; the
+// snapshot collapses that to ~15-30 min.
+//
+// DO NOT re-add esc/eid/pg entries here without (a) confirming
+// the upstream no longer embeds nodekeys, AND (b) keeping the
+// stripIdentityFiles() post-extract scrub below. ECO remains out
+// of scope (H3 invariant).
 const SNAPSHOT_SOURCES = Object.freeze({
     mainchain: {
         url: 'https://node-data.elastos.io/ela/ela-data-latest.tgz',
         sizeEstimateGb: 10,
-    },
-    esc: {
-        url: 'https://node-data.elastos.io/esc/esc-data-latest.tgz',
-        sizeEstimateGb: 15,
-    },
-    eid: {
-        url: 'https://node-data.elastos.io/eid/eid-data-latest.tgz',
-        sizeEstimateGb: 8,
-    },
-    pg: {
-        url: 'https://node-data.elastos.io/pgp/pgp-data-latest.tgz',
-        sizeEstimateGb: 12,
     },
 });
 
@@ -204,6 +213,21 @@ async function downloadAndExtract(chainId, targetDataDir, opts) {
         return { skipped: true, reason: 'already applied' };
     }
 
+    // v0.5.199 — explicit allow-list. If a caller somewhere ever passes
+    // 'esc', 'eid', or 'pg' (e.g. an older setup.js path that hasn't
+    // been updated, or a future route that re-iterates over all 4
+    // chains), fail FAST and loud rather than silently no-op or extract
+    // a contaminated tarball. SNAPSHOT_SOURCES is the structural lock;
+    // this is the behavioral one — defense in depth.
+    const ALLOWED = new Set(['mainchain']);
+    if (!ALLOWED.has(chainId)) {
+        throw new Error(
+            `EnmSnapshotDownloader: chain "${chainId}" is not allowed to use `
+            + 'snapshots (v0.5.199 policy — EVM chains must cold-sync from peers; '
+            + 'see SNAPSHOT_SOURCES comment for the nodekey-contamination rationale).',
+        );
+    }
+
     const src = SNAPSHOT_SOURCES[chainId];
     if (!src) {
         throw new Error(`EnmSnapshotDownloader: unknown chainId "${chainId}"`);
@@ -249,6 +273,33 @@ async function downloadAndExtract(chainId, targetDataDir, opts) {
             const populated = fs.readdirSync(targetDataDir);
             if (populated.length === 0) {
                 throw new Error(`extraction left "${targetDataDir}" empty — upstream tarball may be malformed`);
+            }
+
+            // v0.5.199 defense-in-depth — strip any embedded node-identity
+            // files from the extracted snapshot. The current mainchain
+            // tarball doesn't ship one (mainchain uses Bitcoin-style P2P),
+            // but if the upstream tarball shape ever changes — or a future
+            // contributor re-adds an EVM entry to SNAPSHOT_SOURCES without
+            // remembering the cycle-13 lesson — this scrub keeps us from
+            // re-introducing duplicate-identity peering failures. Loud-logs
+            // any hits so we notice immediately if upstream changes.
+            try {
+                const stripped = await stripIdentityFiles(targetDataDir);
+                if (stripped.length > 0) {
+                    // eslint-disable-next-line no-console
+                    console.warn(
+                        `[ENM] EnmSnapshotDownloader[${chainId}]: SCRUBBED `
+                        + `${stripped.length} identity file(s) from snapshot — `
+                        + `${stripped.join(', ')}. Upstream tarball shape may have `
+                        + 'changed; review before next release.',
+                    );
+                }
+            } catch (e) {
+                // Best-effort — never fail the extract over the scrub.
+                // eslint-disable-next-line no-console
+                console.warn(
+                    `[ENM] EnmSnapshotDownloader[${chainId}]: identity scrub error: ${e.message}`,
+                );
             }
 
             // P0-11 — mark complete ONLY now, after a verified non-empty extract.
@@ -509,6 +560,45 @@ function extractTarball(tarballPath, targetDir) {
     });
 }
 
+/**
+ * v0.5.199 — walk `dir` recursively and delete any file named `nodekey`.
+ * geth's secp256k1 node-identity key lives under `data/<chain>/nodekey`
+ * (or `data/geth/nodekey` depending on layout); an embedded one in a
+ * snapshot tarball is the cycle-13 contamination signature. Returns the
+ * relative paths removed so the caller can loud-log them.
+ *
+ * Best-effort: ignores permission errors / vanished dirs (callers wrap
+ * in try/catch and never fail the extract over this).
+ *
+ * @param {string} dir Absolute path to walk
+ * @returns {Promise<string[]>} Relative paths of removed files
+ */
+async function stripIdentityFiles(dir) {
+    const removed = [];
+    async function walk(p, relBase) {
+        let entries;
+        try {
+            entries = await fsp.readdir(p, { withFileTypes: true });
+        } catch (_) {
+            return;
+        }
+        for (const ent of entries) {
+            const full = path.join(p, ent.name);
+            const rel = relBase ? path.join(relBase, ent.name) : ent.name;
+            if (ent.isFile() && ent.name === 'nodekey') {
+                try {
+                    await fsp.rm(full, { force: true });
+                    removed.push(rel);
+                } catch (_) { /* best-effort */ }
+            } else if (ent.isDirectory()) {
+                await walk(full, rel);
+            }
+        }
+    }
+    await walk(dir, '');
+    return removed;
+}
+
 module.exports = {
     SNAPSHOT_SOURCES,
     DOWNLOAD_TIMEOUT_MS,
@@ -516,4 +606,5 @@ module.exports = {
     isSnapshotApplied,
     downloadAndExtract,
     downloadAll,
+    stripIdentityFiles,
 };
