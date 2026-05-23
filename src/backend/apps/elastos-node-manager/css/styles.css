@@ -7606,6 +7606,101 @@ body[data-app-size="compact"] .enm-app .enm-overview-meta {
 }
 
 /* ============================================================
+   v0.5.199 — wizard polish (link button, EVM-note, narrow-width)
+   ============================================================
+   Three gaps caught in the v0.5.199 fresh-install screenshots:
+
+   1. `.enm-link-button` was used in setup-conversation.js Card 3
+      ("Use a password I saved earlier", "Generate new instead",
+      etc.) but had ZERO CSS — so it rendered as the browser's
+      default button chrome (white pill, black text, sharp corners)
+      against the dark wizard background. Looked like a half-broken
+      modal. Style it as a proper text link inside button semantics
+      (keyboard-focusable, button-role).
+
+   2. `.enm-council-form-hint-evm` is the second hint line added to
+      Card 5 in v0.5.199 explaining that the snapshot toggle
+      controls mainchain only (EVM sidechains always cold-sync from
+      peers). Without distinct styling it merged into the primary
+      hint and operators missed the disclosure. Render it as a
+      slightly-recessed callout with a subtle left rule.
+
+   3. Card 3 (.enm-master-pw-body) currently centers narrow content
+      in a tall card with mostly empty space. The recover-row stays
+      visually orphaned in the middle. Add explicit vertical
+      rhythm + a small top margin so the link sits closer to the
+      generate CTA rather than floating in negative space. */
+.enm-app .enm-link-button {
+    background: transparent;
+    border: 0;
+    padding: 4px 6px;
+    margin: 0;
+    color: var(--accent, #4cb8ff);
+    font: inherit;
+    font-size: 13px;
+    line-height: 1.4;
+    text-decoration: underline;
+    text-decoration-color: rgba(76, 184, 255, 0.4);
+    text-underline-offset: 3px;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: color 0.15s ease, background 0.15s ease;
+}
+.enm-app .enm-link-button:hover:not(:disabled) {
+    color: var(--accent-strong, #7fd0ff);
+    text-decoration-color: currentColor;
+    background: rgba(76, 184, 255, 0.06);
+}
+.enm-app .enm-link-button:focus-visible {
+    outline: 2px solid var(--accent, #4cb8ff);
+    outline-offset: 2px;
+}
+.enm-app .enm-link-button:disabled {
+    color: var(--text-tertiary);
+    cursor: not-allowed;
+    text-decoration: none;
+}
+
+.enm-app .enm-master-pw-recover-row {
+    margin-top: var(--sp-2, 8px);
+    text-align: center;
+}
+
+.enm-app .enm-council-form-hint-evm {
+    display: block;
+    margin-top: var(--sp-2, 8px);
+    padding-left: var(--sp-3, 12px);
+    border-left: 2px solid rgba(76, 184, 255, 0.35);
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.5;
+    font-style: italic;
+}
+
+/* Narrow-width tightening for the wizard surface. Tighter vertical
+   rhythm + smaller heading so the System-check / "What kind of node"
+   / Master-password / Confirm cards all fit without the heading
+   eating the top half of the viewport. */
+body[data-app-size="narrow"] .enm-app .enm-master-pw-body,
+.enm-app[data-app-size="narrow"] .enm-master-pw-body,
+body[data-app-size="compact"] .enm-app .enm-master-pw-body,
+.enm-app[data-app-size="compact"] .enm-master-pw-body {
+    gap: var(--sp-2, 8px);
+}
+body[data-app-size="narrow"] .enm-app .enm-card5-snapshots,
+.enm-app[data-app-size="narrow"] .enm-card5-snapshots,
+body[data-app-size="compact"] .enm-app .enm-card5-snapshots,
+.enm-app[data-app-size="compact"] .enm-card5-snapshots {
+    margin: var(--sp-2, 8px) auto var(--sp-3, 12px) auto;
+}
+body[data-app-size="narrow"] .enm-app .enm-preflight-list,
+.enm-app[data-app-size="narrow"] .enm-preflight-list,
+body[data-app-size="compact"] .enm-app .enm-preflight-list,
+.enm-app[data-app-size="compact"] .enm-preflight-list {
+    margin: 0 0 var(--sp-3, 12px) 0;
+}
+
+/* ============================================================
    v0.5.168 (Phase 2) — SPV Module pane (components/spv-module.js)
    ============================================================
    Aggregate hero (arbiter SPV height) + per-sidechain rows + an
