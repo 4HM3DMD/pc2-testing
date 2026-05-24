@@ -906,6 +906,11 @@
                 dismiss:     'Dismiss',
                 dont_restart: 'Please don\'t restart any chain during warm-up — startup work (leveldb open, state-sync, peer handshake) will start over from scratch.',
                 generic_explainer: 'Some chains take longer than others to come up. Watching for progress; nothing to do unless this banner is still here in 30+ minutes.',
+                // v0.5.206 — extra context line shown when several chains are
+                // warming up simultaneously (typical post-deploy or post-PC2
+                // restart pattern: all chains spawn within seconds and all
+                // sit in 'starting' for a while).
+                post_restart_hint: 'This is the expected pattern after a deploy, PC2 restart, or "Restart all" — every chain comes back at once and the slowest ones (Main chain leveldb open, EVM state-sync) gate the others.',
                 // Class-aware appendix lines (shown as bullets under the
                 // generic explainer when one or more chains match the
                 // condition). {chains} = comma-joined list of display names.

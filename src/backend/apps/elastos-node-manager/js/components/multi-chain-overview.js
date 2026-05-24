@@ -523,12 +523,13 @@
             + '</li>';
     };
 
-    // v0.5.204 — show the sticky "warming up" banner only when a chain has
-    // been in 'starting' for longer than this. Below this, the per-row chip
-    // alone communicates enough; above, operators start to wonder if
-    // something is broken (the 2026-05-24 incident: 7 min STARTING with no
-    // signal whether to wait or intervene).
-    var STARTUP_BANNER_THRESHOLD_SEC = 120;
+    // v0.5.206 — show the banner almost immediately. v0.5.204 used 120s which
+    // missed the most common case: operator just triggered a deploy/restart,
+    // looks at the overview, sees ALL chains orange "STARTING" and panics
+    // before the banner ever appears. 5s catches every meaningful warm-up
+    // (post-deploy, post-restart, self-heal) while still allowing sub-second
+    // spawn blips to pass without the banner flashing on screen.
+    var STARTUP_BANNER_THRESHOLD_SEC = 5;
 
     /**
      * v0.5.204 — sticky banner under the header that explains long warm-ups.
@@ -599,11 +600,23 @@
         var dontRestart = tFb('overview_pane.startup_banner.dont_restart',
             'Please don\'t restart any chain during warm-up — startup work (leveldb open, state-sync, peer handshake) will start over from scratch.');
         var dismissLabel = tFb('overview_pane.startup_banner.dismiss', 'Dismiss');
+        // v0.5.206 — when 3+ chains are simultaneously starting, that's the
+        // post-deploy / post-PC2-restart / "Restart all" pattern. Surface a
+        // context line so the operator immediately understands "this is
+        // expected" instead of "did the deploy break everything?"
+        var postRestartHtml = '';
+        if (startingChains.length >= 3) {
+            var postRestartHint = tFb('overview_pane.startup_banner.post_restart_hint',
+                'This is the expected pattern after a deploy, PC2 restart, or "Restart all" — every chain comes back at once and the slowest ones (Main chain leveldb open, EVM state-sync) gate the others.');
+            postRestartHtml = '<div class="enm-overview-startup-banner-postrestart">'
+                + escapeHtml(postRestartHint) + '</div>';
+        }
 
         return '<div class="enm-overview-startup-banner" role="status" aria-live="polite">'
             + '<div class="enm-overview-startup-banner-icon" aria-hidden="true">⏱</div>'
             + '<div class="enm-overview-startup-banner-body">'
             +   '<div class="enm-overview-startup-banner-title">' + escapeHtml(title) + '</div>'
+            +   postRestartHtml
             +   (bullets ? '<ul class="enm-overview-startup-banner-bullets">' + bullets + '</ul>' : '')
             +   '<div class="enm-overview-startup-banner-warn"><strong>'
             +     escapeHtml(dontRestart) + '</strong></div>'

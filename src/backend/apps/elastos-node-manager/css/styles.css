@@ -7426,6 +7426,15 @@ body[data-app-size="compact"] .enm-app .enm-usage-card-value,
     color: var(--text-primary);
     margin-bottom: 4px;
 }
+/* v0.5.206 — post-restart context line (shown when 3+ chains starting).
+   Slightly more emphasis than the bullets, less than the don't-restart warn. */
+.enm-app .enm-overview-startup-banner-postrestart {
+    font-size: 12px;
+    color: var(--text-primary);
+    line-height: 1.5;
+    margin: 4px 0 6px 0;
+    font-style: italic;
+}
 .enm-app .enm-overview-startup-banner-bullets {
     list-style: none;
     margin: 4px 0 6px 0;
