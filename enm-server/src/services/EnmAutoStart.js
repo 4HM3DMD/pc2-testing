@@ -58,6 +58,70 @@ const DEPLOY_MARKER_FILE = '.enm-deploy-in-progress';
 // deploy script doesn't permanently disable autoStart. The deploy script
 // also clears the marker on its own failure path, so this is a safety net.
 const DEPLOY_MARKER_MAX_AGE_MS = 10 * 60 * 1000;
+// Re-check cadence while the marker is present. 30s is short enough that
+// chains come back promptly after the deploy clears the marker, long enough
+// that we don't burn CPU on stat() during a multi-minute snapshot extract.
+const DEPLOY_MARKER_RECHECK_MS = 30 * 1000;
+
+// Module-level recheck handle so successive scheduleAutoStartRecheck calls
+// don't pile up overlapping timers (e.g. if runAutoStart somehow gets called
+// twice — defensive only; server.js calls it exactly once on boot).
+let _recheckTimer = null;
+
+/**
+ * v0.5.201 Phase 2 — re-check helper. When Gate 0 in runAutoStart finds the
+ * deploy marker present, it calls this to poll for marker disappearance and
+ * then trigger a fresh runAutoStart. Without this, chains the deploy
+ * intentionally drained (mainchain + arbiter) would stay stopped indefinitely
+ * after the deploy clears the marker.
+ *
+ * Self-terminating: stops once the marker is gone OR the marker has aged past
+ * DEPLOY_MARKER_MAX_AGE_MS. Re-entrant safe: clears any prior timer first.
+ *
+ * @param {object} deps  Same shape as runAutoStart deps (extensionHandle + registry).
+ * @param {string} markerPath  Absolute path to the marker file.
+ */
+function scheduleAutoStartRecheck(deps, markerPath) {
+    if (_recheckTimer) {
+        clearTimeout(_recheckTimer);
+        _recheckTimer = null;
+    }
+    const log = (deps.extensionHandle && deps.extensionHandle.log) || console;
+    _recheckTimer = setTimeout(async () => {
+        _recheckTimer = null;
+        let st = null;
+        try { st = fs.statSync(markerPath); } catch (_) { /* gone */ }
+        if (!st) {
+            log.info(`${ENM_LOG_PREFIX} autoStart: deploy marker cleared — running autoStart now`);
+            try {
+                await runAutoStart(deps);
+            } catch (err) {
+                log.error(`${ENM_LOG_PREFIX} autoStart re-run after deploy failed: ${err.message}`);
+            }
+            return;
+        }
+        const ageMs = Date.now() - st.mtimeMs;
+        if (ageMs >= DEPLOY_MARKER_MAX_AGE_MS) {
+            log.warn(
+                `${ENM_LOG_PREFIX} autoStart: deploy marker now stale `
+                + `(age ${Math.round(ageMs / 1000)}s) — running autoStart with marker ignored`,
+            );
+            try {
+                await runAutoStart(deps);
+            } catch (err) {
+                log.error(`${ENM_LOG_PREFIX} autoStart re-run after stale marker failed: ${err.message}`);
+            }
+            return;
+        }
+        // Marker still present and still fresh — keep waiting.
+        scheduleAutoStartRecheck(deps, markerPath);
+    }, DEPLOY_MARKER_RECHECK_MS);
+    // Don't keep the Node event loop alive purely on this timer — if ENM is
+    // exiting for any reason, let it exit.
+    if (_recheckTimer && typeof _recheckTimer.unref === 'function') {
+        _recheckTimer.unref();
+    }
+}
 
 const RULE_ID = 'AUTOSTART';
 const TIER = 'AUTOMATED-SAFE';
@@ -97,6 +161,12 @@ async function runAutoStart(deps) {
     // before the next deploy step killed it — the final spawn (188337)
     // orphaned because its parent ENM died before the PID file was flushed.
     //
+    // When the marker is present we don't just skip — we schedule a
+    // re-check loop so that ONCE the deploy clears the marker, autoStart
+    // runs automatically. Without this, chains the deploy drained
+    // (mainchain + arbiter) would stay stopped until either the operator
+    // manually started them or ENM was restarted again.
+    //
     // Stale marker safety: if the deploy script crashed and left the
     // marker, we ignore it after DEPLOY_MARKER_MAX_AGE_MS (10 min). That
     // beats the alternative (autoStart silently disabled forever) and
@@ -109,9 +179,11 @@ async function runAutoStart(deps) {
             if (ageMs < DEPLOY_MARKER_MAX_AGE_MS) {
                 log.info(
                     `${ENM_LOG_PREFIX} autoStart: deploy marker present `
-                    + `(${markerPath}, age ${Math.round(ageMs / 1000)}s) — skipping`,
+                    + `(${markerPath}, age ${Math.round(ageMs / 1000)}s) — `
+                    + `skipping; will re-check every ${DEPLOY_MARKER_RECHECK_MS / 1000}s`,
                 );
-                return { scheduled: false, reason: 'deploy-in-progress' };
+                scheduleAutoStartRecheck(deps, markerPath);
+                return { scheduled: false, reason: 'deploy-in-progress', recheck: true };
             }
             log.warn(
                 `${ENM_LOG_PREFIX} autoStart: stale deploy marker `
