@@ -108,6 +108,19 @@ function derive(args) {
     if (a.syncState === 'stalled') { return 'stalled'; }
     if (a.syncState === 'syncing') { return 'syncing'; }
 
+    // v0.5.211 — safety net for "no syncState yet but chain clearly past
+    // startup." The 2026-05-24 incident: EVM chains stuck in 'starting'
+    // forever in the overview because HealthChecker wasn't pushing
+    // networkHeight to SyncTracker for class B (now fixed) — but even with
+    // that fix, there's a window between chain start + first networkHeight
+    // sample where syncState is null. If the chain has peers (handshakes
+    // succeeded → RPC works), 'syncing' is a more honest label than
+    // 'starting' for the operator. peers===0 stays 'starting' (chain still
+    // bootstrapping its peer table).
+    if (typeof a.peers === 'number' && a.peers > 0) {
+        return 'syncing';
+    }
+
     // Alive past grace, RPC responsive (caller didn't pass false), no
     // syncState available yet (height samples not collected yet by the
     // SyncTracker). Best label: 'starting' — we know less than we did when

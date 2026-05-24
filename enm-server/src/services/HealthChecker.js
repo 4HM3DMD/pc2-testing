@@ -457,6 +457,24 @@ class HealthChecker {
                     );
                 }
             }
+            // v0.5.211 — same feed for class B (EVM). primaryHeight returns
+            // networkHeight from eth_syncing.highestBlock; recordNetworkBest
+            // is monotonic so peerMaxHeight (class A only) and networkHeight
+            // (class B) never collide. Without this push, EVM chains had no
+            // networkHeight → syncTracker.syncSnapshot returned blocksBehind:
+            // null → CoarseStateDerive saw syncState:null → state stayed
+            // 'starting' forever even with peers + height advancing.
+            if (this.syncTracker
+                && typeof rpcSummary.networkHeight === 'number'
+                && rpcSummary.networkHeight > 0) {
+                try {
+                    this.syncTracker.recordNetworkBest(chainId, rpcSummary.networkHeight);
+                } catch (err) {
+                    this.extensionHandle.log.warn(
+                        `${ENM_LOG_PREFIX} recordNetworkBest ${chainId} (EVM) failed: ${err.message}`,
+                    );
+                }
+            }
             // F18 timeline — inbound peers count is needed only when arbiter mode.
             if (chainCfg.dpos && chainCfg.dpos.enableArbiter
                 && rpcSummary.ok
@@ -1210,6 +1228,17 @@ class HealthChecker {
                 ? primary.height : undefined;
             const peers = primary && typeof primary.peers === 'number'
                 ? primary.peers : undefined;
+            // v0.5.211 — extract networkHeight from the class-correct probe.
+            // EvmSidechainAdapter.primaryHeight returns it from
+            // eth_syncing.highestBlock; ELA mainchain's primaryHeight doesn't
+            // (mainchain uses peerMaxHeight from the getnodestate neighbor
+            // walk above instead). Returned in the summary so the caller
+            // can feed it to SyncTracker.recordNetworkBest, which unblocks
+            // syncState derivation for EVM chains — without this, EVM
+            // chains were stuck in 'starting' forever in the overview
+            // because syncState stayed null.
+            const networkHeight = primary && typeof primary.networkHeight === 'number'
+                ? primary.networkHeight : undefined;
 
             // Mainchain (Class A) only — the getnodestate neighbor-walk powers
             // F18's inbound/outbound split and the SyncTracker peerMaxHeight
@@ -1265,6 +1294,11 @@ class HealthChecker {
                 ok: typeof height === 'number' && typeof peers === 'number',
                 height,
                 peers,
+                // v0.5.211 — class-correct network-tip for SyncTracker. EVM
+                // chains get this from primary (eth_syncing.highestBlock);
+                // mainchain stays at undefined here and feeds peerMaxHeight
+                // below instead.
+                networkHeight,
                 inboundCount,
                 outboundCount,
                 peerMaxHeight,

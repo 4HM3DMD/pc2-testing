@@ -479,6 +479,12 @@ function buildChainEntry(args) {
         uptimeSec,
         chainClass: meta.chainClass,
         syncState,
+        // v0.5.211 — peers feed for the safety-net branch in derive() that
+        // returns 'syncing' instead of 'starting' when alive past grace +
+        // peers > 0 + no syncState yet. Without this the EVM chains were
+        // stuck in 'starting' for the full window from spawn → first
+        // networkHeight RPC sample (could be minutes on a busy box).
+        peers,
     });
 
     // v0.5.204 — derive `startingReason` from observable signals. Only set
