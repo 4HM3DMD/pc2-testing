@@ -1292,8 +1292,20 @@ class HealthChecker {
                         const isInbound = (n.Inbound === true || n.inbound === true);
                         if (isInbound) inboundCount += 1;
                         else outboundCount += 1;
-                        const h = typeof n.height === 'number' ? n.height
+                        // v0.5.214 — ela's neighbor schema uses `lastblock` for
+                        // the peer's current best height (verified via direct RPC
+                        // call 2026-05-07; same field names chains.js /sync
+                        // already uses). The old order here missed `lastblock`
+                        // entirely → peerMaxHeight stayed undefined → SyncTracker.
+                        // networkHeight stayed null → mainchain in the multi-
+                        // chain overview was stuck reading 'SYNCING' even when
+                        // fully caught up (the 2026-05-25 incident). `height` /
+                        // `Height` / `lastHeight` kept for fallbacks in case
+                        // upstream renames during a normalization pass.
+                        const h = typeof n.lastblock === 'number' ? n.lastblock
+                                : typeof n.startingheight === 'number' ? n.startingheight
                                 : typeof n.Height === 'number' ? n.Height
+                                : typeof n.height === 'number' ? n.height
                                 : typeof n.lastHeight === 'number' ? n.lastHeight
                                 : null;
                         if (h != null && (peerMaxHeight == null || h > peerMaxHeight)) {
