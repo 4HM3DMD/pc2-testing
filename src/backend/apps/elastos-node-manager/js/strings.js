@@ -863,6 +863,50 @@
             starting_waiting_mainchain_rpc: 'waiting for mainchain RPC…',
             starting_warming_up:  'warming up (RPC binding)…',
             stalled_no_progress:  'no height progress for {age}',
+
+            // ============================================================
+            // v0.5.204 — class-aware "what's actually happening" copy for
+            // chains in the 'starting' state past the 60s grace window.
+            // Backed by CouncilOverviewService.computeStartingReason output:
+            //   normal | rpc-not-bound | leveldb-busy | evm-state-sync |
+            //   awaiting-parent | normal-slow
+            //
+            // Pre-v0.5.204: starting chains just showed "warming up (RPC
+            // binding)…" forever, leaving operators with no signal whether
+            // to wait or intervene. The 2026-05-24 incident: mainchain stuck
+            // STARTING for 7+ min while leveldb compacted from a dirty
+            // shutdown, and the UI gave no clue that restarting would just
+            // restart the compaction.
+            // ============================================================
+            starting_reason: {
+                normal:           'starting up…',
+                'rpc-not-bound':  'starting up · RPC server still binding ({elapsed} elapsed)',
+                'leveldb-busy':   'leveldb compaction in progress · {elapsed} elapsed (common after a hard restart; can take 5–15 min)',
+                'evm-state-sync': 'geth state-sync · downloading chain state from peers ({elapsed} elapsed; can take 1–3 hours on a fresh install)',
+                'awaiting-parent': 'waiting for Main chain RPC ({elapsed} elapsed)',
+                'normal-slow':    'starting up · {elapsed} elapsed',
+            },
+
+            // ============================================================
+            // v0.5.204 — sticky banner at the top of the overview pane shown
+            // when ANY chain has been in 'starting' state for > BANNER_THRESHOLD
+            // seconds (frontend default 120s). Reassures the operator that a
+            // long warm-up is expected and tells them NOT to restart anything.
+            // ============================================================
+            startup_banner: {
+                title_one:   '1 chain warming up',
+                title_many:  '{n} chains warming up',
+                dismiss:     'Dismiss',
+                dont_restart: 'Please don\'t restart any chain during warm-up — startup work (leveldb open, state-sync, peer handshake) will start over from scratch.',
+                generic_explainer: 'Some chains take longer than others to come up. Watching for progress; nothing to do unless this banner is still here in 30+ minutes.',
+                // Class-aware appendix lines (shown as bullets under the
+                // generic explainer when one or more chains match the
+                // condition). {chains} = comma-joined list of display names.
+                leveldb_chains:   '{chains}: leveldb compaction is busy. Common after a hard shutdown; can take 5–15 min.',
+                state_sync_chains: '{chains}: geth state-sync is downloading chain state from peers. Pre-pivot phase; can take 1–3 hours on a fresh install.',
+                rpc_binding_chains: '{chains}: RPC server still binding. Usually completes within 60 seconds of warm-up.',
+                awaiting_parent_chains: '{chains}: waiting for Main chain RPC to be reachable.',
+            },
         },
 
         // beta.3.94 (Wave M2.6) — non-mainchain dashboard pane stub

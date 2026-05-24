@@ -7388,6 +7388,84 @@ body[data-app-size="compact"] .enm-app .enm-usage-card-value,
 .enm-app[data-app-size="compact"] .enm-usage-card-value {
     font-size: 16px;
 }
+
+/* ============================================================
+   v0.5.204 — sticky "warming up" banner.
+   Shown above the usage cards when ≥1 chain has been in 'starting' state
+   for > 120s. Reassures operators that long warm-ups are expected and
+   tells them NOT to restart anything (which restarts the warm-up).
+   The 2026-05-24 incident — mainchain stuck STARTING for 7+ min with no
+   signal what was happening — drove this. Amber callout (not red — this
+   isn't an error, just a "be patient + don't touch" status). */
+.enm-app .enm-overview-startup-banner {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--sp-3, 12px);
+    margin: 0 0 var(--sp-3, 12px) 0;
+    padding: var(--sp-3, 12px);
+    background: color-mix(in srgb, var(--warning) 8%, transparent);
+    border: 1px solid color-mix(in srgb, var(--warning) 30%, transparent);
+    border-left: 3px solid var(--warning);
+    border-radius: var(--r-md, 8px);
+    color: var(--text-primary);
+}
+.enm-app .enm-overview-startup-banner-icon {
+    font-size: 18px;
+    flex: 0 0 auto;
+    line-height: 1;
+    padding-top: 2px;
+    color: var(--warning);
+}
+.enm-app .enm-overview-startup-banner-body {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.enm-app .enm-overview-startup-banner-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+}
+.enm-app .enm-overview-startup-banner-bullets {
+    list-style: none;
+    margin: 4px 0 6px 0;
+    padding: 0;
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+.enm-app .enm-overview-startup-banner-bullets li {
+    padding-left: 1em;
+    text-indent: -0.7em;
+    margin-bottom: 2px;
+}
+.enm-app .enm-overview-startup-banner-bullets li::before {
+    content: "• ";
+    color: var(--warning);
+    font-weight: 600;
+}
+.enm-app .enm-overview-startup-banner-warn {
+    font-size: 12px;
+    color: var(--text-primary);
+    margin-top: 6px;
+    line-height: 1.4;
+}
+.enm-app .enm-overview-startup-banner-dismiss {
+    flex: 0 0 auto;
+    background: transparent;
+    border: 0;
+    color: var(--text-tertiary);
+    font-size: 18px;
+    line-height: 1;
+    padding: 4px 8px;
+    cursor: pointer;
+    border-radius: 4px;
+    margin-left: var(--sp-2, 8px);
+}
+.enm-app .enm-overview-startup-banner-dismiss:hover {
+    color: var(--text-primary);
+    background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+}
 /* v0.5.186 — meta-line detail spans. */
 .enm-app .enm-overview-height {
     color: var(--text-secondary);

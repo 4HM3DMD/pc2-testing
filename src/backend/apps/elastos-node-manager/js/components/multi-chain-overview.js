@@ -382,6 +382,10 @@
             escapeHtml(this._summaryLineV2(snap)),
             '</p>',
             '</header>',
+            // v0.5.204 — sticky banner shown when ≥1 chain is in 'starting'
+            // for > STARTUP_BANNER_THRESHOLD_SEC. Reassures the operator
+            // that long warm-ups are expected + warns NOT to restart.
+            this._startupBannerHtml(snap),
             // v0.5.203 — usage cards row. _renderUsageCards re-paints the
             // INNER markup of this container on the 1s /system/usage tick;
             // the wholesale chain-row rebuild happens separately on SSE.
@@ -448,6 +452,27 @@
                     self._routeToChain(row.dataset.chainId);
                 });
             });
+            // v0.5.204 — wire dismiss button on the startup banner. Remembers
+            // which chainIds are dismissed; banner re-shows when a NEW chain
+            // enters starting state (handled in _startupBannerHtml's known-set
+            // check).
+            var dismissBtn = this._root.querySelector('[data-action="dismiss-startup-banner"]');
+            if (dismissBtn) {
+                dismissBtn.addEventListener('click', function () {
+                    if (self._destroyed) { return; }
+                    self._dismissedStartingIds = {};
+                    if (self._lastSnap && Array.isArray(self._lastSnap.chains)) {
+                        self._lastSnap.chains.forEach(function (c) {
+                            if (normalizeStateV2(c.state) === 'starting') {
+                                self._dismissedStartingIds[c.chainId] = true;
+                            }
+                        });
+                    }
+                    // Re-render to immediately hide the banner.
+                    self._lastHtml = null;
+                    if (self._lastSnap) { self._render(self._lastSnap); }
+                });
+            }
         }
 
         // Sparklines — only re-mount the diff. Tear down any chain that
@@ -498,6 +523,104 @@
             + '</li>';
     };
 
+    // v0.5.204 — show the sticky "warming up" banner only when a chain has
+    // been in 'starting' for longer than this. Below this, the per-row chip
+    // alone communicates enough; above, operators start to wonder if
+    // something is broken (the 2026-05-24 incident: 7 min STARTING with no
+    // signal whether to wait or intervene).
+    var STARTUP_BANNER_THRESHOLD_SEC = 120;
+
+    /**
+     * v0.5.204 — sticky banner under the header that explains long warm-ups.
+     * Empty string when no chain qualifies. Groups starting chains by their
+     * computed reason so the banner can say "esc, eid: geth state-sync"
+     * rather than one generic line.
+     * @private
+     */
+    EnmMultiChainOverviewPane.prototype._startupBannerHtml = function (snap) {
+        if (!snap || !Array.isArray(snap.chains)) { return ''; }
+        // If the operator has dismissed this banner for this session AND no
+        // NEW chain has entered 'starting' since dismissal, skip rendering.
+        // Re-render forced when a new starting chain shows up.
+        var startingChains = snap.chains.filter(function (c) {
+            return normalizeStateV2(c.state) === 'starting'
+                && typeof c.uptimeSec === 'number'
+                && c.uptimeSec >= STARTUP_BANNER_THRESHOLD_SEC;
+        });
+        if (startingChains.length === 0) {
+            this._dismissedStartingIds = null;  // reset dismissal when condition clears
+            return '';
+        }
+        // Have any new chains entered starting since dismissal?
+        if (this._dismissedStartingIds) {
+            var allKnown = startingChains.every(function (c) {
+                return self_dismissedHas.call(this, c.chainId);
+            }, this);
+            if (allKnown) { return ''; }
+        }
+
+        // Bucket by reason for class-aware bullet copy.
+        var byReason = {};
+        startingChains.forEach(function (c) {
+            var r = c.startingReason || 'normal-slow';
+            if (!byReason[r]) { byReason[r] = []; }
+            byReason[r].push(c);
+        });
+
+        function namesOf(chains) {
+            return chains.map(function (c) {
+                return chainNameFor(c.chainId, c.displayName);
+            }).join(', ');
+        }
+        function lineForReason(reason, key, fallback) {
+            if (!byReason[reason] || byReason[reason].length === 0) { return ''; }
+            return '<li>' + escapeHtml(tFb('overview_pane.startup_banner.' + key, fallback,
+                { chains: namesOf(byReason[reason]) })) + '</li>';
+        }
+
+        var titleKey = startingChains.length === 1
+            ? 'overview_pane.startup_banner.title_one'
+            : 'overview_pane.startup_banner.title_many';
+        var titleFallback = startingChains.length === 1
+            ? '1 chain warming up'
+            : '{n} chains warming up';
+        var title = tFb(titleKey, titleFallback, { n: startingChains.length });
+
+        var bullets = ''
+            + lineForReason('leveldb-busy', 'leveldb_chains',
+                '{chains}: leveldb compaction is busy. Common after a hard shutdown; can take 5–15 min.')
+            + lineForReason('evm-state-sync', 'state_sync_chains',
+                '{chains}: geth state-sync is downloading chain state from peers. Pre-pivot phase; can take 1–3 hours on a fresh install.')
+            + lineForReason('awaiting-parent', 'awaiting_parent_chains',
+                '{chains}: waiting for Main chain RPC to be reachable.')
+            + lineForReason('rpc-not-bound', 'rpc_binding_chains',
+                '{chains}: RPC server still binding. Usually completes within 60 seconds of warm-up.');
+
+        var dontRestart = tFb('overview_pane.startup_banner.dont_restart',
+            'Please don\'t restart any chain during warm-up — startup work (leveldb open, state-sync, peer handshake) will start over from scratch.');
+        var dismissLabel = tFb('overview_pane.startup_banner.dismiss', 'Dismiss');
+
+        return '<div class="enm-overview-startup-banner" role="status" aria-live="polite">'
+            + '<div class="enm-overview-startup-banner-icon" aria-hidden="true">⏱</div>'
+            + '<div class="enm-overview-startup-banner-body">'
+            +   '<div class="enm-overview-startup-banner-title">' + escapeHtml(title) + '</div>'
+            +   (bullets ? '<ul class="enm-overview-startup-banner-bullets">' + bullets + '</ul>' : '')
+            +   '<div class="enm-overview-startup-banner-warn"><strong>'
+            +     escapeHtml(dontRestart) + '</strong></div>'
+            + '</div>'
+            + '<button type="button" class="enm-overview-startup-banner-dismiss" '
+            +   'data-action="dismiss-startup-banner" aria-label="' + escapeAttr(dismissLabel) + '">×</button>'
+            + '</div>';
+    };
+
+    // v0.5.204 — dismissal tracking helper. Stored on `this` not localStorage:
+    // dismissal lasts for the current page session, so a refresh or a new
+    // chain entering starting state will re-show the banner.
+    function self_dismissedHas(chainId) {
+        if (!this._dismissedStartingIds) { return false; }
+        return this._dismissedStartingIds[chainId] === true;
+    }
+
     /**
      * v0.5.203 — meta line v2: block height shown WITH network height + blocks
      * behind, peer count chip, last-block-age for synced chains. Honest about
@@ -527,18 +650,12 @@
         // v0.5.191 — isFinite guard against NaN/Infinity heights.
         if (klass === 'A' || klass === 'B' || klass === 'E') {
             // Special case: 'starting' state with no height yet — explain WHY.
+            // v0.5.204 — use the backend-derived startingReason + show elapsed
+            // time so the operator has REAL information, not just "warming up."
             var v2 = normalizeStateV2(c.state);
             if (v2 === 'starting' && c.alive) {
-                // Arbiter-specific subtext if we know that's what it is.
-                if (klass === 'D' || c.chainId === 'arbiter') {
-                    return '<span class="enm-overview-meta-muted">'
-                        + escapeHtml(tFb('overview_pane.starting_waiting_mainchain_rpc',
-                            'waiting for mainchain RPC…'))
-                        + '</span>';
-                }
                 return '<span class="enm-overview-meta-muted">'
-                    + escapeHtml(tFb('overview_pane.starting_warming_up',
-                        'warming up (RPC binding)…'))
+                    + escapeHtml(startingReasonCopy(c))
                     + '</span>';
             }
             var hasHeight = (typeof c.height === 'number' && isFinite(c.height));
@@ -573,12 +690,14 @@
         }
         // Class D (arbiter) — same "waiting on mainchain" treatment when
         // starting; otherwise the chip already carries the headline.
+        // v0.5.204 — uses the same startingReasonCopy helper as A/B/E so the
+        // copy is sourced from one place (and arbiter gets the "waiting for
+        // mainchain RPC" copy by way of its 'awaiting-parent' reason).
         if (klass === 'D') {
             var v2d = normalizeStateV2(c.state);
             if (v2d === 'starting' && c.alive) {
                 return '<span class="enm-overview-meta-muted">'
-                    + escapeHtml(tFb('overview_pane.starting_waiting_mainchain_rpc',
-                        'waiting for mainchain RPC…'))
+                    + escapeHtml(startingReasonCopy(c))
                     + '</span>';
             }
             if (c.lastHeightAdvanceMs) {
@@ -664,6 +783,32 @@
         }
         return bits.join(' ');
     };
+
+    /**
+     * v0.5.204 — class-aware "starting" subtitle copy. Pulls the right
+     * string from overview_pane.starting_reason.<reason> and formats {elapsed}
+     * with formatAge(uptimeSec). Backend ships `startingReason`; if the
+     * backend is older (pre-v0.5.204), fall back to the generic warming-up
+     * string so the row still renders cleanly during a rollout.
+     */
+    function startingReasonCopy(c) {
+        var reason = c && c.startingReason;
+        var elapsed = (typeof c.uptimeSec === 'number') ? formatAge(c.uptimeSec) : '—';
+        if (!reason) {
+            // Backwards-compat: older bundle, no startingReason field.
+            return tFb('overview_pane.starting_warming_up', 'warming up (RPC binding)…');
+        }
+        var key = 'overview_pane.starting_reason.' + reason;
+        var fallbacks = {
+            'normal':           'starting up…',
+            'rpc-not-bound':    'starting up · RPC server still binding ({elapsed} elapsed)',
+            'leveldb-busy':     'leveldb compaction in progress · {elapsed} elapsed (common after a hard restart; can take 5–15 min)',
+            'evm-state-sync':   'geth state-sync · downloading chain state from peers ({elapsed} elapsed; can take 1–3 hours on a fresh install)',
+            'awaiting-parent':  'waiting for Main chain RPC ({elapsed} elapsed)',
+            'normal-slow':      'starting up · {elapsed} elapsed',
+        };
+        return tFb(key, fallbacks[reason] || fallbacks['normal-slow'], { elapsed: elapsed });
+    }
 
     /**
      * v0.5.203 — friendly age formatter for "last activity 4s ago" displays.

@@ -87,6 +87,65 @@ const TICK_INTERVAL_MS = 1_000;
 const STARTUP_GRACE_SEC = CoarseStateDerive.STARTUP_GRACE_SEC;
 const SSE_TOPIC = 'council:overview';
 
+/**
+ * v0.5.204 — classify WHY a chain is in 'starting' state, from observable
+ * signals only (no extra RPC). The frontend uses this to surface
+ * class-specific copy ("leveldb compaction in progress", etc.) and to
+ * compose the sticky banner that tells operators "don't restart anything,
+ * this is expected."
+ *
+ * Drove this: the v0.5.203 deploy left ELA mainchain in STARTING for 7+
+ * minutes (leveldb compaction from the prior day's restart storm). The UI
+ * had no signal explaining that — the operator's reasonable read was "did
+ * the deploy break something?" — and the temptation is to hit restart,
+ * which restarts the compaction.
+ *
+ * Returns one of: 'normal' | 'rpc-not-bound' | 'leveldb-busy' |
+ * 'evm-state-sync' | 'awaiting-parent' | 'normal-slow'.
+ *
+ * @param {object} args
+ * @returns {string}
+ */
+function computeStartingReason(args) {
+    const a = args || {};
+    // Within the startup grace window — just spawned, no opinion yet.
+    if (typeof a.uptimeSec === 'number' && a.uptimeSec < 60) { return 'normal'; }
+    // Arbiter (class D) — its _waitForMainchainRpc gate is the most common
+    // starting cause. Surface explicitly so the banner can say "waiting on
+    // mainchain" rather than a generic "warming up."
+    if (a.chainId === 'arbiter' || a.chainClass === 'D') { return 'awaiting-parent'; }
+    // Class A (mainchain) — no peers means RPC isn't bound yet (peers come
+    // from HealthChecker getconnectioncount which goes through the RPC).
+    // High CPU + uptime > 60s is the leveldb-busy signature: ela is
+    // compacting / repairing leveldb on startup. Common after a hard
+    // shutdown (cgroup-kill from pc2-node, SIGKILL during deploy storm).
+    if (a.chainClass === 'A') {
+        if ((a.peers == null || a.peers === 0)
+            && typeof a.cpuPct === 'number' && a.cpuPct > 50) {
+            return 'leveldb-busy';
+        }
+        if (a.peers == null || a.peers === 0) {
+            return 'rpc-not-bound';
+        }
+        return 'normal-slow';
+    }
+    // Class B (EVM sidechains) — has peers + no/low height + high CPU is the
+    // geth fast-sync state-download signature. Pre-pivot phase pulls the
+    // entire state trie from peers; height stays at 0 until pivot completes,
+    // then jumps to ~tip. Normal but can take 1-3 hours on a fresh install.
+    if (a.chainClass === 'B') {
+        const hasPeers = (typeof a.peers === 'number' && a.peers > 0);
+        const lowHeight = (a.height == null || a.height < 1000);
+        const highCpu = (typeof a.cpuPct === 'number' && a.cpuPct > 30);
+        if (hasPeers && lowHeight && highCpu) { return 'evm-state-sync'; }
+        if (!hasPeers) { return 'rpc-not-bound'; }
+        return 'normal-slow';
+    }
+    // Class C (oracles) + everything else — just slow startup.
+    if (a.peers == null || a.peers === 0) { return 'rpc-not-bound'; }
+    return 'normal-slow';
+}
+
 class CouncilOverviewService {
     /**
      * @param {object} deps
@@ -386,6 +445,19 @@ function buildChainEntry(args) {
         } catch (_) { /* peers stays null */ }
     }
 
+    // v0.5.204 — `startingReason` field for the operator-facing "what's
+    // actually happening" subtitle + the sticky banner. Only meaningful when
+    // unifiedState === 'starting'; null otherwise. Computed from observable
+    // signals (uptime + peers + height + CPU) without any extra RPC.
+    //
+    // Operator pain point that drove this: after the v0.5.203 deploy, ELA
+    // mainchain stayed in STARTING for 7+ minutes due to leveldb compaction
+    // from yesterday's restart storm, with no UI signal explaining "this is
+    // expected, don't restart anything." The reasons below let the frontend
+    // surface class-specific copy ("leveldb compaction in progress",
+    // "geth state-sync downloading from peers", etc.) instead of just an
+    // opaque orange chip.
+
     // v0.5.203 — use the shared 7-tier state helper so the overview + the
     // chain-detail dashboard report IDENTICAL state strings. Before this,
     // the overview said "Running" for any alive chain past 60s grace while
@@ -398,6 +470,23 @@ function buildChainEntry(args) {
         chainClass: meta.chainClass,
         syncState,
     });
+
+    // v0.5.204 — derive `startingReason` from observable signals. Only set
+    // when unifiedState==='starting'; the frontend uses it for class-specific
+    // copy ("leveldb compaction in progress", "geth state-sync downloading
+    // from peers", etc.) and to compose the sticky banner that warns the
+    // operator not to restart anything while warm-up is in flight.
+    let startingReason = null;
+    if (unifiedState === 'starting' && alive) {
+        startingReason = computeStartingReason({
+            chainClass: meta.chainClass,
+            chainId: cId,
+            uptimeSec,
+            peers,
+            height,
+            cpuPct: processMetrics ? processMetrics.cpuPct : null,
+        });
+    }
 
     return {
         chainId: cId,
@@ -416,6 +505,21 @@ function buildChainEntry(args) {
         // separate field for any consumer that depended on the old vocabulary
         // strictly. Drop in v0.5.205 once frontend has fully migrated.
         legacyState: state,
+        // v0.5.204 — null unless state==='starting'. One of:
+        //   'normal' — just spawned (<60s grace)
+        //   'rpc-not-bound' — alive past grace, no peers reported yet (RPC
+        //                     server still binding)
+        //   'leveldb-busy' — class A, no peers (RPC unbound), CPU high —
+        //                    leveldb compaction/repair after dirty shutdown.
+        //                    The mainchain ~7-min STARTING case the
+        //                    operator hit on 2026-05-24.
+        //   'evm-state-sync' — class B, has peers, height not yet (or low),
+        //                    CPU high — geth fast-sync state download.
+        //                    Normal pre-pivot behaviour.
+        //   'awaiting-parent' — class D (arbiter), waiting for mainchain RPC
+        //   'normal-slow' — alive, has peers, but height not yet — could be
+        //                   slow RPC bind or block import warmup
+        startingReason,
         height,
         networkHeight,
         blocksBehind,
