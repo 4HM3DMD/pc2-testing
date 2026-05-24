@@ -245,14 +245,18 @@
                 self._renderUsageCards();
             }).catch(function () { /* network blip — keep last value visible */ });
         }
-        // Fire immediately, then on a 1s tick. Use visibility-pause to stop
-        // when the tab is hidden so we don't burn cycles on a background tab.
+        // v0.5.208 — usage poll cadence dropped from 1s back to 2s. The 1s
+        // cadence saturated /system/usage on a CPU-busy host (all 4 chains
+        // at 100% CPU during leveldb compaction + state-sync). 2s still
+        // feels immediate without compounding load with the CouncilOverview
+        // 2s tick.
+        var USAGE_POLL_MS = 2000;
         tick();
         if (typeof root.enmUseVisibilityPause === 'function') {
-            this._usagePollHandle = root.enmUseVisibilityPause(tick, 1000);
+            this._usagePollHandle = root.enmUseVisibilityPause(tick, USAGE_POLL_MS);
         } else {
             this._usagePollHandle = { stop: (function () {
-                var id = setInterval(tick, 1000);
+                var id = setInterval(tick, USAGE_POLL_MS);
                 return function () { clearInterval(id); };
             })() };
         }

@@ -77,12 +77,16 @@ const PKG = require('../../package.json');
 
 // v0.5.203 — per-chain disk-usage cache for /system/usage. dirSizeSafe walks
 // the on-disk tree which is cheap for empty chains and ~150ms for a populated
-// mainchain (~30GB extracted snapshot). 30s TTL is plenty for an
-// operator-facing display — chain data grows by megabytes per minute, not GB.
+// mainchain (~30GB extracted snapshot).
+// v0.5.208 — TTL bumped 30s → 60s. /system/usage is now polled every 2s by
+// the frontend; with 30s TTL the disk walk fired every 30s, which on a
+// CPU-saturated box (mainchain + 3 EVM all at 100%) added measurable I/O
+// pressure. Chain data grows by megabytes per minute — 60s is well within
+// "visibly current" for the operator-facing display.
 let _perChainDiskCache = { ts: 0, data: {} };
 async function getPerChainDiskMb() {
     const now = Date.now();
-    if (now - _perChainDiskCache.ts < 30_000) {
+    if (now - _perChainDiskCache.ts < 60_000) {
         return _perChainDiskCache.data;
     }
     const out = {};

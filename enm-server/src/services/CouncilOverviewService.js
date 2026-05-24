@@ -76,14 +76,18 @@ const ConfigStore = require('./ConfigStore');
 const ProcessMetrics = require('./ProcessMetrics');
 const CoarseStateDerive = require('./CoarseStateDerive');
 
-// v0.5.203 — tick interval dropped from 5s → 1s per operator directive
-// ("refresh should be immediate not 5 seconds"). The overview publishes on
-// every event (chain exit / autoStart success) AND on this tick; reducing the
-// tick to 1s makes per-chain process metrics + height bumps surface within a
-// second instead of up to 5s. Cost: one in-process snapshot build per second
-// (no RPC), one SSE event per second to active subscribers. The build is
-// cheap (one statSync per chain + one ProcessMetrics call per alive PID).
-const TICK_INTERVAL_MS = 1_000;
+// v0.5.208 — tick interval set to 2s. v0.5.203 dropped 5s → 1s per the
+// "refresh should be immediate" directive, but on a CPU-saturated box
+// (mainchain leveldb compaction + 3 EVM doing state-sync = ~800% CPU
+// across 8 cores) the 1s tick + per-chain /proc reads + SSE publishes
+// starved Express's request handling — health endpoint took 8s to
+// respond, /chains timed out, all frontend cards showed errors. 2s is
+// still "feels immediate" while leaving room for the chain processes
+// to actually run + Express to serve requests. Event-driven publishes
+// (chain exit, autoStart success) still fire instantly regardless of
+// tick — operators get sub-second feedback on state transitions even
+// at this tick.
+const TICK_INTERVAL_MS = 2_000;
 const STARTUP_GRACE_SEC = CoarseStateDerive.STARTUP_GRACE_SEC;
 const SSE_TOPIC = 'council:overview';
 

@@ -52,6 +52,15 @@ const PAGE_SIZE_BYTES = 4096;
 // stale baseline and report a huge spike).
 const _cpuSampleCache = new Map();
 
+// v0.5.208 — per-PID result cache to stop back-to-back ticks from re-reading
+// /proc for the same PID. The CouncilOverviewService ticks every 2s; if a
+// frontend poll for /system/usage hits the API mid-tick the cache means
+// only ONE actual /proc read per PID per RESULT_CACHE_TTL_MS regardless of
+// how many callers ask. Significant relief on a CPU-saturated host where
+// /proc reads themselves contend for CPU.
+const _resultCache = new Map();
+const RESULT_CACHE_TTL_MS = 3_000;
+
 /**
  * Read /proc/<pid>/stat field 14+15 (utime+stime — total CPU time in
  * USER_HZ ticks consumed by this process).
@@ -152,6 +161,18 @@ function getMetrics(pid) {
         return result;
     }
 
+    // v0.5.208 — result cache. Saves redundant /proc reads when multiple
+    // callers (CouncilOverviewService tick + /system/usage HTTP poll +
+    // chain-card /chains/:id detail) ask for the same PID inside a 3s
+    // window. CPU% deltas stay correct because the cache stores the
+    // FINAL result for the PID (the in-flight cpuSampleCache the delta
+    // math uses is untouched — a cached result was computed against a
+    // real baseline so re-reading isn't needed).
+    const cached = _resultCache.get(pid);
+    if (cached && (Date.now() - cached.ts) < RESULT_CACHE_TTL_MS) {
+        return cached.result;
+    }
+
     // RSS / FD / threads are point-in-time reads.
     const rssBytes = readRssBytes(pid);
     if (typeof rssBytes === 'number') {
@@ -181,26 +202,32 @@ function getMetrics(pid) {
             result.cpuPct = Math.round(cpuPct * 10) / 10;
         }
     }
+    // v0.5.208 — store in result cache for callers within RESULT_CACHE_TTL_MS.
+    _resultCache.set(pid, { ts: nowMs, result });
     return result;
 }
 
 /**
- * Drop the sample cache. Called by tests; not normally needed by callers.
+ * Drop both the sample + result caches. Called by tests; not normally needed
+ * by callers.
  * @returns {void}
  */
 function resetCache() {
     _cpuSampleCache.clear();
+    _resultCache.clear();   // v0.5.208 — also drop the new result cache
 }
 
 /**
- * Drop a single PID's sample. Called by NativeProcessService when a chain
- * exits, so the next process under a recycled PID starts with a fresh
- * baseline rather than computing a delta against a dead process's ticks.
- * Idempotent.
+ * Drop a single PID's sample + cached result. Called by NativeProcessService
+ * when a chain exits, so the next process under a recycled PID starts with
+ * a fresh baseline rather than computing a delta against a dead process's
+ * ticks. Idempotent.
  * @param {number} pid
  */
 function dropPid(pid) {
-    if (typeof pid === 'number') { _cpuSampleCache.delete(pid); }
+    if (typeof pid !== 'number') { return; }
+    _cpuSampleCache.delete(pid);
+    _resultCache.delete(pid);   // v0.5.208 — also evict from result cache
 }
 
 module.exports = {
