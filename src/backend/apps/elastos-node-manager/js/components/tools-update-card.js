@@ -470,13 +470,31 @@
         // (auth failure, route error). Network-unreachable cases land
         // in the main _render path with status='fallback'/'stale'.
         this.root.dataset.severity = 'unknown';
+        // v0.5.212 — added a "Check now" button so the operator isn't
+        // locked into the 6-hour retry cadence after a transient failure.
+        // The pre-v0.5.212 final-line "Will retry in 6 hours" was
+        // operator-unfriendly: if the network or GitHub recovered 30s
+        // later, there was no UI affordance to recheck — only a manual
+        // page reload triggered a fresh _refresh().
+        var self = this;
         this.root.innerHTML =
             '<header class="enm-tools-update-head">'
             +   '<h3>Binary update</h3>'
             +   '<p class="enm-stub" style="margin:0;text-align:left;padding:0">'
             +     'Couldn\'t check for binary updates. Will retry in 6 hours.'
+            +     ' <button type="button" class="enm-link-button" data-action="updates-retry-now"'
+            +     ' style="margin-left:6px;">Check now</button>'
             +   '</p>'
             + '</header>';
+        var btn = this.root.querySelector('[data-action="updates-retry-now"]');
+        if (btn) {
+            btn.addEventListener('click', function () {
+                if (self._destroyed) { return; }
+                btn.disabled = true;
+                btn.textContent = 'Checking…';
+                self._refresh();
+            });
+        }
     };
 
     // ---- helpers ----

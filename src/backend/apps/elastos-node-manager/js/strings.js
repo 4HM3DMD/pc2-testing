@@ -1004,6 +1004,11 @@
             primary_metric_off:          '—',
             primary_metric_unconfigured: '—',
             primary_label_height:        'block height',
+            // v0.5.212 — was missing → arbiter (class D) card showed
+            // literal "[CHAIN_CARD.PRIMARY_LABEL_SPV_HEIGHT]" instead of
+            // the height label. Found in v0.5.211 post-deploy audit.
+            primary_label_spv_height:        'SPV height',
+            primary_label_spv_header_height: 'SPV header height',
             primary_label_off:           'tap power to start',
             primary_label_unconfigured:  'tap to configure',
             // 0.2.0-alpha.4 — caption swap during initial peer

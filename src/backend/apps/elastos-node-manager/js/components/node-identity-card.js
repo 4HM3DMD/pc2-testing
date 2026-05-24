@@ -152,8 +152,22 @@
                     + '<h3 id="' + self._titleId + '">Node identity</h3>'
                     + '<p class="enm-stub" style="margin:0;text-align:left;padding:0">'
                     + 'Couldn’t read identity — retrying every 60s.'
+                    + ' <button type="button" class="enm-link-button" data-action="identity-retry-now"'
+                    + ' style="margin-left:6px;">Try now</button>'
                     + '</p>'
                     + '</header>';
+                // v0.5.212 — wire the retry button so the operator isn't
+                // locked into the 60s polling cadence after a transient
+                // /system/identity failure.
+                var retryBtn = self.root.querySelector('[data-action="identity-retry-now"]');
+                if (retryBtn) {
+                    retryBtn.addEventListener('click', function () {
+                        if (self._destroyed) { return; }
+                        retryBtn.disabled = true;
+                        retryBtn.textContent = 'Trying…';
+                        self._poll();
+                    });
+                }
             }
         });
     };
