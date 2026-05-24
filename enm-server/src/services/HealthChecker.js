@@ -1237,8 +1237,25 @@ class HealthChecker {
             // syncState derivation for EVM chains — without this, EVM
             // chains were stuck in 'starting' forever in the overview
             // because syncState stayed null.
-            const networkHeight = primary && typeof primary.networkHeight === 'number'
+            //
+            // v0.5.213 — when adapter reports synced===true (eth_syncing
+            // returned false AND chain has blocks AND has peers, per
+            // EvmSidechainAdapter.primaryHeight), set networkHeight = height.
+            // Without this fix, EVM chains caught up to tip showed 'syncing'
+            // forever in the overview: eth_syncing=false means the adapter
+            // can't return networkHeight from it; SyncTracker had no network
+            // reference; blocksBehind stayed null; CoarseStateDerive's safety
+            // net returned 'syncing' (operator screenshot today: ESC fully
+            // synced reading 'syncing'). Since the chain reports itself
+            // synced, its own height IS the tip we know — push that.
+            let networkHeight = primary && typeof primary.networkHeight === 'number'
                 ? primary.networkHeight : undefined;
+            if (networkHeight === undefined
+                && primary && primary.synced === true
+                && typeof primary.height === 'number'
+                && primary.height > 0) {
+                networkHeight = primary.height;
+            }
 
             // Mainchain (Class A) only — the getnodestate neighbor-walk powers
             // F18's inbound/outbound split and the SyncTracker peerMaxHeight
