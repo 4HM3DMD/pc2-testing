@@ -245,12 +245,13 @@
                 self._renderUsageCards();
             }).catch(function () { /* network blip — keep last value visible */ });
         }
-        // v0.5.208 — usage poll cadence dropped from 1s back to 2s. The 1s
-        // cadence saturated /system/usage on a CPU-busy host (all 4 chains
-        // at 100% CPU during leveldb compaction + state-sync). 2s still
-        // feels immediate without compounding load with the CouncilOverview
-        // 2s tick.
-        var USAGE_POLL_MS = 2000;
+        // v0.5.209 — usage poll cadence 2s → 3s. v0.5.208 took us from 1s →
+        // 2s after the 1s saturated /system/usage on a CPU-busy box; even at
+        // 2s the operator reported the host was still struggling (mainchain
+        // not coming up cleanly). 3s matches the CouncilOverviewService tick
+        // so backend + frontend don't compound. Still under any perceptual
+        // "this is slow" threshold for a dashboard.
+        var USAGE_POLL_MS = 3000;
         tick();
         if (typeof root.enmUseVisibilityPause === 'function') {
             this._usagePollHandle = root.enmUseVisibilityPause(tick, USAGE_POLL_MS);

@@ -87,7 +87,13 @@ const CoarseStateDerive = require('./CoarseStateDerive');
 // (chain exit, autoStart success) still fire instantly regardless of
 // tick — operators get sub-second feedback on state transitions even
 // at this tick.
-const TICK_INTERVAL_MS = 2_000;
+// v0.5.209 — dialed down further 2s → 3s. Even at 2s the operator was
+// reporting "main chain yet to start and so buggy" — the per-tick work
+// + the host being CPU-saturated from chain processes meant ENM was
+// still contending. 3s gives the host enough breathing room while
+// staying well below the perceptual "this is slow" threshold for an
+// operator dashboard.
+const TICK_INTERVAL_MS = 3_000;
 const STARTUP_GRACE_SEC = CoarseStateDerive.STARTUP_GRACE_SEC;
 const SSE_TOPIC = 'council:overview';
 
