@@ -2,19 +2,28 @@
  * Copyright (C) 2026-present Elacity
  * SPDX-License-Identifier: AGPL-3.0
  *
- * components/spv-module.js — v0.5.168 (Phase 2) — the SPV Module pane.
+ * components/spv-module.js — v0.5.168 (Phase 2), v0.5.200 (semantic relabel).
  *
- * Mounts when the chain selector is set to "SPV Module" (key='spv'). SPV
- * (class E) is NOT a standalone process: its state is embedded in the EVM
- * sidechains (esc/eid/pg keep their own light-client logs under
- * data/logs-spv) and in the arbiter (getspvheight for its own SPV view +
- * getsidechainblockheight per bridged sidechain). This pane aggregates all
- * of that from the backend GET /spv endpoint:
+ * Mounts when the chain selector is set to "SPV Module" (key='spv'). Two
+ * separate SPV systems run on a Council node:
  *
- *   - Hero: the arbiter's own SPV height (the headline number) + arbiter state.
- *   - Per-sidechain rows: each EVM sidechain's SPV-tracked block height (from
- *     the arbiter) + a "View SPV logs" affordance that tails its on-disk
- *     logs-spv via GET /spv/:id/logs.
+ *   1. The Arbiter has its OWN SPV that tracks the ELA Main chain tip
+ *      (headers-only, fast) — exposed via arbiter `getspvheight`. This is the
+ *      headline hero number.
+ *
+ *   2. Each EVM sidechain (esc/eid/pg) runs its OWN embedded SPV for
+ *      cross-chain deposit verification. Upstream does NOT expose its height
+ *      via RPC, so the only external liveness signal is the on-disk
+ *      `<chainDir>/data/logs-spv/<timestamp>.log` mtime + last line. We
+ *      render that as an "Active / Stale / No data" badge per row.
+ *
+ * What the per-sidechain NUMBER (`arbiterProcessedHeight`) means: NOT a SPV
+ * height. It's the height the Arbiter has finished walking for cross-chain
+ * transactions (withdraws / illegal-evidence / failed deposits). Persisted
+ * every 1000 blocks by the arbiter. Slow to catch up for chains with many
+ * blocks (ESC ~36M, EID ~27M). The old "Sidechain SPV heights" label was
+ * misleading and led operators to think SPV was broken when this number
+ * sat at half the network tip — v0.5.200 relabel corrects this.
  *
  * Read-only. Polls /spv every 5s (visibility-paused so a hidden tab stops
  * fetching). Logs are fetched on demand, not polled.
@@ -72,6 +81,22 @@
     /** Format a height number with thousands separators; em-dash when null. */
     function fmtHeight(n) {
         return (typeof n === 'number' && isFinite(n)) ? n.toLocaleString() : '—';
+    }
+
+    /**
+     * v0.5.200 — render an age duration ("3s", "12m", "2h", "5d") for the
+     * embedded-SPV badge tooltip. Tight + friendly; matches the elapsed-time
+     * convention used by chain-card's lastBlock display.
+     *
+     * @param {number|null} sec
+     * @returns {string}
+     */
+    function fmtAge(sec) {
+        if (typeof sec !== 'number' || !isFinite(sec) || sec < 0) { return '—'; }
+        if (sec < 60) { return Math.round(sec) + 's'; }
+        if (sec < 3600) { return Math.round(sec / 60) + 'm'; }
+        if (sec < 86400) { return Math.round(sec / 3600) + 'h'; }
+        return Math.round(sec / 86400) + 'd';
     }
 
     function EnmSpvModule(opts) {
@@ -170,11 +195,12 @@
         var html = ''
             + '<p class="enm-spv-intro">'
             +   escapeHtml(tFb('spv_module.intro',
-                    'SPV (light-client) sync is embedded in the EVM sidechains and the '
-                    + 'Arbiter — there is no separate SPV process. This view aggregates '
-                    + 'each chain’s SPV-tracked height.'))
+                    'Two separate SPV systems run on a Council node: the Arbiter has its '
+                    + 'own SPV that tracks the ELA Main chain (the headline number below), '
+                    + 'and each EVM sidechain runs its own embedded SPV for cross-chain '
+                    + 'deposit verification. This view aggregates both.'))
             + '</p>'
-            // ---- Hero: arbiter SPV height ----
+            // ---- Hero: arbiter SPV height (mainchain tip via arbiter's SPV) ----
             + '<div class="enm-card enm-spv-hero">'
             +   '<div class="enm-spv-hero-label">'
             +     escapeHtml(tFb('spv_module.hero_label', 'Arbiter SPV height'))
@@ -183,25 +209,81 @@
             +   '<div class="enm-spv-hero-sub">'
             +     '<span class="enm-spv-dot ' + arbiterStateClass + '" aria-hidden="true"></span>'
             +     escapeHtml(arbiterStateLabel)
+            +     ' &middot; '
+            +     escapeHtml(tFb('spv_module.hero_sub', 'Tracks the ELA Main chain tip.'))
             +   '</div>'
             + '</div>';
 
-        // ---- Per-sidechain SPV heights ----
+        // ---- Per-sidechain catch-up + embedded SPV liveness ----
+        // v0.5.200 — relabeled. The number column is the ARBITER's per-block
+        // walk position for cross-chain transactions (NOT a SPV height); the
+        // badge column is the EMBEDDED SPV liveness inferred from
+        // logs-spv/<file>.log mtime (the embedded SPV's actual height isn't
+        // RPC-exposed by upstream Elastos).
         html += '<div class="enm-card enm-spv-sidechains">'
-            + '<h3>' + escapeHtml(tFb('spv_module.sidechains_title', 'Sidechain SPV heights')) + '</h3>';
+            + '<h3>' + escapeHtml(tFb('spv_module.sidechains_title',
+                'Arbiter ↔ sidechain catch-up')) + '</h3>'
+            + '<p class="enm-spv-sidechains-intro">'
+            +   escapeHtml(tFb('spv_module.sidechains_intro',
+                  'How far the Arbiter has walked through each sidechain looking for '
+                  + 'cross-chain transactions (withdraws, illegal evidence, failed '
+                  + 'deposits). This catches up slowly for chains with many blocks — '
+                  + 'the Arbiter walks every block and persists progress every 1,000 '
+                  + 'blocks. Not the same as the sidechain block height or SPV height.'))
+            + '</p>';
         if (sidechains.length === 0) {
             html += '<p class="enm-spv-empty">'
                 + escapeHtml(tFb('spv_module.no_sidechains',
-                    'No EVM sidechains are configured, so there are no SPV heights to show.'))
+                    'No EVM sidechains are configured.'))
                 + '</p>';
         } else {
+            // Column header row so the per-row numbers + badge are scannable.
+            html += '<div class="enm-spv-row enm-spv-row-head" aria-hidden="true">'
+                + '<span class="enm-spv-dot" style="visibility:hidden"></span>'
+                + '<span class="enm-spv-name enm-spv-col-name">'
+                +   escapeHtml(tFb('spv_module.col_name', 'Sidechain')) + '</span>'
+                + '<span class="enm-spv-height enm-spv-col-arbiter">'
+                +   escapeHtml(tFb('spv_module.col_arbiter', 'Arbiter processed')) + '</span>'
+                + '<span class="enm-spv-embedded enm-spv-col-embedded">'
+                +   escapeHtml(tFb('spv_module.col_embedded', 'Embedded SPV')) + '</span>'
+                + '<span class="enm-spv-actions"></span>'
+                + '</div>';
             sidechains.forEach(function (sc) {
                 var name = sc.displayName || SIDE_NAME_FALLBACK[sc.chainId] || sc.chainId;
                 var dotClass = sc.running ? 'running' : 'stopped';
+                // v0.5.200 — backend now serves arbiterProcessedHeight; fall
+                // back to the deprecated spvBlockHeight alias for any older
+                // bundle still in flight during the rollout.
+                var arbiterHeight = (typeof sc.arbiterProcessedHeight === 'number')
+                    ? sc.arbiterProcessedHeight
+                    : sc.spvBlockHeight;
+                var emb = sc.embeddedSpv || { state: 'unknown', ageSeconds: null, lastLine: null };
+                var badgeState = emb.state || 'unknown';
+                var badgeLabelKey = 'spv_module.embedded_' + badgeState;
+                var badgeLabelFallback = badgeState === 'active' ? 'Active'
+                    : (badgeState === 'stale' ? 'Stale' : 'No data');
+                var badgeLabel = tFb(badgeLabelKey, badgeLabelFallback);
+                var hintKey = 'spv_module.embedded_' + badgeState + '_hint';
+                var hintFallback = (badgeState === 'active')
+                    ? 'Last embedded-SPV log activity {age} ago.'
+                    : (badgeState === 'stale'
+                        ? 'No embedded-SPV log activity for {age}. Usually means the chain process or its SPV thread is down.'
+                        : 'No embedded-SPV log files yet — the chain may be too freshly installed, or the SPV thread hasn\'t written anything.');
+                var hint = tFb(hintKey, hintFallback, { age: fmtAge(emb.ageSeconds) });
+                if (emb.lastLine) {
+                    hint += '\n' + tFb('spv_module.embedded_last_event',
+                        'Last event: {line}', { line: emb.lastLine });
+                }
+
                 html += '<div class="enm-spv-row" data-chain="' + escapeHtml(sc.chainId) + '">'
                     + '<span class="enm-spv-dot ' + dotClass + '" aria-hidden="true"></span>'
                     + '<span class="enm-spv-name">' + escapeHtml(name) + '</span>'
-                    + '<span class="enm-spv-height">' + escapeHtml(fmtHeight(sc.spvBlockHeight)) + '</span>';
+                    + '<span class="enm-spv-height">' + escapeHtml(fmtHeight(arbiterHeight)) + '</span>'
+                    + '<span class="enm-spv-embedded enm-spv-embedded-' + escapeHtml(badgeState) + '" '
+                    +   'title="' + escapeHtml(hint) + '">'
+                    +   escapeHtml(badgeLabel)
+                    + '</span>'
+                    + '<span class="enm-spv-actions">';
                 if (sc.logsSpvPresent) {
                     html += '<button type="button" class="enm-btn enm-btn-secondary enm-spv-logs-btn" '
                         + 'data-chain="' + escapeHtml(sc.chainId) + '">'
@@ -212,7 +294,7 @@
                         + escapeHtml(tFb('spv_module.no_logs_yet', 'No SPV logs yet'))
                         + '</span>';
                 }
-                html += '</div>';
+                html += '</span></div>';
             });
         }
         html += '</div>';
@@ -276,5 +358,5 @@
 
     root.EnmSpvModule = EnmSpvModule;
     // Exported for tests.
-    root.EnmSpvModule._internal = { tFb, fmtHeight, escapeHtml };
+    root.EnmSpvModule._internal = { tFb, fmtHeight, fmtAge, escapeHtml };
 }(typeof window !== 'undefined' ? window : globalThis));

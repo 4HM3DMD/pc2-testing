@@ -7771,6 +7771,69 @@ body[data-app-size="compact"] .enm-app .enm-preflight-list,
 .enm-app .enm-spv-no-logs { color: var(--text-tertiary); font-size: 12px; }
 .enm-app .enm-spv-empty { color: var(--text-secondary); font-size: 13px; margin: 0; }
 
+/* v0.5.200 — sidechain row redesign: header row + embedded-SPV badge column +
+   actions slot. Old "Sidechain SPV heights" framing was misleading (the
+   number is the arbiter's per-block-walk processing position, NOT a SPV
+   height — see routes/spv.js + ENM_QA_CATALOG cycle-14 audit). The badge is
+   the only signal we can derive about the EVM-sidechain-embedded SPV's
+   liveness since upstream Elastos doesn't expose its height via RPC. */
+.enm-app .enm-spv-sidechains-intro {
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.5;
+    margin: 0 0 var(--sp-2, 8px) 0;
+}
+.enm-app .enm-spv-row-head {
+    border-bottom: 1px solid var(--border-strong, var(--border-color, var(--border-subtle)));
+    padding-bottom: var(--sp-1, 4px);
+    color: var(--text-tertiary);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.enm-app .enm-spv-row-head .enm-spv-name,
+.enm-app .enm-spv-row-head .enm-spv-height,
+.enm-app .enm-spv-row-head .enm-spv-embedded {
+    color: var(--text-tertiary);
+    font-size: 11px;
+    font-weight: 500;
+    background: transparent;   /* header doesn't get the badge pill */
+    border: 0;
+    padding: 0;
+}
+.enm-app .enm-spv-embedded {
+    flex: 0 0 auto;
+    min-width: 84px;
+    text-align: center;
+    font-size: 12px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    font-variant-numeric: tabular-nums;
+    cursor: help;        /* signals the tooltip on hover */
+}
+.enm-app .enm-spv-embedded-active {
+    background: rgba(46, 160, 67, 0.12);
+    border-color: rgba(46, 160, 67, 0.35);
+    color: var(--success, #2ea043);
+}
+.enm-app .enm-spv-embedded-stale {
+    background: rgba(218, 158, 0, 0.12);
+    border-color: rgba(218, 158, 0, 0.4);
+    color: var(--warning, #da9e00);
+}
+.enm-app .enm-spv-embedded-unknown {
+    background: transparent;
+    border-color: var(--border-color, var(--border-subtle));
+    color: var(--text-tertiary);
+}
+.enm-app .enm-spv-actions {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2, 8px);
+}
+
 /* Shared state dot — green when running, dim when stopped, hollow when absent. */
 .enm-app .enm-spv-dot {
     width: 9px;

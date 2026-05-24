@@ -1562,25 +1562,59 @@
         // SPV (class E) is embedded in the EVM sidechains + the arbiter; this
         // pane aggregates getspvheight + per-sidechain getsidechainblockheight
         // and tails each sidechain's on-disk logs-spv on demand.
+        //
+        // v0.5.200 relabel — the per-sidechain `getsidechainblockheight` value
+        // is NOT a SPV height (it is the arbiter's per-block-walk processing
+        // position for cross-chain transactions). The previous "Sidechain SPV
+        // heights" framing was misleading and made operators think SPV was
+        // broken. Renamed to "Arbiter ↔ sidechain catch-up" + added an
+        // explicit "Embedded SPV" badge per row that reflects log-file
+        // liveness (the real embedded-SPV height isn't RPC-exposed upstream,
+        // so log-mtime is the only available signal).
         spv_module: {
             aria:            'SPV Module',
             loading:         'Loading SPV status…',
             error_title:     'SPV status unavailable',
-            intro:           'SPV (light-client) sync is embedded in the EVM sidechains and the '
-                             + 'Arbiter — there is no separate SPV process. This view aggregates '
-                             + 'each chain’s SPV-tracked height.',
+            intro:           'Two separate SPV systems run on a Council node: the Arbiter has its '
+                             + 'own SPV that tracks the ELA Main chain (the headline number below), '
+                             + 'and each EVM sidechain runs its own embedded SPV for cross-chain '
+                             + 'deposit verification. This view aggregates both.',
             hero_label:      'Arbiter SPV height',
+            hero_sub:        'Tracks the ELA Main chain tip.',
             arbiter_running: 'Arbiter running',
             arbiter_stopped: 'Arbiter stopped',
             arbiter_absent:  'Arbiter not installed',
-            sidechains_title: 'Sidechain SPV heights',
-            no_sidechains:   'No EVM sidechains are configured, so there are no SPV heights to show.',
+            // v0.5.200 — was "Sidechain SPV heights". The per-row number is
+            // actually the arbiter's cross-chain processing position for each
+            // sidechain, NOT SPV.
+            sidechains_title: 'Arbiter ↔ sidechain catch-up',
+            sidechains_intro: 'How far the Arbiter has walked through each sidechain looking for '
+                             + 'cross-chain transactions (withdraws, illegal evidence, failed '
+                             + 'deposits). This catches up slowly for chains with many blocks — '
+                             + 'the Arbiter walks every block and persists progress every 1,000 '
+                             + 'blocks. Not the same as the sidechain block height or SPV height.',
+            col_name:         'Sidechain',
+            col_arbiter:      'Arbiter processed',
+            col_embedded:     'Embedded SPV',
+            no_sidechains:   'No EVM sidechains are configured.',
             view_logs:       'View SPV logs',
             no_logs_yet:     'No SPV logs yet',
             logs_title:      'SPV logs — {chain}',
             logs_loading:    'Loading…',
             logs_empty:      'No SPV log lines yet for this chain.',
             logs_error:      'Could not read SPV logs: {msg}',
+            // v0.5.200 — embedded SPV badge per row. Upstream Elastos does not
+            // expose the sidechain-embedded-SPV height via RPC, so liveness
+            // is inferred from the newest logs-spv file's mtime + last event.
+            embedded_active:    'Active',
+            embedded_active_hint: 'Last embedded-SPV log activity {age} ago.',
+            embedded_stale:     'Stale',
+            embedded_stale_hint: 'No embedded-SPV log activity for {age}. Usually means the chain '
+                                 + 'process or its SPV thread is down.',
+            embedded_unknown:   'No data',
+            embedded_unknown_hint: 'No embedded-SPV log files yet — the chain may be too freshly '
+                                   + 'installed, or the SPV thread hasn\'t written anything.',
+            embedded_last_event: 'Last event: {line}',
         },
 
         // v0.5.175 — Peers & Bootnodes panel (components/peers-panel.js).
