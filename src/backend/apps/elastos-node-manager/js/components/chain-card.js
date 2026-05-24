@@ -757,7 +757,9 @@
             // Map coarse → hero-power data-state. Mock defines: running /
             // stopped / stalled / error. Unconfigured / disabled visually
             // are 'stopped' (gray, no glow).
-            var heroState = (coarse === 'healthy') ? 'running'
+            // v0.5.205 — 'synced' joins 'healthy' as the alive-and-synced
+            // hero state after v0.5.203 vocab unification.
+            var heroState = (coarse === 'healthy' || coarse === 'synced') ? 'running'
                 : (coarse === 'stalled') ? 'stalled'
                 : (coarse === 'error')   ? 'error'
                 : 'stopped';
@@ -807,14 +809,16 @@
         var version = (state && state.binaryVersion) ? state.binaryVersion : '';
         var versionSuffix = version ? ' · ' + version : '';
         var chipText;
-        if (producerState && (coarse === 'healthy' || coarse === 'syncing' || coarse === 'stalled')) {
+        // v0.5.205 — accept 'synced' alongside 'healthy' in all three branches
+        // (post-v0.5.203 vocab unification).
+        if (producerState && (coarse === 'healthy' || coarse === 'synced' || coarse === 'syncing' || coarse === 'stalled')) {
             // 0.2.0-beta.3.6 — include the version suffix on producer-state
             // chips too. Pre-beta.3.6 dropped it when producerState was set,
             // leaving "Active" alone on the chip. Mock keeps the version
             // for layout consistency: "Active · v0.9.7" / "Rank #42 · v0.9.7".
             chipText = producerState + versionSuffix;
             this._stateChip.dataset.state = coarse + '-producer-' + String(producerState).toLowerCase();
-        } else if (coarse === 'healthy') {
+        } else if (coarse === 'healthy' || coarse === 'synced') {
             chipText = chainNameLabel + versionSuffix;
             this._stateChip.dataset.state = coarse;
         } else if (coarse === 'syncing' || coarse === 'recovering' || coarse === 'starting') {
@@ -936,7 +940,13 @@
         }
 
         // Action row enable/disable.
-        var alive = (coarse === 'healthy' || coarse === 'syncing' || coarse === 'stalled' || coarse === 'recovering' || coarse === 'starting');
+        // v0.5.205 — accept 'synced' as alive too. Backend started returning
+        // 'synced' (replacing 'healthy') in v0.5.203 when state vocabulary
+        // was unified; without this card thought every alive-and-synced chain
+        // was stopped → showed "TAP TO START" and hid Stop/Restart.
+        var alive = (coarse === 'healthy' || coarse === 'synced'
+                  || coarse === 'syncing' || coarse === 'stalled'
+                  || coarse === 'recovering' || coarse === 'starting');
         var unconfigured = (coarse === 'unconfigured');
         this._configureBtn.hidden = !unconfigured || !this.onReconfigure;
         this._startBtn.hidden     = unconfigured;
@@ -1228,7 +1238,8 @@
         this._syncBar.hidden = true;
         this._syncBar.innerHTML = '';
 
-        if (coarse === 'healthy') {
+        // v0.5.205 — accept 'synced' (post-v0.5.203 vocab unification) too.
+        if (coarse === 'healthy' || coarse === 'synced') {
             var atTip = document.createElement('span');
             atTip.className = 'enm-at-tip';
             atTip.textContent = 'Fully synced';

@@ -685,6 +685,13 @@
 
         chain_state: {
             healthy:    'Healthy',
+            // v0.5.205 — v0.5.203 unified the backend state vocab so chains.js
+            // /chains/:id now returns 'synced' for what used to be 'healthy'.
+            // Adding the string here so chain-card.js's t('chain_state.' + state)
+            // lookup doesn't render '[chain_state.synced]' as literal text. The
+            // chain-card.js alive-detection branches were also expanded to treat
+            // 'synced' === 'healthy' for backward compat.
+            synced:     'Synced',
             syncing:    'Syncing',
             stalled:    'Stalled',
             stopped:    'Stopped',
