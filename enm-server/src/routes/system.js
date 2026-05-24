@@ -75,39 +75,48 @@ const ConfigStore = require('../services/ConfigStore');
 
 const PKG = require('../../package.json');
 
-// v0.5.203 — per-chain disk-usage cache for /system/usage. dirSizeSafe walks
-// the on-disk tree which is cheap for empty chains and ~150ms for a populated
-// mainchain (~30GB extracted snapshot).
-// v0.5.208 — TTL bumped 30s → 60s. /system/usage is now polled every 2s by
-// the frontend; with 30s TTL the disk walk fired every 30s, which on a
-// CPU-saturated box (mainchain + 3 EVM all at 100%) added measurable I/O
-// pressure. Chain data grows by megabytes per minute — 60s is well within
-// "visibly current" for the operator-facing display.
+// v0.5.203 — per-chain disk-usage cache for /system/usage.
+// v0.5.208 — TTL bumped 30s → 60s.
+// v0.5.210 — async refresh pattern. Pre-v0.5.210, when the cache TTL expired,
+// the next /system/usage call BLOCKED on the dirSizeSafe walk (sequential
+// awaits across N chains, each walking a multi-GB tree). On a CPU-saturated
+// host with mainchain doing leveldb compaction (200%+ CPU contending with
+// disk I/O), this walk could take 15+ seconds — long enough for the
+// frontend's /system/usage poll to time out and report "System status
+// unavailable". Now: stale cache returned IMMEDIATELY; refresh fires in the
+// background and lands in the cache for the NEXT poll. Worst-case operator
+// staleness: 60s of slightly-old disk numbers. Acceptable since chain data
+// grows by MB/min, not GB.
 let _perChainDiskCache = { ts: 0, data: {} };
-async function getPerChainDiskMb() {
+let _perChainDiskRefreshInFlight = false;
+function getPerChainDiskMb() {
     const now = Date.now();
-    if (now - _perChainDiskCache.ts < 60_000) {
-        return _perChainDiskCache.data;
+    // Always return cache immediately — sync, never blocks the response.
+    const stale = (now - _perChainDiskCache.ts) >= 60_000;
+    // If stale and no refresh already in flight, kick a background refresh.
+    if (stale && !_perChainDiskRefreshInFlight) {
+        _perChainDiskRefreshInFlight = true;
+        refreshPerChainDisk().finally(() => { _perChainDiskRefreshInFlight = false; });
     }
-    const out = {};
+    return _perChainDiskCache.data;
+}
+async function refreshPerChainDisk() {
     const chainsRoot = path.join(enmDataDir(), 'chains');
     let chainIds;
     try {
         chainIds = (await fsp.readdir(chainsRoot)).filter((n) => !n.startsWith('.'));
     } catch (_) {
-        // No chains/ dir yet — fresh install. Return empty map; the cache
-        // refreshes once the dir exists.
-        _perChainDiskCache = { ts: now, data: {} };
-        return out;
+        _perChainDiskCache = { ts: Date.now(), data: {} };
+        return;
     }
+    const out = {};
     await Promise.all(chainIds.map(async (cid) => {
         try {
             const bytes = await dirSizeSafe(path.join(chainsRoot, cid));
             out[cid] = Math.round((bytes / (1024 * 1024)) * 10) / 10;
         } catch (_) { out[cid] = null; }
     }));
-    _perChainDiskCache = { ts: now, data: out };
-    return out;
+    _perChainDiskCache = { ts: Date.now(), data: out };
 }
 
 /**
@@ -415,7 +424,11 @@ function build(extensionHandle) {
             // grows slowly (chain blocks land 1/4s for mainchain, slower for
             // sidechains); a 30s stale cache is well within "visibly current"
             // for the operator.
-            const perChainDiskMb = await getPerChainDiskMb();
+            // v0.5.210 — getPerChainDiskMb is now sync (returns cache,
+            // refreshes in background). No await; the response goes out
+            // immediately with whatever the cache holds (refresh lands
+            // for the next call, max 60s of staleness).
+            const perChainDiskMb = getPerChainDiskMb();
 
             return res.json(successBody({
                 ts: Date.now(),

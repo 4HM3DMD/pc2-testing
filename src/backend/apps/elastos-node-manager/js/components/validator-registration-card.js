@@ -243,7 +243,11 @@
      * @private
      */
     BposCard.prototype._reconcile = function (chain, producer) {
-        var alive    = !!(chain && chain.state === 'healthy');
+        // v0.5.210 — accept 'synced' as alive too (v0.5.203 unified the
+        // backend state vocab; 'healthy' became 'synced'). Without this,
+        // the BPoS card thought every alive chain was dead → producer-
+        // registration UI gated wrong.
+        var alive    = !!(chain && (chain.state === 'healthy' || chain.state === 'synced'));
         var pubkey   = (producer && producer.ourPubkey) || '';
         var pState   = producer && producer.state;
         var enabled  = !!(producer && producer.enabled);

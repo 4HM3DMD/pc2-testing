@@ -4450,8 +4450,15 @@
                 var state = envelope && envelope.data;
                 // Coarse states that mean "process alive". Anything
                 // else means "nothing to restart".
+                // v0.5.210 — accept 'synced' as alive too (v0.5.203 unified
+                // the backend state vocab; 'healthy' became 'synced'). Without
+                // this, the Restart modal computed alive=false for every
+                // alive-and-synced chain → wrong "currently stopped, will
+                // just start" copy instead of "currently running, will be
+                // stopped + started" warning.
                 var alive = !!(state && (
                     state.state === 'healthy'
+                    || state.state === 'synced'
                     || state.state === 'syncing'
                     || state.state === 'starting'
                     || state.state === 'recovering'

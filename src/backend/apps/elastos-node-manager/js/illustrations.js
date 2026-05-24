@@ -122,7 +122,10 @@
     function heroState(stateName, opts) {
         var size = (opts && opts.size) || 160;
         var glyph;
-        if (stateName === 'healthy_earn' || stateName === 'healthy_help' || stateName === 'healthy') {
+        // v0.5.210 — accept 'synced' alongside 'healthy' (v0.5.203 vocab
+        // rename). Without this, the hero illustration on synced chains
+        // fell through to the default glyph instead of the smile/heart.
+        if (stateName === 'healthy_earn' || stateName === 'healthy_help' || stateName === 'healthy' || stateName === 'synced') {
             // Smile / heart for happy node
             glyph = '<path d="M80 100 Q70 88 70 80 Q70 72 76 72 Q80 72 80 76'
                 + ' Q80 72 84 72 Q90 72 90 80 Q90 88 80 100 Z" fill="currentColor"/>';
