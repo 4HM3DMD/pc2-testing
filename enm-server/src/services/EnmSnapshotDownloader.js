@@ -21,9 +21,11 @@
  * extracts into the chain's data directory (the layout matches what
  * the binary writes itself when syncing from scratch).
  *
- * Snapshots are LARGE (5-15 GB compressed each). We stream them to
- * disk and unpack on-the-fly with system `tar -xzf` — the same shape
- * EnmBinaryDownloader uses to avoid pulling a new npm dependency.
+ * Snapshots are LARGE (the ELA mainchain tarball is ~10 GB compressed
+ * today; v0.5.199 makes mainchain the only supported chain — see
+ * SNAPSHOT_SOURCES below). We stream them to disk and unpack on-the-fly
+ * with system `tar -xzf` — the same shape EnmBinaryDownloader uses to
+ * avoid pulling a new npm dependency.
  *
  * INVARIANT: ECO snapshot URLs exist at /eco/ but are forbidden per
  * the H3 ENM scope rule (ECO is OUT OF SCOPE forever). Do NOT add an
@@ -87,7 +89,7 @@ const SNAPSHOT_SOURCES = Object.freeze({
 // 30 minutes per-request. Snapshots are big; 60s (the Oracle script
 // timeout) would always trip. The TCP socket-level timeout fires on
 // inactivity, so a healthy 200MB/s pipe still finishes inside this
-// window for the largest (ESC ~15GB) tarball.
+// window for the mainchain (~10 GB) tarball with wide headroom.
 const DOWNLOAD_TIMEOUT_MS = 1_800_000;
 
 // Progress callback throttle. Emitting on every TCP chunk would

@@ -35,9 +35,29 @@
 
 'use strict';
 
+const fs = require('node:fs');
+const path = require('node:path');
+
 const { ENM_LOG_PREFIX } = require('./EnmConstants');
 const ConfigStore = require('./ConfigStore');
 const AuditLog = require('./EnmAuditLog');
+const { pc2DataDir } = require('./DataDir');
+
+// v0.5.201 Phase 2 — deploy-in-progress marker. scripts/deploy-enm.sh writes
+// this file BEFORE issuing the DELETE /api/installed-apps call and clears it
+// AFTER the post-install health check passes. While present (and fresh), ENM
+// skips autoStart on boot so the deploy's DELETE → install-local sequence
+// doesn't trigger a respawn storm. The contract is intentionally simple — a
+// flag file in pc2DataDir (which survives the bundle wipe in externalDataDirs).
+//
+// File path is mirrored in scripts/deploy-enm.sh; if you change it here,
+// change it there too (or every deploy will skip the marker check entirely).
+const DEPLOY_MARKER_FILE = '.enm-deploy-in-progress';
+// 10 minutes — long enough to cover the slowest deploy (snapshot extract is
+// minutes, install-local + verify is under 2), short enough that a crashed
+// deploy script doesn't permanently disable autoStart. The deploy script
+// also clears the marker on its own failure path, so this is a safety net.
+const DEPLOY_MARKER_MAX_AGE_MS = 10 * 60 * 1000;
 
 const RULE_ID = 'AUTOSTART';
 const TIER = 'AUTOMATED-SAFE';
@@ -65,6 +85,43 @@ async function runAutoStart(deps) {
     }
     const { extensionHandle, registry } = deps;
     const log = extensionHandle.log || console;
+
+    // Gate 0 (v0.5.201 Phase 2) — deploy in progress.
+    //
+    // scripts/deploy-enm.sh writes a marker file BEFORE the DELETE call and
+    // clears it AFTER the post-install health check passes. While present
+    // and fresh, skip autoStart so the deploy's DELETE → install-local
+    // sequence doesn't trigger a respawn storm. The v0.5.200 deploy
+    // (2026-05-24) cycled mainchain through 5 spawn/kill iterations because
+    // every pc2-node-respawned ENM ran autoStart and spawned a fresh ela
+    // before the next deploy step killed it — the final spawn (188337)
+    // orphaned because its parent ENM died before the PID file was flushed.
+    //
+    // Stale marker safety: if the deploy script crashed and left the
+    // marker, we ignore it after DEPLOY_MARKER_MAX_AGE_MS (10 min). That
+    // beats the alternative (autoStart silently disabled forever) and
+    // matches the script's own age-cutoff comment.
+    try {
+        const markerPath = path.join(pc2DataDir(), DEPLOY_MARKER_FILE);
+        const st = fs.statSync(markerPath);
+        if (st && typeof st.mtimeMs === 'number') {
+            const ageMs = Date.now() - st.mtimeMs;
+            if (ageMs < DEPLOY_MARKER_MAX_AGE_MS) {
+                log.info(
+                    `${ENM_LOG_PREFIX} autoStart: deploy marker present `
+                    + `(${markerPath}, age ${Math.round(ageMs / 1000)}s) — skipping`,
+                );
+                return { scheduled: false, reason: 'deploy-in-progress' };
+            }
+            log.warn(
+                `${ENM_LOG_PREFIX} autoStart: stale deploy marker `
+                + `(age ${Math.round(ageMs / 1000)}s > ${DEPLOY_MARKER_MAX_AGE_MS / 1000}s) — `
+                + 'ignoring marker and proceeding (deploy script may have crashed)',
+            );
+        }
+    } catch (_) {
+        // No marker file — normal boot path, proceed.
+    }
 
     let cfg;
     try {

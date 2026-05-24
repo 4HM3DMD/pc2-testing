@@ -251,6 +251,67 @@ if [ "$MODE" = "upgrade" ]; then
 
     verify_node_modules "$TMP_EXTRACT"
 
+    # =========================================================================
+    # v0.5.201 — pre-DELETE graceful drain (Phase 1) + deploy marker (Phase 2).
+    #
+    # Why this exists: the v0.5.200 deploy (2026-05-24) produced an orphan
+    # `ela` process (pid 188337) because mainchain went through a 5-iteration
+    # respawn storm during the DELETE→install-local window. Trace (ENM log
+    # lines 91399→91724): each pc2-node-respawned ENM ran autoStart, spawned
+    # a fresh ela, then was killed by the next deploy step before the PID file
+    # was flushed. Detached:true kept the final spawn alive as an orphan; the
+    # next manual /chains/mainchain/start hit the conflict detector.
+    #
+    # EVM chains (esc/eid/pg) survived the same deploy with only one PID
+    # change because their SIGINT drain is fast (~1s leveldb flush). Mainchain
+    # is slow (~30s DPoS state + 156KB peers.json + leveldb close), so it was
+    # always mid-shutdown when the next kill arrived. Arbiter died naturally
+    # whenever mainchain RPC went away — no orphan there either.
+    #
+    # Fix:
+    #   Phase 1 — stop the slow chains FIRST, BEFORE pc2-node has a chance to
+    #     cgroup-kill them mid-shutdown. Both stops are `manual=true` so the
+    #     self-heal won't re-spawn them.
+    #   Phase 2 — write a marker file so ENM's autoStart skips the boot path
+    #     entirely while the deploy is in flight. Belt-and-braces against
+    #     pc2-node's app-process supervisor doing an out-of-band restart
+    #     between DELETE and install-local (it did exactly that during the
+    #     v0.5.200 deploy: journalctl "health check failed: This operation
+    #     was aborted" at 16:32:17).
+    # =========================================================================
+    DEPLOY_MARKER="${PC2_DATA_DIR:-/var/lib/pc2/data}/.enm-deploy-in-progress"
+    echo "$(date -u +%FT%TZ) tag=${TAG} pid=$$" > "$DEPLOY_MARKER" 2>/dev/null \
+        && log "deploy marker written: $DEPLOY_MARKER (autoStart will skip while present)" \
+        || log "WARN: could not write deploy marker (ENM autoStart may re-spawn chains during the bundle swap)"
+
+    log "draining slow chains (arbiter + mainchain) before bundle swap..."
+    # Stop in dependency order: arbiter first (it dies on its own when mainchain
+    # RPC goes, but explicit stop is cleaner), then mainchain. EVM chains stay
+    # running — their fast SIGINT survives a single cgroup-kill cleanly.
+    for chain in arbiter mainchain; do
+        curl -sS -X POST \
+            -H "Authorization: Bearer ${PC2_OWNER_TOKEN}" \
+            --max-time 30 \
+            "http://127.0.0.1:${ENM_PORT}/api/enm/chains/${chain}/stop" >/dev/null 2>&1 \
+            || log "  ${chain}/stop call failed (chain may already be stopped) — continuing"
+    done
+    # Poll until both report stopped (or 120s timeout — matches the ENM
+    # SHUTDOWN_DRAIN_GRACE_MS constant for the EnmConstants /teardown path).
+    DRAIN_DEADLINE=$(( $(date +%s) + 120 ))
+    while [ "$(date +%s)" -lt "$DRAIN_DEADLINE" ]; do
+        STATES=$(curl -sS -H "Authorization: Bearer ${PC2_OWNER_TOKEN}" \
+            --max-time 10 \
+            "http://127.0.0.1:${ENM_PORT}/api/enm/chains" 2>/dev/null \
+            | jq -r '.result.chains[] | select(.chainId == "mainchain" or .chainId == "arbiter") | .state' \
+            | sort -u | paste -sd, -)
+        if [ "$STATES" = "stopped" ]; then
+            log "mainchain + arbiter drained cleanly (state=stopped)"
+            break
+        fi
+        sleep 3
+    done
+    [ "$STATES" = "stopped" ] || log "WARN: drain timeout — states=$STATES — proceeding anyway (Phase 2 marker still protects the deploy)"
+
     # Uninstall the old version (purge=false → keeps externalDataDirs so
     # chain data and keystore survive the swap).
     log "uninstalling old version via DELETE /api/installed-apps/elastos-node-manager?purge=false"
@@ -332,6 +393,13 @@ for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
         log "health OK after ${i}x2s"
         # Protect this install from pc2-node's boot sweeper (see fn comment).
         override_sweep_cid
+        # v0.5.201 Phase 2 — clear deploy-in-progress marker now that the
+        # install is verified healthy. autoStart on the next ENM boot will
+        # see no marker and run normally.
+        if [ -f "${PC2_DATA_DIR:-/var/lib/pc2/data}/.enm-deploy-in-progress" ]; then
+            rm -f "${PC2_DATA_DIR:-/var/lib/pc2/data}/.enm-deploy-in-progress" 2>/dev/null \
+                && log "deploy marker cleared — autoStart will run on next boot"
+        fi
         log "deployed: $TARBALL_NAME ($MODE mode)"
         if [ "$MODE" = "upgrade" ]; then
             log "rollback: tar -C $BUNDLE_DIR -xzf $BACKUP_PATH && kill \$(pgrep -f 'elastos-node-manager.*server.js')"
@@ -344,6 +412,15 @@ done
 # right recovery on failure is "deploy the previous tag" — the old "untar
 # the backup over the live dir" trick (used until 2026-05-11) leaves the
 # install in a state pc2-node's boot sweeper later reaps as stale.
+#
+# v0.5.201 Phase 2 — clear the deploy marker on failure too. Leaving it
+# stale would make autoStart skip indefinitely on every subsequent ENM
+# boot, blocking the operator's recovery. The marker has a 10-minute age
+# cutoff on the ENM side, but explicit cleanup is cleaner.
+if [ -f "${PC2_DATA_DIR:-/var/lib/pc2/data}/.enm-deploy-in-progress" ]; then
+    rm -f "${PC2_DATA_DIR:-/var/lib/pc2/data}/.enm-deploy-in-progress" 2>/dev/null \
+        && log "deploy marker cleared (deploy failed — manual recovery)"
+fi
 die "$MODE failed: ENM never came up on :$ENM_PORT. To restore the previous version, run:
     sudo PC2_OWNER_TOKEN=<token> $0 <previous-tag>
 Diagnostic bundle: $BACKUP_PATH (untouched by the failed deploy).
