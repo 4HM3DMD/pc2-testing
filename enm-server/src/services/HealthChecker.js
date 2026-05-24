@@ -423,6 +423,19 @@ class HealthChecker {
                     this.syncTracker.record(chainId, rpcSummary.height);
                 }
             }
+            // v0.5.203 — push peer count to SyncTracker so the multi-chain
+            // overview can render per-row peer counts on its 1s tick without
+            // a second RPC. Outside the height success block: rpcSummary.peers
+            // is populated by _fetchRpcSummary independently of height.
+            if (this.syncTracker
+                && rpcSummary.ok
+                && typeof rpcSummary.peers === 'number'
+                && Number.isInteger(rpcSummary.peers)
+                && rpcSummary.peers >= 0) {
+                try {
+                    this.syncTracker.recordPeers(chainId, rpcSummary.peers);
+                } catch (_) { /* recordPeers never throws today; defensive */ }
+            }
             // Network-best feed for SyncTracker — kept OUTSIDE the local-height
             // success block so a getblockcount blip doesn't also wipe out our
             // ETA math. The audit (FIX 3/5) called out that without this,

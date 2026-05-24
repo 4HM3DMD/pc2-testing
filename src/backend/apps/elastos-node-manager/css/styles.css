@@ -7237,6 +7237,157 @@ body[data-enm-overview="1"] .enm-app .enm-tabs {
     color: var(--error);
     background: color-mix(in srgb, var(--error) 16%, transparent);
 }
+
+/* ============================================================
+   v0.5.203 — multi-chain overview redesign
+   ============================================================
+   Adds:
+   - 7-tier state colors (synced + syncing + stalled new; rest map to
+     existing dot styles)
+   - 4-card usage row (.enm-overview-usage) at top
+   - 3rd metrics row under each chain (.enm-overview-metrics) for
+     peers + CPU% + RAM + FD + disk
+   - Responsive: 4-up cards on wide, 2x2 on medium, stacked on narrow */
+
+/* New state dot colors */
+.enm-app .enm-overview-dot.state-synced {
+    background: var(--success);
+    box-shadow: 0 0 6px rgba(76, 175, 80, 0.5);
+}
+.enm-app .enm-overview-dot.state-syncing {
+    background: var(--accent, #4cb8ff);
+    box-shadow: 0 0 6px rgba(76, 184, 255, 0.4);
+    animation: enm-overview-pulse 1.8s ease-in-out infinite;
+}
+.enm-app .enm-overview-dot.state-stalled {
+    background: var(--warning);
+    box-shadow: 0 0 8px rgba(218, 158, 0, 0.6);
+}
+/* New state chip colors */
+.enm-app .enm-overview-state.state-synced {
+    color: var(--success);
+    background: color-mix(in srgb, var(--success) 16%, transparent);
+}
+.enm-app .enm-overview-state.state-syncing {
+    color: var(--accent, #4cb8ff);
+    background: color-mix(in srgb, var(--accent, #4cb8ff) 14%, transparent);
+}
+.enm-app .enm-overview-state.state-stalled {
+    color: var(--warning);
+    background: color-mix(in srgb, var(--warning) 18%, transparent);
+}
+
+/* Usage card row — 4 cards across the top, equal-width on a CSS grid that
+   collapses to 2x2 on medium, single column on narrow. */
+.enm-app .enm-overview-usage {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: var(--sp-3, 12px);
+    margin: 0 0 var(--sp-4, 16px) 0;
+}
+.enm-app .enm-usage-card {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color, var(--border-subtle));
+    border-radius: var(--r-md, 8px);
+    padding: var(--sp-3, 12px) var(--sp-3, 12px);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+.enm-app .enm-usage-card-title {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 600;
+}
+.enm-app .enm-usage-card-value {
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--text-primary);
+    line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.enm-app .enm-usage-card-sub {
+    font-size: 11px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+/* Tone each card with a faint left-rule in its category color so they're
+   scannable without reading labels. */
+.enm-app .enm-usage-card-chains { border-left: 3px solid var(--success); }
+.enm-app .enm-usage-card-cpu    { border-left: 3px solid var(--accent, #4cb8ff); }
+.enm-app .enm-usage-card-mem    { border-left: 3px solid var(--warning); }
+.enm-app .enm-usage-card-disk   { border-left: 3px solid var(--text-tertiary); }
+
+/* Per-row metrics line (3rd row under each chain). Inline chips, wrap on
+   narrow. The chip background is intentionally subtle — the state pill is
+   the row's headline, metrics are supplementary. */
+.enm-app .enm-overview-metrics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 4px;
+}
+.enm-app .enm-overview-metric {
+    font-size: 11px;
+    color: var(--text-secondary);
+    padding: 2px 7px;
+    background: color-mix(in srgb, var(--text-tertiary) 8%, transparent);
+    border-radius: 6px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+.enm-app .enm-overview-metric-dim {
+    color: var(--text-tertiary);
+    background: transparent;
+    padding: 2px 4px;
+}
+.enm-app .enm-overview-metric.is-warn {
+    color: var(--warning);
+    background: color-mix(in srgb, var(--warning) 14%, transparent);
+}
+.enm-app .enm-overview-metric.is-busy {
+    color: var(--accent, #4cb8ff);
+    background: color-mix(in srgb, var(--accent, #4cb8ff) 14%, transparent);
+}
+.enm-app .enm-overview-behind {
+    color: var(--text-tertiary);
+    font-variant-numeric: tabular-nums;
+}
+
+/* Narrow-width responsiveness — usage cards collapse to 2x2, then stacked. */
+@media (max-width: 900px) {
+    .enm-app .enm-overview-usage {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+@media (max-width: 500px) {
+    .enm-app .enm-overview-usage {
+        grid-template-columns: 1fr;
+    }
+    .enm-app .enm-usage-card-value {
+        font-size: 18px;
+    }
+}
+body[data-app-size="narrow"] .enm-app .enm-overview-usage,
+.enm-app[data-app-size="narrow"] .enm-overview-usage {
+    grid-template-columns: repeat(2, 1fr);
+}
+body[data-app-size="compact"] .enm-app .enm-overview-usage,
+.enm-app[data-app-size="compact"] .enm-overview-usage {
+    grid-template-columns: 1fr;
+}
+body[data-app-size="compact"] .enm-app .enm-usage-card-value,
+.enm-app[data-app-size="compact"] .enm-usage-card-value {
+    font-size: 16px;
+}
 /* v0.5.186 — meta-line detail spans. */
 .enm-app .enm-overview-height {
     color: var(--text-secondary);

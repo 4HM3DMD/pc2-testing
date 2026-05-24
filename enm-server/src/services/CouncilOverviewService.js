@@ -73,9 +73,18 @@
 
 const { ENM_LOG_PREFIX } = require('./EnmConstants');
 const ConfigStore = require('./ConfigStore');
+const ProcessMetrics = require('./ProcessMetrics');
+const CoarseStateDerive = require('./CoarseStateDerive');
 
-const TICK_INTERVAL_MS = 5_000;
-const STARTUP_GRACE_SEC = 60;
+// v0.5.203 — tick interval dropped from 5s → 1s per operator directive
+// ("refresh should be immediate not 5 seconds"). The overview publishes on
+// every event (chain exit / autoStart success) AND on this tick; reducing the
+// tick to 1s makes per-chain process metrics + height bumps surface within a
+// second instead of up to 5s. Cost: one in-process snapshot build per second
+// (no RPC), one SSE event per second to active subscribers. The build is
+// cheap (one statSync per chain + one ProcessMetrics call per alive PID).
+const TICK_INTERVAL_MS = 1_000;
+const STARTUP_GRACE_SEC = CoarseStateDerive.STARTUP_GRACE_SEC;
 const SSE_TOPIC = 'council:overview';
 
 class CouncilOverviewService {
@@ -329,6 +338,12 @@ function buildChainEntry(args) {
     let blocksBehind = null;
     let syncPercent = null;
     let syncState = null;
+    // v0.5.203 — surfaces "last height bump" for the staleness display + the
+    // overview's new lastHeightAdvanceMs field. SyncTracker tracks
+    // `lastSampleAt` per chain on every height push; if it hasn't moved in
+    // a while the chain is either at tip (good, for class A/B once synced=true)
+    // or stalled (bad, when blocksBehind > 0).
+    let lastHeightAdvanceMs = null;
     if (alive && syncTracker && typeof syncTracker.syncSnapshot === 'function') {
         try {
             const sy = syncTracker.syncSnapshot(cId);
@@ -336,6 +351,7 @@ function buildChainEntry(args) {
             networkHeight = (typeof sy.networkHeight === 'number') ? sy.networkHeight : null;
             blocksBehind = (typeof sy.blocksBehind === 'number') ? sy.blocksBehind : null;
             syncPercent = (typeof sy.percent === 'number') ? sy.percent : null;
+            lastHeightAdvanceMs = (typeof sy.lastSampleAt === 'number') ? sy.lastSampleAt : null;
             if (height != null && blocksBehind != null) {
                 if (blocksBehind === 0) { syncState = 'synced'; }
                 else if (sy.stale) { syncState = 'stalled'; }
@@ -345,6 +361,44 @@ function buildChainEntry(args) {
             log.debug(`${ENM_LOG_PREFIX} council:overview: syncSnapshot(${cId}) failed: ${err.message}`);
         }
     }
+
+    // v0.5.203 — per-chain process metrics (CPU%, RSS, FD count). Best-effort:
+    // /proc may be unavailable (macOS dev, container without /proc mount).
+    // Returns nulls in those cases — frontend renders "—".
+    let processMetrics = null;
+    if (alive && pid) {
+        try {
+            processMetrics = ProcessMetrics.getMetrics(pid);
+        } catch (err) {
+            log.debug(`${ENM_LOG_PREFIX} council:overview: getMetrics(${cId} pid=${pid}) failed: ${err.message}`);
+        }
+    }
+
+    // v0.5.203 — peer count from SyncTracker if it cached one (HealthChecker
+    // pushes peer counts alongside height samples for class A/B). Null for
+    // every chain that hasn't reported one yet OR for class C/D (which have
+    // no peer concept — they're services).
+    let peers = null;
+    if (alive && syncTracker && typeof syncTracker.peerSnapshot === 'function') {
+        try {
+            const peerSnap = syncTracker.peerSnapshot(cId);
+            if (peerSnap && typeof peerSnap.count === 'number') { peers = peerSnap.count; }
+        } catch (_) { /* peers stays null */ }
+    }
+
+    // v0.5.203 — use the shared 7-tier state helper so the overview + the
+    // chain-detail dashboard report IDENTICAL state strings. Before this,
+    // the overview said "Running" for any alive chain past 60s grace while
+    // the detail correctly said "Syncing" / "Healthy" — operators got
+    // contradictory labels for the same chain.
+    const unifiedState = CoarseStateDerive.derive({
+        alive,
+        chainCfg,
+        uptimeSec,
+        chainClass: meta.chainClass,
+        syncState,
+    });
+
     return {
         chainId: cId,
         displayName: meta.displayName,
@@ -355,12 +409,22 @@ function buildChainEntry(args) {
         pid,
         attached,
         uptimeSec,
-        state,
+        // v0.5.203 — `state` is now from CoarseStateDerive (7-tier); kept on
+        // the same key so existing consumers keep working with richer values.
+        state: unifiedState,
+        // Pre-v0.5.203 `state` value (5-tier, overview-local) — kept as a
+        // separate field for any consumer that depended on the old vocabulary
+        // strictly. Drop in v0.5.205 once frontend has fully migrated.
+        legacyState: state,
         height,
         networkHeight,
         blocksBehind,
         syncPercent,
         syncState,
+        // v0.5.203 — enrichments for the redesigned overview pane.
+        peers,
+        lastHeightAdvanceMs,
+        processMetrics,
     };
 }
 

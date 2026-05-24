@@ -75,6 +75,37 @@ const ConfigStore = require('../services/ConfigStore');
 
 const PKG = require('../../package.json');
 
+// v0.5.203 — per-chain disk-usage cache for /system/usage. dirSizeSafe walks
+// the on-disk tree which is cheap for empty chains and ~150ms for a populated
+// mainchain (~30GB extracted snapshot). 30s TTL is plenty for an
+// operator-facing display — chain data grows by megabytes per minute, not GB.
+let _perChainDiskCache = { ts: 0, data: {} };
+async function getPerChainDiskMb() {
+    const now = Date.now();
+    if (now - _perChainDiskCache.ts < 30_000) {
+        return _perChainDiskCache.data;
+    }
+    const out = {};
+    const chainsRoot = path.join(enmDataDir(), 'chains');
+    let chainIds;
+    try {
+        chainIds = (await fsp.readdir(chainsRoot)).filter((n) => !n.startsWith('.'));
+    } catch (_) {
+        // No chains/ dir yet — fresh install. Return empty map; the cache
+        // refreshes once the dir exists.
+        _perChainDiskCache = { ts: now, data: {} };
+        return out;
+    }
+    await Promise.all(chainIds.map(async (cid) => {
+        try {
+            const bytes = await dirSizeSafe(path.join(chainsRoot, cid));
+            out[cid] = Math.round((bytes / (1024 * 1024)) * 10) / 10;
+        } catch (_) { out[cid] = null; }
+    }));
+    _perChainDiskCache = { ts: now, data: out };
+    return out;
+}
+
 /**
  * @param {object} extensionHandle
  * @returns {import('express').Router}
@@ -332,6 +363,88 @@ function build(extensionHandle) {
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} /system/storage error: ${err.message}`);
             return res.status(500).json(errorBody('Failed to read storage status.'));
+        }
+    });
+
+    /**
+     * v0.5.203 — GET /system/usage
+     *
+     * The multi-chain overview's top-row "usage cards" data source. Returns
+     * a single compact snapshot of host-level CPU + memory + disk + a
+     * per-chain disk breakdown.
+     *
+     * Why a separate endpoint from /system/status: /status is broad (OS +
+     * preflight + node version) and predates the overview redesign. /usage
+     * is shaped for the four cards exactly + adds the per-chain disk
+     * breakdown (the previous /storage endpoint only carries top-level
+     * totals).
+     *
+     * Cost: cheap. CPU + memory are O(1) `os.*` calls. Disk-free is one
+     * statfs. Per-chain disk uses a 30-second module-level cache so the 1s
+     * overview tick doesn't trigger a `du`-walk every second.
+     */
+    router.get('/usage', limit('read'), async (req, res) => {
+        if (!readActorWallet(req)) {
+            return res.status(401).json(errorBody('Authentication required.'));
+        }
+        try {
+            const memTotalGb = os.totalmem() / (1024 ** 3);
+            const memFreeGb = os.freemem() / (1024 ** 3);
+            const memUsedGb = memTotalGb - memFreeGb;
+            const loadAvg = os.loadavg();
+            const cpuCores = os.cpus().length;
+
+            // Disk — total / used / free at the ENM data dir mountpoint.
+            const dataDir = enmDataDir();
+            await fsp.mkdir(dataDir, { recursive: true });
+            let diskTotalGb = null, diskFreeGb = null, diskUsedGb = null;
+            try {
+                if (typeof fsp.statfs === 'function') {
+                    const sf = await fsp.statfs(dataDir);
+                    diskTotalGb = (sf.blocks * sf.bsize) / (1024 ** 3);
+                    diskFreeGb = (sf.bavail * sf.bsize) / (1024 ** 3);
+                    diskUsedGb = diskTotalGb - diskFreeGb;
+                }
+            } catch (_) { /* statfs unavailable — render '—' */ }
+
+            // Per-chain disk usage with 30-second cache. The chain-data tree
+            // grows slowly (chain blocks land 1/4s for mainchain, slower for
+            // sidechains); a 30s stale cache is well within "visibly current"
+            // for the operator.
+            const perChainDiskMb = await getPerChainDiskMb();
+
+            return res.json(successBody({
+                ts: Date.now(),
+                cpu: {
+                    cores: cpuCores,
+                    loadAvg1m:  loadAvg[0],
+                    loadAvg5m:  loadAvg[1],
+                    loadAvg15m: loadAvg[2],
+                    // Rough "system busyness" pct = (load1 / cores) × 100,
+                    // capped at 100. A box at load 8.0 on 8 cores reads ~100%;
+                    // at load 4.0 on 8 cores ~50%. Not the same as
+                    // sum-of-process-CPU% but it's the standard Linux signal
+                    // the operator already understands from `top`.
+                    loadPct: cpuCores > 0 ? Math.min(100, Math.round((loadAvg[0] / cpuCores) * 100)) : null,
+                },
+                memory: {
+                    totalGb: round(memTotalGb, 2),
+                    usedGb:  round(memUsedGb, 2),
+                    freeGb:  round(memFreeGb, 2),
+                    usedPct: round((memUsedGb / memTotalGb) * 100, 1),
+                },
+                disk: {
+                    totalGb: diskTotalGb != null ? round(diskTotalGb, 2) : null,
+                    usedGb:  diskUsedGb  != null ? round(diskUsedGb,  2) : null,
+                    freeGb:  diskFreeGb  != null ? round(diskFreeGb,  2) : null,
+                    usedPct: (diskTotalGb && diskTotalGb > 0)
+                        ? round((diskUsedGb / diskTotalGb) * 100, 1) : null,
+                    perChainMb: perChainDiskMb,
+                },
+            }));
+        } catch (err) {
+            extensionHandle.log.error(`${ENM_LOG_PREFIX} /system/usage error: ${err.message}`);
+            return res.status(500).json(errorBody('Failed to read system usage.'));
         }
     });
 

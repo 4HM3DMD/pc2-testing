@@ -750,6 +750,29 @@
         // chain_state above which is for the per-chain endpoint's full
         // analysis. Overview values: running / starting / stopped /
         // disabled / unconfigured (server-side enum, no 'syncing' etc).
+        // v0.5.203 — unified 7-tier state vocabulary. Both the multi-chain
+        // overview pane AND the per-chain dashboard now use CoarseStateDerive
+        // on the backend, which returns one of seven values. Frontend pulls
+        // labels from this block; both renderers go through the same key
+        // namespace so the same chain shows the same label everywhere.
+        chain_state_v2: {
+            synced:       'Synced',
+            syncing:      'Syncing',
+            starting:     'Starting',
+            stalled:      'Stalled',
+            stopped:      'Stopped',
+            disabled:     'Disabled',
+            unconfigured: 'Not configured',
+        },
+        chain_state_v2_hint: {
+            synced:       'Doing its job — at chain tip (or service is up + dependency healthy).',
+            syncing:      'Catching up to the network tip. Block height is advancing.',
+            starting:     'Process is up but its RPC isn\'t responding yet (warming up — leveldb open, peer handshakes).',
+            stalled:      'Alive but not advancing. Usually means 0 peers or a dead fork — check the chain logs.',
+            stopped:      'Enabled in config but not running. Use the Start button or wait for self-heal.',
+            disabled:     'Operator-disabled in config. Enable it in Settings to start it.',
+            unconfigured: 'Not installed yet. Use the setup wizard to add this chain.',
+        },
         overview_state: {
             running:      'Running',
             starting:     'Starting',
@@ -790,6 +813,56 @@
             // P2.2 — confirm prompt for disruptive quick actions (stop/restart).
             // {action} = stop|restart; {chainName} = display name.
             action_confirm:       'Are you sure you want to {action} {chainName}? In-progress sync work will be interrupted.',
+
+            // ============================================================
+            // v0.5.203 — usage cards + per-row metrics for the redesigned
+            // multi-chain overview. Pulled from /system/usage (cards) and
+            // /council/overview chain entries' `processMetrics` + `peers`
+            // + `lastHeightAdvanceMs` + `networkHeight` + `blocksBehind`.
+            // ============================================================
+            usage_cards_aria:     'Host usage summary',
+            // Card 1 — chain count. {up} = chains currently in synced/syncing/
+            // starting state (anything alive). {total} = total enabled chains.
+            chains_card_title:    'Chains',
+            chains_card_value:    '{up}/{total}',
+            chains_card_sub:      '{synced} synced · {syncing} syncing · {other} other',
+            // Card 2 — CPU load. {pct} = loadAvg1m / cores × 100 (0-100).
+            // {load1} = loadAvg1m, {cores} = cpu cores count.
+            cpu_card_title:       'CPU load',
+            cpu_card_value:       '{pct}%',
+            cpu_card_sub:         'load {load1} on {cores} cores',
+            // Card 3 — memory.
+            mem_card_title:       'Memory',
+            mem_card_value:       '{usedGb} / {totalGb} GB',
+            mem_card_sub:         '{usedPct}% used',
+            // Card 4 — disk.
+            disk_card_title:      'Disk',
+            disk_card_value:      '{usedGb} / {totalGb} GB',
+            disk_card_sub:        '{freeGb} GB free',
+
+            // Per-row block-height line for class A/B: "Block 1,234 / 5,678 · 4,444 behind"
+            block_of:             'Block {h} / {nh}',
+            blocks_behind:        '{behind} behind',
+            blocks_behind_one:    '1 behind',
+            // Peer count chip. {n} = number.
+            peers_label:          '{n} peers',
+            peers_label_one:      '1 peer',
+            peers_label_none:     '0 peers',
+            // Process metrics inline.
+            metric_cpu:           'CPU {pct}%',
+            metric_ram:           'RAM {mb} MB',
+            metric_ram_gb:        'RAM {gb} GB',
+            metric_fd:            'FD {n}',
+            metric_disk:          'disk {mb} MB',
+            metric_disk_gb:       'disk {gb} GB',
+            // Time-since-last-bump for class A/B (when synced) / class C/D
+            // ("last activity"). {age} = formatted age string ("5s", "12m").
+            last_height_ago:      'last block {age} ago',
+            last_activity_ago:    'last activity {age} ago',
+            // Arbiter-specific starting-state subtitle.
+            starting_waiting_mainchain_rpc: 'waiting for mainchain RPC…',
+            starting_warming_up:  'warming up (RPC binding)…',
+            stalled_no_progress:  'no height progress for {age}',
         },
 
         // beta.3.94 (Wave M2.6) — non-mainchain dashboard pane stub

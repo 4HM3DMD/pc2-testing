@@ -84,6 +84,37 @@
         disabled:     'Disabled',
         unconfigured: 'Not configured',
     };
+    // v0.5.203 — new 7-tier state vocabulary that matches the backend's
+    // CoarseStateDerive.STATES. Same chain reports the same string here
+    // and in the per-chain dashboard (pre-v0.5.203 they disagreed —
+    // overview said "Running", detail said "Healthy" for the same alive
+    // arbiter). Fallbacks here only matter if strings.js hasn't loaded.
+    var STATE_LABEL_V2 = {
+        synced:       'Synced',
+        syncing:      'Syncing',
+        starting:     'Starting',
+        stalled:      'Stalled',
+        stopped:      'Stopped',
+        disabled:     'Disabled',
+        unconfigured: 'Not configured',
+    };
+    // v0.5.203 — backwards-compat: backend may still return v1 ('running'/
+    // 'healthy') from older bundles during rollout, so normalize first.
+    function normalizeStateV2(state) {
+        if (!state) return 'unconfigured';
+        // Legacy state names → new vocabulary mapping.
+        if (state === 'running') return 'synced';      // v1 'running' was used for any alive past-grace chain incl. synced + syncing
+        if (state === 'healthy') return 'synced';      // chains.js v1 'healthy' for class C/D alive
+        return state;                                  // synced / syncing / starting / stalled / stopped / disabled / unconfigured
+    }
+    function stateLabelForV2(state) {
+        var v2 = normalizeStateV2(state);
+        return tFb('chain_state_v2.' + v2, STATE_LABEL_V2[v2] || v2);
+    }
+    function stateHintForV2(state) {
+        var v2 = normalizeStateV2(state);
+        return tFb('chain_state_v2_hint.' + v2, '');
+    }
 
     /**
      * Look up a strings.js key; if missing or not-a-string, fall back
@@ -153,6 +184,12 @@
         // the whole pane. While set, SSE re-render is suppressed so the
         // pending button isn't wiped by a wholesale innerHTML rebuild.
         this._pendingAction = null;
+        // v0.5.203 — usage cards data + poll handle. /system/usage is polled
+        // on its own cadence (1s default per operator "refresh should be
+        // immediate" directive). Decoupled from /council/overview SSE so a
+        // chain-state event doesn't have to wait for the next usage tick.
+        this._lastUsage = null;
+        this._usagePollHandle = null;
     }
 
     EnmMultiChainOverviewPane.prototype.mount = function (parent) {
@@ -165,6 +202,7 @@
         this._renderLoading();
         this._subscribe();
         this._fetchInitial();
+        this._startUsagePoll();
     };
 
     EnmMultiChainOverviewPane.prototype.destroy = function () {
@@ -174,11 +212,63 @@
             try { this._unsubSse(); } catch (_) { /* idempotent */ }
             this._unsubSse = null;
         }
+        this._stopUsagePoll();
         this._teardownSparklines();
         if (this._root && this._root.parentNode) {
             this._root.parentNode.removeChild(this._root);
         }
         this._root = null;
+    };
+
+    /**
+     * v0.5.203 — /system/usage poll for the four header cards. Uses the same
+     * visibility-pause helper chain-card uses for its metric polls so a
+     * hidden tab stops fetching. 1s cadence per operator "refresh should be
+     * immediate" directive — /system/usage is cheap (one statfs + cached
+     * `du` walks), no harm.
+     * @private
+     */
+    EnmMultiChainOverviewPane.prototype._startUsagePoll = function () {
+        var self = this;
+        function tick() {
+            if (self._destroyed) { return; }
+            self.api.get('/system/usage', { skipCache: true }).then(function (data) {
+                if (self._destroyed) { return; }
+                // api.js unwraps to parsed.result; be defensive about envelope.
+                var usage = (data && data.result && data.result.cpu) ? data.result : data;
+                if (!usage || !usage.cpu) { return; }
+                self._lastUsage = usage;
+                // Re-render usage cards in place WITHOUT touching the chain
+                // rows below them — _renderUsageCards is targeted at the
+                // .enm-overview-usage container, leaving sparklines + action
+                // buttons untouched.
+                self._renderUsageCards();
+            }).catch(function () { /* network blip — keep last value visible */ });
+        }
+        // Fire immediately, then on a 1s tick. Use visibility-pause to stop
+        // when the tab is hidden so we don't burn cycles on a background tab.
+        tick();
+        if (typeof root.enmUseVisibilityPause === 'function') {
+            this._usagePollHandle = root.enmUseVisibilityPause(tick, 1000);
+        } else {
+            this._usagePollHandle = { stop: (function () {
+                var id = setInterval(tick, 1000);
+                return function () { clearInterval(id); };
+            })() };
+        }
+    };
+
+    /** @private */
+    EnmMultiChainOverviewPane.prototype._stopUsagePoll = function () {
+        if (!this._usagePollHandle) { return; }
+        try {
+            if (typeof this._usagePollHandle.stop === 'function') {
+                this._usagePollHandle.stop();
+            } else if (typeof this._usagePollHandle === 'function') {
+                this._usagePollHandle();
+            }
+        } catch (_) { /* idempotent */ }
+        this._usagePollHandle = null;
     };
 
     /** @private */
@@ -289,9 +379,15 @@
             '<header class="enm-overview-header">',
             '<h2>' + escapeHtml(tFb('overview_pane.title', 'Council overview')) + '</h2>',
             '<p class="enm-overview-summary">',
-            escapeHtml(this._summaryLine(snap.totals)),
+            escapeHtml(this._summaryLineV2(snap)),
             '</p>',
             '</header>',
+            // v0.5.203 — usage cards row. _renderUsageCards re-paints the
+            // INNER markup of this container on the 1s /system/usage tick;
+            // the wholesale chain-row rebuild happens separately on SSE.
+            '<div class="enm-overview-usage" aria-label="' + escapeAttr(tFb('overview_pane.usage_cards_aria', 'Host usage summary')) + '">',
+            this._usageCardsHtml(snap),
+            '</div>',
             '<div class="enm-overview-body">',
         ];
         var hasRows = false;
@@ -367,31 +463,32 @@
      * is genuinely unknown (e.g. height before RPC warms) we show an honest
      * "height pending…", never a guess. */
     EnmMultiChainOverviewPane.prototype._rowHtml = function (c) {
-        var stateClass = 'state-' + escapeAttr(c.state || 'unknown');
+        // v0.5.203 — normalize state through the new vocabulary so a backend
+        // returning legacy 'running' / 'healthy' (during rollout) still maps
+        // to a styled chip.
+        var v2State = normalizeStateV2(c.state);
+        var stateClass = 'state-' + escapeAttr(v2State);
         var uptime = c.uptimeSec != null ? formatUptime(c.uptimeSec) : '';
         var displayName = chainNameFor(c.chainId, c.displayName);
-        var stateLabel = stateLabelFor(c.state);
+        var stateLabel = stateLabelForV2(c.state);
+        var stateHint = stateHintForV2(c.state);
         var ariaLabel = tFb('overview_pane.row_aria_open', 'Open {chainName} dashboard', { chainName: displayName });
         var chainIdAttr = escapeAttr(c.chainId);
-        // Always render the uptime cell (empty when unknown) so the 5-column
-        // grid stays aligned — an empty cell keeps the open-arrow in its column.
         var uptimeHtml = uptime
             ? '<span class="enm-overview-uptime" title="Uptime since last start">' + escapeHtml(uptime) + '</span>'
             : '<span class="enm-overview-uptime" aria-hidden="true"></span>';
-        // v0.5.187 a11y — the row is NOT role="button"/tabindex anymore: it
-        // contains real <button> quick-actions + an explicit open button, and
-        // interactive-inside-a-button is invalid ARIA. The row stays
-        // mouse-clickable (progressive enhancement); keyboard users reach the
-        // open button + action buttons directly.
+        var stateChipAttrs = ' class="enm-overview-state ' + stateClass + '"';
+        if (stateHint) { stateChipAttrs += ' title="' + escapeAttr(stateHint) + '"'; }
         return '<li class="enm-overview-row" data-chain-id="' + chainIdAttr
-            + '" data-state="' + escapeAttr(c.state || 'unknown') + '">'
+            + '" data-state="' + escapeAttr(v2State) + '">'
             + '<span class="enm-overview-dot ' + stateClass + '" aria-hidden="true"></span>'
             + '<div class="enm-overview-main">'
             +   '<div class="enm-overview-line1">'
             +     '<span class="enm-overview-name">' + escapeHtml(displayName) + '</span>'
-            +     '<span class="enm-overview-state ' + stateClass + '">' + escapeHtml(stateLabel) + '</span>'
+            +     '<span' + stateChipAttrs + '>' + escapeHtml(stateLabel) + '</span>'
             +   '</div>'
-            +   '<div class="enm-overview-meta">' + this._metaHtml(c) + '</div>'
+            +   '<div class="enm-overview-meta">' + this._metaHtmlV2(c) + '</div>'
+            +   '<div class="enm-overview-metrics">' + this._metricsHtml(c) + '</div>'
             + '</div>'
             + '<span class="enm-overview-spark" data-chain-id="' + chainIdAttr + '"></span>'
             + uptimeHtml
@@ -400,6 +497,186 @@
             +   ' aria-label="' + escapeAttr(ariaLabel) + '">›</button>'
             + '</li>';
     };
+
+    /**
+     * v0.5.203 — meta line v2: block height shown WITH network height + blocks
+     * behind, peer count chip, last-block-age for synced chains. Honest about
+     * what's unavailable (em-dashes, not placeholder numbers).
+     * @private
+     */
+    EnmMultiChainOverviewPane.prototype._metaHtmlV2 = function (c) {
+        var klass = c.chainClass;
+        // Class C (oracle) — what EVM sidechain it relays for + last activity age.
+        if (klass === 'C') {
+            var bits = [];
+            if (c.parentChainId) {
+                bits.push('<span class="enm-overview-relays">'
+                    + escapeHtml(tFb('overview_pane.relays_for', 'Relays for {parent}',
+                        { parent: chainNameFor(c.parentChainId, null) }))
+                    + '</span>');
+            }
+            if (c.lastHeightAdvanceMs) {
+                bits.push('<span class="enm-overview-meta-muted">'
+                    + escapeHtml(tFb('overview_pane.last_activity_ago', 'last activity {age} ago',
+                        { age: formatAge((Date.now() - c.lastHeightAdvanceMs) / 1000) }))
+                    + '</span>');
+            }
+            return bits.join(' · ');
+        }
+        // Class A / B / E — block height + network height + behind count.
+        // v0.5.191 — isFinite guard against NaN/Infinity heights.
+        if (klass === 'A' || klass === 'B' || klass === 'E') {
+            // Special case: 'starting' state with no height yet — explain WHY.
+            var v2 = normalizeStateV2(c.state);
+            if (v2 === 'starting' && c.alive) {
+                // Arbiter-specific subtext if we know that's what it is.
+                if (klass === 'D' || c.chainId === 'arbiter') {
+                    return '<span class="enm-overview-meta-muted">'
+                        + escapeHtml(tFb('overview_pane.starting_waiting_mainchain_rpc',
+                            'waiting for mainchain RPC…'))
+                        + '</span>';
+                }
+                return '<span class="enm-overview-meta-muted">'
+                    + escapeHtml(tFb('overview_pane.starting_warming_up',
+                        'warming up (RPC binding)…'))
+                    + '</span>';
+            }
+            var hasHeight = (typeof c.height === 'number' && isFinite(c.height));
+            var hasNet = (typeof c.networkHeight === 'number' && isFinite(c.networkHeight));
+            if (hasHeight && hasNet) {
+                var behind = (typeof c.blocksBehind === 'number' && isFinite(c.blocksBehind)) ? c.blocksBehind : null;
+                var line = '<span class="enm-overview-height">'
+                    + escapeHtml(tFb('overview_pane.block_of', 'Block {h} / {nh}',
+                        { h: formatNumber(c.height), nh: formatNumber(c.networkHeight) }))
+                    + '</span>';
+                if (behind != null && behind > 0) {
+                    var behindKey = behind === 1 ? 'overview_pane.blocks_behind_one' : 'overview_pane.blocks_behind';
+                    var behindFallback = behind === 1 ? '1 behind' : '{behind} behind';
+                    line += ' · <span class="enm-overview-behind">'
+                        + escapeHtml(tFb(behindKey, behindFallback, { behind: formatNumber(behind) }))
+                        + '</span>';
+                }
+                return line;
+            }
+            if (hasHeight) {
+                // Have height but no network reference — show just the height.
+                return '<span class="enm-overview-height">'
+                    + escapeHtml(tFb('overview_pane.block', 'Block {n}', { n: formatNumber(c.height) }))
+                    + '</span>';
+            }
+            if (c.alive) {
+                return '<span class="enm-overview-meta-muted">'
+                    + escapeHtml(tFb('overview_pane.height_pending', 'height pending…'))
+                    + '</span>';
+            }
+            return '';
+        }
+        // Class D (arbiter) — same "waiting on mainchain" treatment when
+        // starting; otherwise the chip already carries the headline.
+        if (klass === 'D') {
+            var v2d = normalizeStateV2(c.state);
+            if (v2d === 'starting' && c.alive) {
+                return '<span class="enm-overview-meta-muted">'
+                    + escapeHtml(tFb('overview_pane.starting_waiting_mainchain_rpc',
+                        'waiting for mainchain RPC…'))
+                    + '</span>';
+            }
+            if (c.lastHeightAdvanceMs) {
+                return '<span class="enm-overview-meta-muted">'
+                    + escapeHtml(tFb('overview_pane.last_activity_ago', 'last activity {age} ago',
+                        { age: formatAge((Date.now() - c.lastHeightAdvanceMs) / 1000) }))
+                    + '</span>';
+            }
+            return '';
+        }
+        return '';
+    };
+
+    /**
+     * v0.5.203 — third-row metrics line under each chain row: peers · CPU% ·
+     * RAM · FD · disk. Only renders cells we have data for; empty cells are
+     * collapsed (no whitespace gaps). Hidden entirely when the chain is not
+     * alive (nothing useful to show).
+     * @private
+     */
+    EnmMultiChainOverviewPane.prototype._metricsHtml = function (c) {
+        if (!c.alive) { return ''; }
+        var pm = c.processMetrics || {};
+        var bits = [];
+        // Peers (only for chains where the concept exists — A/B/E)
+        if (c.chainClass === 'A' || c.chainClass === 'B' || c.chainClass === 'E') {
+            if (typeof c.peers === 'number' && isFinite(c.peers)) {
+                var peersKey, peersFallback;
+                if (c.peers === 0) { peersKey = 'overview_pane.peers_label_none'; peersFallback = '0 peers'; }
+                else if (c.peers === 1) { peersKey = 'overview_pane.peers_label_one'; peersFallback = '1 peer'; }
+                else { peersKey = 'overview_pane.peers_label'; peersFallback = '{n} peers'; }
+                var peersClass = (c.peers === 0) ? 'enm-overview-metric is-warn' : 'enm-overview-metric';
+                bits.push('<span class="' + peersClass + '">'
+                    + escapeHtml(tFb(peersKey, peersFallback, { n: c.peers }))
+                    + '</span>');
+            }
+        }
+        // CPU %
+        if (typeof pm.cpuPct === 'number' && isFinite(pm.cpuPct)) {
+            // High CPU (>80% of one core) gets a warning class so the operator
+            // can spot churn (the mainchain-leveldb-compaction case fired here).
+            var cpuClass = (pm.cpuPct >= 80) ? 'enm-overview-metric is-busy' : 'enm-overview-metric';
+            bits.push('<span class="' + cpuClass + '">'
+                + escapeHtml(tFb('overview_pane.metric_cpu', 'CPU {pct}%', { pct: pm.cpuPct }))
+                + '</span>');
+        }
+        // RAM (MB if <1024, GB otherwise)
+        if (typeof pm.rssMb === 'number' && isFinite(pm.rssMb)) {
+            if (pm.rssMb >= 1024) {
+                bits.push('<span class="enm-overview-metric">'
+                    + escapeHtml(tFb('overview_pane.metric_ram_gb', 'RAM {gb} GB',
+                        { gb: (pm.rssMb / 1024).toFixed(1) }))
+                    + '</span>');
+            } else {
+                bits.push('<span class="enm-overview-metric">'
+                    + escapeHtml(tFb('overview_pane.metric_ram', 'RAM {mb} MB',
+                        { mb: Math.round(pm.rssMb) }))
+                    + '</span>');
+            }
+        }
+        // FD count
+        if (typeof pm.fdCount === 'number' && isFinite(pm.fdCount)) {
+            bits.push('<span class="enm-overview-metric enm-overview-metric-dim">'
+                + escapeHtml(tFb('overview_pane.metric_fd', 'FD {n}', { n: pm.fdCount }))
+                + '</span>');
+        }
+        // Per-chain disk usage from /system/usage.perChainMb cache
+        if (this._lastUsage && this._lastUsage.disk && this._lastUsage.disk.perChainMb) {
+            var diskMb = this._lastUsage.disk.perChainMb[c.chainId];
+            if (typeof diskMb === 'number' && isFinite(diskMb)) {
+                if (diskMb >= 1024) {
+                    bits.push('<span class="enm-overview-metric enm-overview-metric-dim">'
+                        + escapeHtml(tFb('overview_pane.metric_disk_gb', 'disk {gb} GB',
+                            { gb: (diskMb / 1024).toFixed(1) }))
+                        + '</span>');
+                } else {
+                    bits.push('<span class="enm-overview-metric enm-overview-metric-dim">'
+                        + escapeHtml(tFb('overview_pane.metric_disk', 'disk {mb} MB',
+                            { mb: Math.round(diskMb) }))
+                        + '</span>');
+                }
+            }
+        }
+        return bits.join(' ');
+    };
+
+    /**
+     * v0.5.203 — friendly age formatter for "last activity 4s ago" displays.
+     * 0..59s → "Ns"; <60m → "Nm"; <24h → "Nh"; else "Nd".
+     * @private
+     */
+    function formatAge(sec) {
+        if (typeof sec !== 'number' || !isFinite(sec) || sec < 0) { return '—'; }
+        if (sec < 60) { return Math.round(sec) + 's'; }
+        if (sec < 3600) { return Math.round(sec / 60) + 'm'; }
+        if (sec < 86400) { return Math.round(sec / 3600) + 'h'; }
+        return Math.round(sec / 86400) + 'd';
+    }
 
     /** @private — v0.5.186 (Council Node UX P2.2) — state-gated compact quick
      * actions. alive → Restart + Stop; stopped → Start; disabled/unconfigured →
@@ -537,6 +814,131 @@
                 + escapeHtml(tFb('overview_pane.syncing', 'Syncing') + pct) + '</span>';
         }
         return '';
+    };
+
+    /**
+     * v0.5.203 — render the four usage cards (Chains / CPU / Memory / Disk).
+     * Called both inline from _render (with the freshest available usage
+     * snapshot) and on the 1s /system/usage tick to re-paint just the cards
+     * without disturbing the chain rows below.
+     *
+     * Returns the inner HTML for .enm-overview-usage. Safe to call with no
+     * usage data — renders placeholder cards with em-dash values.
+     * @private
+     */
+    EnmMultiChainOverviewPane.prototype._usageCardsHtml = function (snap) {
+        var usage = this._lastUsage || {};
+        var totals = (snap && snap.totals) || { total: 0 };
+        // Chain bucket counts pulled from the rich snapshot (the v0.5.203
+        // backend serves new states; legacy snapshots fall through to '—').
+        var chains = (snap && Array.isArray(snap.chains)) ? snap.chains : [];
+        var synced = 0, syncing = 0, other = 0, up = 0;
+        chains.forEach(function (c) {
+            var st = normalizeStateV2(c.state);
+            if (c.alive) { up += 1; }
+            if (st === 'synced') { synced += 1; }
+            else if (st === 'syncing') { syncing += 1; }
+            else { other += 1; }
+        });
+
+        function card(klass, titleKey, titleFallback, valueHtml, subHtml) {
+            return '<div class="enm-usage-card enm-usage-card-' + klass + '">'
+                + '<div class="enm-usage-card-title">'
+                +   escapeHtml(tFb('overview_pane.' + titleKey, titleFallback))
+                + '</div>'
+                + '<div class="enm-usage-card-value">' + valueHtml + '</div>'
+                + '<div class="enm-usage-card-sub">' + subHtml + '</div>'
+                + '</div>';
+        }
+
+        // Card 1 — chains
+        var chainsValue = (totals.total > 0)
+            ? escapeHtml(tFb('overview_pane.chains_card_value', '{up}/{total}',
+                { up: up, total: totals.total }))
+            : '—';
+        var chainsSub = (totals.total > 0)
+            ? escapeHtml(tFb('overview_pane.chains_card_sub',
+                '{synced} synced · {syncing} syncing · {other} other',
+                { synced: synced, syncing: syncing, other: other }))
+            : escapeHtml(tFb('overview_pane.summary_no_chains', 'No chains yet.'));
+
+        // Card 2 — CPU
+        var cpuValue = '—', cpuSub = '';
+        if (usage.cpu) {
+            cpuValue = escapeHtml(tFb('overview_pane.cpu_card_value', '{pct}%',
+                { pct: (usage.cpu.loadPct != null ? usage.cpu.loadPct : '—') }));
+            cpuSub = escapeHtml(tFb('overview_pane.cpu_card_sub', 'load {load1} on {cores} cores',
+                { load1: (usage.cpu.loadAvg1m != null ? usage.cpu.loadAvg1m.toFixed(2) : '—'),
+                  cores: (usage.cpu.cores != null ? usage.cpu.cores : '—') }));
+        }
+
+        // Card 3 — memory
+        var memValue = '—', memSub = '';
+        if (usage.memory) {
+            memValue = escapeHtml(tFb('overview_pane.mem_card_value', '{usedGb} / {totalGb} GB',
+                { usedGb: (usage.memory.usedGb != null ? usage.memory.usedGb : '—'),
+                  totalGb: (usage.memory.totalGb != null ? usage.memory.totalGb : '—') }));
+            memSub = escapeHtml(tFb('overview_pane.mem_card_sub', '{usedPct}% used',
+                { usedPct: (usage.memory.usedPct != null ? usage.memory.usedPct : '—') }));
+        }
+
+        // Card 4 — disk
+        var diskValue = '—', diskSub = '';
+        if (usage.disk) {
+            diskValue = escapeHtml(tFb('overview_pane.disk_card_value', '{usedGb} / {totalGb} GB',
+                { usedGb: (usage.disk.usedGb != null ? usage.disk.usedGb : '—'),
+                  totalGb: (usage.disk.totalGb != null ? usage.disk.totalGb : '—') }));
+            diskSub = escapeHtml(tFb('overview_pane.disk_card_sub', '{freeGb} GB free',
+                { freeGb: (usage.disk.freeGb != null ? usage.disk.freeGb : '—') }));
+        }
+
+        return ''
+            + card('chains', 'chains_card_title', 'Chains', chainsValue, chainsSub)
+            + card('cpu',    'cpu_card_title',    'CPU load', cpuValue, cpuSub)
+            + card('mem',    'mem_card_title',    'Memory', memValue, memSub)
+            + card('disk',   'disk_card_title',   'Disk', diskValue, diskSub);
+    };
+
+    /**
+     * v0.5.203 — re-paint just the .enm-overview-usage container without
+     * touching the chain rows or sparklines. Called from the 1s
+     * /system/usage poll tick.
+     * @private
+     */
+    EnmMultiChainOverviewPane.prototype._renderUsageCards = function () {
+        if (!this._root) { return; }
+        var container = this._root.querySelector('.enm-overview-usage');
+        if (!container) { return; }   // initial render hasn't placed it yet
+        container.innerHTML = this._usageCardsHtml(this._lastSnap);
+    };
+
+    /**
+     * v0.5.203 — new summary line that counts by the 7-tier state vocabulary
+     * instead of the legacy "running/stopped/disabled/total" buckets. Makes
+     * "8 synced · 0 syncing · 1 stalled · 0 stopped · 9 total" the operator's
+     * single-glance health line.
+     * @private
+     */
+    EnmMultiChainOverviewPane.prototype._summaryLineV2 = function (snap) {
+        var totals = (snap && snap.totals) || { total: 0 };
+        if (!totals.total) {
+            return tFb('overview_pane.summary_no_chains', 'No chains yet.');
+        }
+        var chains = (snap && Array.isArray(snap.chains)) ? snap.chains : [];
+        var by = { synced: 0, syncing: 0, starting: 0, stalled: 0, stopped: 0, disabled: 0, unconfigured: 0 };
+        chains.forEach(function (c) {
+            var st = normalizeStateV2(c.state);
+            if (by[st] != null) { by[st] += 1; }
+        });
+        var bits = [];
+        // Show every non-zero bucket; always include synced + total even if 0.
+        ['synced', 'syncing', 'starting', 'stalled', 'stopped', 'disabled'].forEach(function (k) {
+            if (by[k] > 0 || k === 'synced') {
+                bits.push(by[k] + ' ' + stateLabelForV2(k).toLowerCase());
+            }
+        });
+        bits.push(totals.total + ' total');
+        return bits.join(' · ');
     };
 
     /** @private */

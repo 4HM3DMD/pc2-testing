@@ -38,6 +38,11 @@ class SyncTracker {
         this._samples = new Map();
         /** @type {Map<string, number>} */
         this._networkHeights = new Map();
+        // v0.5.203 — peer count cache. HealthChecker.recordPeers() pushes here
+        // on every poll so the multi-chain overview can render peer counts
+        // without an extra per-chain RPC on the 1s tick.
+        /** @type {Map<string, {count: number, ts: number}>} */
+        this._peers = new Map();
     }
 
     /**
@@ -87,6 +92,33 @@ class SyncTracker {
         if (existing == null || height > existing) {
             this._networkHeights.set(chainId, height);
         }
+    }
+
+    /**
+     * v0.5.203 — record the most recent peer count for a chain. Called by
+     * HealthChecker on every poll where it already has the peer count (no
+     * extra RPC needed). The overview pane reads via peerSnapshot() to
+     * render per-row peer counts at 1s tick cadence.
+     *
+     * @param {string} chainId
+     * @param {number} count  Peer count (≥0). Non-integers / negatives ignored.
+     * @param {number} [tsMs]
+     */
+    recordPeers(chainId, count, tsMs) {
+        if (typeof chainId !== 'string' || chainId.length === 0) return;
+        if (!Number.isInteger(count) || count < 0) return;
+        this._peers.set(chainId, { count, ts: Number.isFinite(tsMs) ? tsMs : Date.now() });
+    }
+
+    /**
+     * v0.5.203 — read the most recent peer snapshot for a chain.
+     *
+     * @param {string} chainId
+     * @returns {{count: number, ts: number}|null}
+     */
+    peerSnapshot(chainId) {
+        const cur = this._peers.get(chainId);
+        return cur ? { count: cur.count, ts: cur.ts } : null;
     }
 
     /**

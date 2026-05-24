@@ -2187,28 +2187,30 @@ function wrapRpc(kind, fn, extensionHandle) {
  * @param {object} [syncSnapshot]  optional sync info — { synced, alive, … }
  */
 function deriveCoarseState(status, chainCfg, syncSnapshot, chainClass) {
-    if (!chainCfg) {
-        return 'unconfigured';
-    }
-    if (!status.alive) {
-        return chainCfg.enabled ? 'stopped' : 'disabled';
-    }
-    // v0.5.177 — Class C (oracles) and Class D (arbiter) are SERVICES, not
-    // chains that sync to a tip: they have no `synced` signal (primaryHeight
-    // returns synced:null), so the generic "synced!==true → syncing" rule
-    // below pinned them to "syncing" FOREVER even while fully operational —
-    // operators read that as "stuck / not syncing". node.sh treats them as
-    // pgrep-alive (esc_oracle/arbiter status = process up = good), so alive is
-    // the right liveness signal here. Their catch-up progress still shows via
-    // the height metric (getspvheight / getsidechainblockheight) on the card +
-    // SPV Module; the coarse state just stops lying about being stuck.
-    if (chainClass === 'C' || chainClass === 'D') {
-        return 'healthy';
-    }
-    if (syncSnapshot && syncSnapshot.synced === true) {
-        return 'healthy';
-    }
-    return 'syncing';
+    // v0.5.203 — delegate to the shared CoarseStateDerive helper so the
+    // multi-chain overview pane + the per-chain dashboard report IDENTICAL
+    // state labels. Pre-v0.5.203 the two used different 5-tier vocabularies
+    // ('healthy' here vs 'running' in overview) for the same alive chain.
+    //
+    // Map the legacy syncSnapshot shape to the new helper's input:
+    //   syncSnapshot.synced=true → syncState='synced'
+    //   syncSnapshot.synced!==true → fall through to overview's syncTracker
+    //     state (the overview enriches with the SyncTracker analysis); from
+    //     the chains.js detail endpoint we only know "synced or not" so we
+    //     pass syncState='syncing' as the not-synced fallback (matches the
+    //     pre-v0.5.203 behaviour of 'syncing' for class A/B that aren't at
+    //     the tip yet).
+    const CoarseStateDerive = require('../services/CoarseStateDerive');
+    let syncState = null;
+    if (syncSnapshot && syncSnapshot.synced === true) { syncState = 'synced'; }
+    else if (syncSnapshot && syncSnapshot.synced === false) { syncState = 'syncing'; }
+    return CoarseStateDerive.derive({
+        alive: !!(status && status.alive),
+        chainCfg,
+        uptimeSec: (status && typeof status.uptimeSec === 'number') ? status.uptimeSec : null,
+        chainClass,
+        syncState,
+    });
 }
 
 module.exports = {
