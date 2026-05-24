@@ -106,7 +106,17 @@
         if (this.chainClass) {
             this.root.dataset.chainClass = this.chainClass;
         }
-        this.root.dataset.state = 'unconfigured';
+        // v0.5.207 — initial state is 'loading', NOT 'unconfigured'. Before
+        // the v0.5.207 fix, every chain-card mount paint claimed "NOT
+        // CONFIGURED" for the 5-20s window before /chains/:id returned (slow
+        // for chains doing heavy work — eid mid-state-sync, mainchain in
+        // leveldb compaction). Operators read that as "the chain is broken"
+        // when in fact it's just the API call in flight. The real
+        // 'unconfigured' state is reserved for the 404 branch of the API
+        // response (chain-card.js:252) where the backend explicitly tells us
+        // the chain isn't configured. Loading visually = neutral chip +
+        // skeleton hero + hidden action buttons.
+        this.root.dataset.state = 'loading';
         this._busy = false;
 
         this._renderShell();
@@ -345,7 +355,9 @@
         var chipDot = document.createElement('span');
         chipDot.className = 'enm-state-chip-dot';
         this._stateChip.appendChild(chipDot);
-        this._stateChipText = document.createTextNode(t('chain_state.unconfigured'));
+        // v0.5.207 — initial chip text is 'Loading…', not 'Not configured'.
+        // Matches the dataset.state='loading' default; honest pre-API copy.
+        this._stateChipText = document.createTextNode(t('chain_state.loading') || 'Loading…');
         this._stateChip.appendChild(this._stateChipText);
         this._meta.appendChild(this._stateChip);
 
@@ -948,13 +960,25 @@
                   || coarse === 'syncing' || coarse === 'stalled'
                   || coarse === 'recovering' || coarse === 'starting');
         var unconfigured = (coarse === 'unconfigured');
-        this._configureBtn.hidden = !unconfigured || !this.onReconfigure;
-        this._startBtn.hidden     = unconfigured;
-        this._stopBtn.hidden      = unconfigured;
-        this._restartBtn.hidden   = unconfigured;
-        this._startBtn.disabled   = alive;
-        this._stopBtn.disabled    = !alive || coarse === 'stopped';
-        this._restartBtn.disabled = !alive;
+        // v0.5.207 — 'loading' is the pre-API placeholder. Hide every action
+        // button while we don't know what the chain's true state is —
+        // showing Configure / Start / Stop while we don't know the state
+        // tempted operators to click buttons that would do the wrong thing
+        // for the actual chain. Buttons re-appear with correct visibility
+        // once _applyState lands a real state value.
+        var loading = (coarse === 'loading');
+        // v0.5.207 — hide every action button while loading. The buttons
+        // re-appear with correct visibility once _applyState resolves to a
+        // real state. Pre-v0.5.207 this card's first paint showed Configure
+        // (or Start/Stop/Restart depending on prior state) which was a
+        // misleading invitation to act on incomplete information.
+        this._configureBtn.hidden = loading || !unconfigured || !this.onReconfigure;
+        this._startBtn.hidden     = loading || unconfigured;
+        this._stopBtn.hidden      = loading || unconfigured;
+        this._restartBtn.hidden   = loading || unconfigured;
+        this._startBtn.disabled   = loading || alive;
+        this._stopBtn.disabled    = loading || !alive || coarse === 'stopped';
+        this._restartBtn.disabled = loading || !alive;
 
         // 0.2.0-alpha.1 — notify FleetHealthGradient. CustomEvent on
         // window so the controller can subscribe once and aggregate

@@ -1304,6 +1304,38 @@ body[data-app-size="compact"] .enm-app .enm-main { padding: var(--sp-2); }
 .enm-state-chip.error  { background: var(--error-bg);   color: var(--error); }
 .enm-state-chip.muted  { background: var(--bg-elevated); color: var(--text-tertiary); }
 
+/* v0.5.207 — initial-load state for chain-card. Neutral pulse so the
+   operator sees "the card is loading data" rather than "this chain is
+   broken/unconfigured". Applies when chain-card.js dataset.state === 'loading'
+   (the new pre-API default; was 'unconfigured' which mislabeled every chain
+   open for the 5-20s window before /chains/:id returned). */
+.enm-app .enm-chain-card[data-state="loading"] .enm-state-chip {
+    background: var(--bg-elevated);
+    color: var(--text-tertiary);
+    animation: enm-state-chip-loading-pulse 1.4s ease-in-out infinite;
+}
+.enm-app .enm-chain-card[data-state="loading"] .enm-state-chip-dot {
+    background: var(--text-tertiary);
+    animation: enm-state-chip-loading-pulse 1.4s ease-in-out infinite;
+}
+/* Hero / height block / action row dimmed while loading so the card
+   doesn't display partial/stale numbers as if they were current. */
+.enm-app .enm-chain-card[data-state="loading"] .enm-chain-hero,
+.enm-app .enm-chain-card[data-state="loading"] .enm-chain-height,
+.enm-app .enm-chain-card[data-state="loading"] .enm-stat-block {
+    opacity: 0.5;
+}
+@keyframes enm-state-chip-loading-pulse {
+    0%, 100% { opacity: 0.55; }
+    50%      { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .enm-app .enm-chain-card[data-state="loading"] .enm-state-chip,
+    .enm-app .enm-chain-card[data-state="loading"] .enm-state-chip-dot {
+        animation: none;
+    }
+}
+
 .enm-state-chip-dot {
     width: 7px;
     height: 7px;

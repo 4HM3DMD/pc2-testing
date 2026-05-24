@@ -692,6 +692,12 @@
             // chain-card.js alive-detection branches were also expanded to treat
             // 'synced' === 'healthy' for backward compat.
             synced:     'Synced',
+            // v0.5.207 — chain-card initial state before /chains/:id returns
+            // (which can take 5–20s when the chain is busy: eid 100% CPU
+            // state-sync, mainchain leveldb compaction). Pre-v0.5.207 the
+            // initial chip read "Not configured" then flipped to the real
+            // state — operators read the first paint as "chain broken."
+            loading:    'Loading…',
             syncing:    'Syncing',
             stalled:    'Stalled',
             stopped:    'Stopped',
