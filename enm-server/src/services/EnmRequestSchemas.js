@@ -188,20 +188,33 @@ const maintenanceUpdateBody = Joi.object({
 }).unknown(false).label('POST /maintenance/update body');
 
 // beta.3.33 — POST /maintenance/chain-resync body.
+// v0.5.232 — accepts either the legacy single-chain shape (chainId:string) OR
+// the new multi-chain shape (chainIds:array). Route normalizes both into an
+// array internally. Council operators use the array form to pick subsets of
+// {mainchain,esc,eid,pg}; BPoS operators always send ['mainchain'].
 const maintenanceChainResyncBody = Joi.object({
-    chainId: Joi.string().pattern(/^[a-z0-9-]+$/).min(1).max(32).required(),
+    // Legacy: one chain at a time.
+    chainId: Joi.string().pattern(/^[a-z0-9-]+$/).min(1).max(32).optional(),
+    // v0.5.232 — many chains in one call. Capped at 8 to match the maximum
+    // ChainRegistry size; route additionally rejects oracle/arbiter (no
+    // chaindata to wipe).
+    chainIds: Joi.array()
+        .items(Joi.string().pattern(/^[a-z0-9-]+$/).min(1).max(32))
+        .min(1).max(8)
+        .optional(),
     confirm: Joi.string().required(),  // route validates exact match
-}).unknown(false).label('POST /maintenance/chain-resync body');
+})
+    .or('chainId', 'chainIds')
+    .unknown(false)
+    .label('POST /maintenance/chain-resync body');
 
-// beta.3.33 — POST /maintenance/uninstall body.
-const maintenanceUninstallBody = Joi.object({
+// v0.5.232 — POST /maintenance/reset-everything body. The single in-app
+// destructive action that replaces the retired /maintenance/uninstall,
+// /maintenance/nuke, and /identity/reset routes. Operator types
+// "RESET EVERYTHING" (case-sensitive) to confirm.
+const maintenanceResetEverythingBody = Joi.object({
     confirm: Joi.string().required(),  // route validates exact match
-}).unknown(false).label('POST /maintenance/uninstall body');
-
-// beta.3.33 — POST /maintenance/nuke body.
-const maintenanceNukeBody = Joi.object({
-    confirm: Joi.string().required(),  // route validates exact match
-}).unknown(false).label('POST /maintenance/nuke body');
+}).unknown(false).label('POST /maintenance/reset-everything body');
 
 // beta.3.43 — Settings → Identity tab bodies.
 //
@@ -301,10 +314,10 @@ module.exports = {
     antiSnipeBody,
     maintenanceUpdateBody,
     maintenanceChainResyncBody,
-    maintenanceUninstallBody,
-    maintenanceNukeBody,
+    maintenanceResetEverythingBody,
+    // v0.5.232 — retired but kept exported in case external callers
+    // still reference these schemas. Routes return 410 Gone now.
     identityUnlockBody,
-    identityResetBody,
     identityImportHeaders,
     validateBody,
 };

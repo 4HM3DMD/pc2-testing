@@ -407,10 +407,45 @@
         // first) so a backend-unreachable failure keeps its 'health' tag and the
         // dedicated offline/unreachable copy; setup-state just rides alongside
         // instead of waiting its turn, and is consumed once health resolves.
-        var healthP = this.services.api.get('/health', { skipCache: true })
-            .catch(function (err) {
-                throw withTag(err, 'health');
-            });
+        //
+        // v0.5.232 — wrap the initial /health probe in a soft retry loop. The
+        // Settings → Reset ENM flow location.reloads() ~6s after the SIGKILL,
+        // which is usually enough for pc2-node to respawn ENM and bind :4180,
+        // but on a slow host the iframe can hit the reload before ENM is back
+        // (502 from pc2-node's proxy). Retry every 2s up to 15 times (~30s
+        // total) before surfacing the error pane — by then a real outage is
+        // more likely than a restart-window race. Each attempt updates the
+        // spinner text so the operator sees "ENM restarting…" instead of a
+        // blank page during the wait.
+        var self2 = this;
+        function probeHealthWithRetry() {
+            var attempt = 0;
+            var MAX_ATTEMPTS = 15;
+            var DELAY_MS = 2000;
+            function once() {
+                return self2.services.api.get('/health', { skipCache: true })
+                    .catch(function (err) {
+                        // Only retry on connection-style failures (network
+                        // error / 5xx / non-JSON response). A 4xx is a real
+                        // error and fails fast.
+                        var status = err && err.status;
+                        var transient = !status || status >= 500 || status === 0;
+                        attempt += 1;
+                        if (!transient || attempt >= MAX_ATTEMPTS) {
+                            throw withTag(err, 'health');
+                        }
+                        if (self2.els && self2.els.spinnerText) {
+                            self2.els.spinnerText.textContent =
+                                'ENM restarting… (' + attempt + '/' + MAX_ATTEMPTS + ')';
+                        }
+                        return new Promise(function (resolve) {
+                            setTimeout(resolve, DELAY_MS);
+                        }).then(once);
+                    });
+            }
+            return once();
+        }
+        var healthP = probeHealthWithRetry();
         var setupP = this.services.api.get('/setup/state', { skipCache: true });
         // Mark setupP as handled so a health-first failure (where we never reach
         // `return setupP`) doesn't trip an unhandledRejection warning. The real

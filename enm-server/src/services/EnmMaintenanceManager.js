@@ -606,77 +606,45 @@ async function _resetSetupStateForResync(opts) {
 }
 
 /**
- * Uninstall the ENM extension from PC2 but preserve all extension data
- * on disk. The script:
+ * v0.5.232 — Reset ENM to a fresh-install state, IN PLACE.
+ *
+ * Replaces the retired uninstall + nuke + identity/reset paths. The script:
  *   1. Sleeps 2s so Express flushes the 200 response.
- *   2. Deletes the installed_apps sqlite row (pc2-node now considers us
- *      uninstalled — won't restart us when our PID dies).
- *   3. Kills ela children (the user's stake-bound process).
- *   4. rm -rf the bundle dir.
- *   5. SIGKILL our own PID.
- *
- * beta.3.35 — no HTTP call to pc2-node, no owner token. ENM runs as
- * root inside pc2-node and has direct read/write on pc2-node.sqlite.
- *
- * Data dir (chain DB, keystore, audit, backups) at /var/lib/pc2/data/
- * extensions/elastos-node-manager is left intact so a future reinstall
- * can recover the operator's BPoS supernode.
- *
- * @param {{ log?: object }} opts
- * @returns {Promise<{ action: 'uninstall', logFile: string }>}
- */
-async function uninstall(opts) {
-    _acquire('uninstall');
-    const log = (opts && opts.log) || _noopLog();
-    try {
-        // Write the destructive script's log to /tmp so it survives a
-        // future nuke that would also wipe the data dir. /tmp is on
-        // tmpfs on this host — file lives until next reboot, which is
-        // enough for post-mortem.
-        const logFile = `/tmp/enm-uninstall-${Date.now()}.log`;
-        const sh = _buildTeardownScript({
-            label: 'uninstall',
-            logFile,
-            wipeDataDir: false,
-        });
-        const child = spawn('bash', ['-c', sh], { detached: true, stdio: 'ignore' });
-        child.unref();
-        log.info(`${ENM_LOG_PREFIX} maintenance.uninstall queued (log → ${logFile})`);
-        return { action: 'uninstall', logFile };
-    } finally {
-        _release();
-    }
-}
-
-/**
- * Nuke everything: uninstall the extension AND rm -rf the data dir.
- * Operator loses keystore. The frontend gates this with the
- * case-sensitive typed confirmation "WIPE EVERYTHING".
- *
- * Order matters:
- *   1. DELETE …?purge=true     ← pc2-node SIGKILLs ENM, removes bundle
- *   2. wait for process gone
- *   3. rm -rf <dataDir>        ← while no ENM holds inodes
+ *   2. Kills ALL chain + oracle children (mainchain/esc/eid/pg/arbiter +
+ *      3 oracle node scripts).
+ *   3. rm -rf the extension data dir (chain data, keystore, nodekey,
+ *      enm.db, audit log, healing history) + the backups dir.
+ *   4. SIGKILL ENM's own PID.
+ *   5. *** DOES NOT touch the bundle dir or the installed_apps sqlite row ***
+ *      pc2-node's process supervisor respawns ENM with empty data → the
+ *      setup wizard reappears, and the iframe never loses its server
+ *      (which was the root cause of the "another pc2 inside the app"
+ *      symptom: the pre-v0.5.232 nuke deleted the bundle, so pc2-node's
+ *      fallback served the pc2 desktop root into the orphaned ENM iframe).
  *
  * @param {{ log?: object }} opts
- * @returns {Promise<{ action: 'nuke', logFile: string }>}
+ * @returns {Promise<{ action: 'reset-everything', logFile: string }>}
  */
-async function nuke(opts) {
-    _acquire('nuke');
+async function resetEverything(opts) {
+    _acquire('reset-everything');
     const log = (opts && opts.log) || _noopLog();
     try {
         const dataDir = _dataDirSafe();
-        const logFile = `/tmp/enm-nuke-${Date.now()}.log`;
+        const logFile = `/tmp/enm-reset-${Date.now()}.log`;
         const sh = _buildTeardownScript({
-            label: 'nuke',
+            label: 'reset-everything',
             logFile,
             wipeDataDir: true,
+            preserveBundle: true,   // KEY: keeps bundle + installed_apps row
             dataDir,
         });
         const child = spawn('bash', ['-c', sh], { detached: true, stdio: 'ignore' });
         child.unref();
-        log.info(`${ENM_LOG_PREFIX} maintenance.nuke queued (log → ${logFile}, data dir → ${dataDir})`);
-        return { action: 'nuke', logFile };
+        log.info(
+            `${ENM_LOG_PREFIX} maintenance.resetEverything queued (log → ${logFile}, `
+            + `data dir → ${dataDir}, bundle preserved for pc2-node respawn)`,
+        );
+        return { action: 'reset-everything', logFile };
     } finally {
         _release();
     }
@@ -707,23 +675,38 @@ function _dataDirSafe() {
  * Compose the detached bash script that ENM hands off to before it
  * dies. The script always:
  *   1. Sleeps 2s so the HTTP response flushes.
- *   2. Kills any ela child processes ENM was supervising.
- *   3. Removes the installed_apps sqlite row so pc2-node forgets us
- *      (otherwise the boot sweeper's "manual:" cid override leaves
- *       us in place — see project_session_resume_2026_05_13).
- *   4. Removes the bundle install dir.
- *   5. (nuke only) rm -rf the extension data dir + the
- *      backups/elastos-node-manager dir.
- *   6. SIGKILL our own PID. With the sqlite row gone, pc2-node won't
- *      auto-restart us.
+ *   2. Kills child processes ENM was supervising (scope depends on label).
+ *   3. (preserveBundle=false only) Removes the installed_apps sqlite row +
+ *      the bundle install dir so pc2-node forgets us.
+ *   4. (wipeDataDir=true only) rm -rf the extension data dir + backups dir.
+ *   5. SIGKILL our own PID.
  *
- * @param {{label:'uninstall'|'nuke', logFile:string, wipeDataDir:boolean, dataDir?:string}} opts
+ * v0.5.232 — added `preserveBundle` mode for the in-app "Reset ENM" flow.
+ * When true, the bundle + installed_apps row stay in place so pc2-node's
+ * process supervisor respawns ENM with empty data → the setup wizard
+ * appears, and the iframe never loses its server (which was the root cause
+ * of the "another pc2 inside the app" symptom: pre-v0.5.232 nuke deleted
+ * the bundle, so pc2-node's fallback served the pc2 desktop root into the
+ * orphaned ENM iframe).
+ *
+ * v0.5.232 — `killChainPattern` widened from ".*ela" to also catch eid /
+ * esc / pg / arbiter / oracle node scripts when label is 'reset-everything'.
+ * Necessary because the reset must clear ALL chain children, not just ela.
+ *
+ * @param {{
+ *   label:'uninstall'|'nuke'|'reset-everything',
+ *   logFile:string,
+ *   wipeDataDir:boolean,
+ *   preserveBundle?:boolean,
+ *   dataDir?:string
+ * }} opts
  * @returns {string} script text
  */
 function _buildTeardownScript(opts) {
     const label = opts.label;
     const logFile = opts.logFile;
     const wipe = !!opts.wipeDataDir;
+    const preserveBundle = !!opts.preserveBundle;
     const dataDir = opts.dataDir || SELF_DATA_DIR_DEFAULT;
     // The pc2-node SQLite row removal. We try the sqlite3 CLI first
     // (standard on Ubuntu); if it's missing, we fall back to invoking
@@ -732,7 +715,10 @@ function _buildTeardownScript(opts) {
     // ghost app on the dashboard until next pc2-node restart, at which
     // point the boot sweeper reaps the rowless install. Worst case
     // is cosmetic, not data-loss.
-    const sqliteCleanup =
+    //
+    // v0.5.232 — preserveBundle=true (reset-everything) keeps this row so
+    // pc2-node respawns ENM. Skipped entirely in that branch.
+    const sqliteCleanup = preserveBundle ? '' :
         `  echo "[${label} $(date -u +%FT%TZ)] removing installed_apps row"\n`
         + `  if command -v sqlite3 >/dev/null 2>&1; then\n`
         + `    sqlite3 '${_shellEscape(PC2_SQLITE_PATH)}' \\\n`
@@ -742,19 +728,29 @@ function _buildTeardownScript(opts) {
         + `  else\n`
         + `    node -e "try { const sq = require('${_shellEscape(INSTALLED_APPS_DIR)}/backend/node_modules/better-sqlite3'); const db = new sq('${_shellEscape(PC2_SQLITE_PATH)}'); db.prepare(\\"DELETE FROM installed_apps WHERE app_name='${_shellEscape(APP_NAME)}'\\").run(); db.close(); console.log('  better-sqlite3: row deleted'); } catch (e) { console.log('  fallback failed:', e.message); }" || echo "  no sqlite available; boot sweeper will reap on next pc2-node restart"\n`
         + `  fi\n`;
-    const killEla =
-        `  echo "[${label} $(date -u +%FT%TZ)] killing ela children"\n`
-        + `  pkill -9 -f '/var/lib/pc2/data/extensions/elastos-node-manager/.*ela' && echo "  killed" || echo "  no ela process"\n`;
-    const removeBundle =
+    // v0.5.232 — kill scope depends on label. reset-everything kills ALL
+    // chain children + oracle scripts (8 services); uninstall/nuke only
+    // kill ela (legacy BPoS-era behaviour; the data dir gets rm'd next so
+    // surviving children would just exit on missing files anyway). Both
+    // forms tolerate "no process found" — that's the success case after
+    // a clean stop.
+    const killChildren = label === 'reset-everything'
+        ? `  echo "[${label} $(date -u +%FT%TZ)] killing all chain + oracle children"\n`
+          + `  pkill -9 -f '/var/lib/pc2/data/extensions/elastos-node-manager/bin' || true\n`
+          + `  pkill -9 -f '/var/lib/pc2/data/extensions/elastos-node-manager/_oracle-scripts' || true\n`
+          + `  echo "  done"\n`
+        : `  echo "[${label} $(date -u +%FT%TZ)] killing ela children"\n`
+          + `  pkill -9 -f '/var/lib/pc2/data/extensions/elastos-node-manager/.*ela' && echo "  killed" || echo "  no ela process"\n`;
+    const removeBundle = preserveBundle ? '' :
         `  echo "[${label} $(date -u +%FT%TZ)] removing bundle dir"\n`
         + `  rm -rf '${_shellEscape(INSTALLED_APPS_DIR)}' || true\n`;
     const removeData = wipe
-        ? `  echo "[nuke $(date -u +%FT%TZ)] rm -rf data dir + backups"\n`
+        ? `  echo "[${label} $(date -u +%FT%TZ)] rm -rf data dir + backups"\n`
           + `  rm -rf '${_shellEscape(dataDir)}' || true\n`
           + `  # Backups live one level outside the extension dir per\n`
           + `  # EnmStorageMaintenance convention.\n`
           + `  rm -rf '/var/lib/pc2/data/backups/elastos-node-manager' || true\n`
-        : `  echo "[uninstall $(date -u +%FT%TZ)] preserving data dir at ${_shellEscape(dataDir)}"\n`;
+        : `  echo "[${label} $(date -u +%FT%TZ)] preserving data dir at ${_shellEscape(dataDir)}"\n`;
     const killSelf =
         `  echo "[${label} $(date -u +%FT%TZ)] killing ENM"\n`
         + `  pkill -9 -f 'elastos-node-manager.*server.js' || true\n`
@@ -762,7 +758,7 @@ function _buildTeardownScript(opts) {
     return (
         `(\n`
         + `  sleep 2\n`
-        + killEla
+        + killChildren
         + sqliteCleanup
         + removeBundle
         + removeData
@@ -976,8 +972,7 @@ module.exports = {
     checkLatestVersion,
     update,
     chainResync,
-    uninstall,
-    nuke,
+    resetEverything,
     status,
     readOwnerToken,
     // exported for tests

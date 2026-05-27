@@ -2,14 +2,20 @@
  * Copyright (C) 2026-present Elacity
  * SPDX-License-Identifier: AGPL-3.0
  *
- * routes/maintenance.js — Settings → Danger Zone (beta.3.33).
+ * routes/maintenance.js — Settings → Danger Zone (beta.3.33; reshaped v0.5.232).
  *
  *   GET  /maintenance/check-update          owner — latest GitHub tag vs current
  *   GET  /maintenance/status                owner — busy/idle of any pending action
  *   POST /maintenance/update                owner — fire deploy-enm.sh <tag>
- *   POST /maintenance/chain-resync          owner — wipe chain data, keep keystore
- *   POST /maintenance/uninstall             owner — uninstall extension, keep data
- *   POST /maintenance/nuke                  owner — uninstall + rm -rf everything
+ *   POST /maintenance/chain-resync          owner — wipe one or many chains' data,
+ *                                                   keep keystore + nodekey
+ *   POST /maintenance/reset-everything      owner — wipe ALL data (incl. keystore),
+ *                                                   restart ENM in place (bundle
+ *                                                   stays so pc2-node respawns us)
+ *
+ *   POST /maintenance/uninstall             RETIRED (410 Gone) — duplicated pc2 desktop
+ *   POST /maintenance/nuke                  RETIRED (410 Gone) — replaced by reset-everything
+ *   POST /identity/reset                    RETIRED (410 Gone) — folded into reset-everything
  *
  * All write paths are owner-gated, rate-limited via `admin` scope, and
  * accept a `confirm` field that the route validates against the exact
@@ -17,9 +23,9 @@
  * enforces the same typed-confirmation gate; this is defence in depth.
  *
  * Typed-confirmation sentinels (case-sensitive):
- *   chain-resync : "<chainId>"           (e.g. "mainchain")
- *   uninstall    : "remove"
- *   nuke         : "WIPE EVERYTHING"
+ *   chain-resync (single):   "<chainId>"           (legacy, e.g. "mainchain")
+ *   chain-resync (multi):    "RESYNC"              (v0.5.232 Council mode)
+ *   reset-everything:        "RESET EVERYTHING"    (v0.5.232 in-place reset)
  *
  * Each successful action emits an EnmAuditLog row with tier
  * "CRITICAL-INFO", decision "executed", executor "operator",
@@ -168,12 +174,25 @@ function build(deps) {
     // ------------------------------------------------------------------
     // POST /maintenance/chain-resync    owner
     //
-    // Body: { chainId: "mainchain", confirm: "mainchain" }
+    // v0.5.232 — accepts both shapes:
     //
-    // confirm must equal chainId — the frontend types-to-confirm gate.
-    // We re-check server-side so a CSRF-style request without the
-    // typed value can't bypass the safety check.
+    //   Legacy single-chain (BPoS):
+    //     { chainId: "mainchain", confirm: "mainchain" }
+    //     confirm must equal chainId (frontend types the chain name).
+    //
+    //   Multi-chain (v0.5.232 Council):
+    //     { chainIds: ["mainchain","esc","eid","pg"], confirm: "RESYNC" }
+    //     confirm is the static string "RESYNC".
+    //
+    // Schema's .or('chainId','chainIds') guarantees at least one is set;
+    // route normalizes to chainIds[] internally. Arbiter + oracles are
+    // rejected (no chaindata to wipe — they're services, not chains).
     // ------------------------------------------------------------------
+    // chainIds that have no on-disk chaindata to wipe. Resyncing these is a
+    // no-op at best and a confusing audit-log entry at worst — fail loud.
+    const RESYNC_INELIGIBLE = new Set([
+        'arbiter', 'esc-oracle', 'eid-oracle', 'pg-oracle',
+    ]);
     router.post('/chain-resync', limit('admin'), requireOwner, async (req, res) => {
         const { value, details } = RequestSchemas.validateBody(
             RequestSchemas.maintenanceChainResyncBody, req.body,
@@ -185,72 +204,120 @@ function build(deps) {
             });
         }
         const wallet = readActorWallet(req);
-        const { chainId, confirm } = value;
-        if (confirm !== chainId) {
+        const { chainId, chainIds: chainIdsBody, confirm } = value;
+        // Normalize to an ordered, deduped array.
+        const ids = Array.isArray(chainIdsBody) && chainIdsBody.length > 0
+            ? Array.from(new Set(chainIdsBody))
+            : (chainId ? [chainId] : []);
+        if (ids.length === 0) {
             return res.status(400).json(errorBody(
-                'Confirmation does not match chain name.',
+                'Provide either chainId (string) or chainIds (array).',
             ));
         }
-        try {
-            const r = await MaintenanceManager.chainResync({
-                chainId,
-                log: extensionHandle.log,
-                // beta.3.42 — extensionHandle lets the resync reach into
-                // enm_setup_state and reset current_step='bootstrap' so
-                // the wizard reappears for the operator to choose
-                // bootstrap-vs-genesis again. Without this, the resync
-                // just silently wipes data and the dashboard sits at
-                // "syncing from 0" forever.
-                extensionHandle,
-            });
-            await _audit(getDb, extensionHandle.log, {
-                walletAddress: wallet,
-                ruleId: null, tier: 'CRITICAL-INFO',
-                decision: 'executed', executor: 'operator',
-                outcome: `Chain resync ${chainId}: wiped ${r.removedPaths.length} path(s); keystore backup=${r.keystoreBackup || 'none'}`,
-                payload: r,
-            });
-            return res.json(successBody({
-                action: 'chain-resync',
-                chainId,
-                removedPaths: r.removedPaths,
-                keystoreBackup: r.keystoreBackup,
-                message: 'Chain data wiped. Re-sync started — may take 4–8 hours.',
-            }));
-        } catch (err) {
-            extensionHandle.log.error(`${ENM_LOG_PREFIX} POST /maintenance/chain-resync: ${err.message}`);
-            await _audit(getDb, extensionHandle.log, {
-                walletAddress: wallet,
-                ruleId: null, tier: 'CRITICAL-INFO',
-                decision: 'failed', executor: 'operator',
-                outcome: `Chain resync ${chainId} failed: ${err.message}`,
-                payload: { action: 'chain-resync', chainId, code: err.code },
-            });
-            const status = err.code === 'BUSY' ? 409
-                : err.code === 'NO_CHAIN' ? 404 : 500;
-            // Same pattern as /update above: BUSY message stays as-is
-            // (operator-meaningful), 404 carries the chain-name reference
-            // operators recognize, 500 fallbacks go to the Activity tab
-            // where the audit row above (line 214-220) preserves err.message.
-            const responseMessage = status === 500
-                ? 'Chain re-sync failed. Check the Activity tab for the underlying error.'
-                : err.message;
-            return res.status(status).json(errorBody(responseMessage));
+        // v0.5.232 — reject ineligible chains (no chaindata to wipe).
+        const ineligible = ids.filter((c) => RESYNC_INELIGIBLE.has(c));
+        if (ineligible.length > 0) {
+            return res.status(400).json(errorBody(
+                `These chains have no chaindata to resync: ${ineligible.join(', ')}. `
+                + 'Restart them instead via /chains/:id/restart.',
+            ));
         }
+        // Confirm logic: legacy single-chain expects confirm===chainId; new
+        // multi-chain (any time chainIds is used OR multiple ids resolved)
+        // expects the static "RESYNC". This preserves the v0.5.231 BPoS
+        // gate while letting Council operators confirm 1-N chains uniformly.
+        const isMulti = Array.isArray(chainIdsBody);
+        if (isMulti) {
+            if (confirm !== 'RESYNC') {
+                return res.status(400).json(errorBody(
+                    'Confirmation must be exactly "RESYNC" (uppercase) for the multi-chain form.',
+                ));
+            }
+        } else {
+            if (confirm !== ids[0]) {
+                return res.status(400).json(errorBody(
+                    'Confirmation does not match chain name.',
+                ));
+            }
+        }
+        // Run resyncs serially — parallel wipes would thrash disk + race
+        // each other through the maintenance lock. The HTTP response is
+        // queued, not streamed: operators see "queued" then watch chain
+        // states transition through the dashboard / Activity tab.
+        const results = [];
+        const failures = [];
+        for (const id of ids) {
+            try {
+                const r = await MaintenanceManager.chainResync({
+                    chainId: id,
+                    log: extensionHandle.log,
+                    extensionHandle,
+                });
+                results.push({ chainId: id, ok: true, ...r });
+                await _audit(getDb, extensionHandle.log, {
+                    walletAddress: wallet,
+                    chainId: id,
+                    ruleId: null, tier: 'CRITICAL-INFO',
+                    decision: 'executed', executor: 'operator',
+                    outcome: `Chain resync ${id}: wiped ${r.removedPaths.length} path(s); keystore backup=${r.keystoreBackup || 'none'}`,
+                    payload: r,
+                });
+            } catch (err) {
+                failures.push({ chainId: id, error: err.message, code: err.code });
+                extensionHandle.log.error(
+                    `${ENM_LOG_PREFIX} POST /maintenance/chain-resync (${id}): ${err.message}`,
+                );
+                await _audit(getDb, extensionHandle.log, {
+                    walletAddress: wallet,
+                    chainId: id,
+                    ruleId: null, tier: 'CRITICAL-INFO',
+                    decision: 'failed', executor: 'operator',
+                    outcome: `Chain resync ${id} failed: ${err.message}`,
+                    payload: { action: 'chain-resync', chainId: id, code: err.code },
+                });
+                // If the FIRST chain hit BUSY, stop the loop and surface
+                // 409 to the operator — they can retry once the in-flight
+                // maintenance finishes. Subsequent chains' BUSY is rare
+                // because chainResync acquires + releases per-call.
+                if (err.code === 'BUSY' && results.length === 0) {
+                    return res.status(409).json(errorBody(err.message));
+                }
+            }
+        }
+        const allFailed = results.length === 0 && failures.length > 0;
+        if (allFailed) {
+            return res.status(500).json({
+                ...errorBody('All chain resyncs failed. Check the Activity tab.'),
+                failures,
+            });
+        }
+        return res.json(successBody({
+            action: 'chain-resync',
+            chainIds: ids,
+            results,
+            failures,
+            message: failures.length === 0
+                ? `Chain data wiped for ${ids.length} chain(s). Re-sync started — may take 4–8 hours.`
+                : `Chain data wiped for ${results.length}/${ids.length} chain(s); ${failures.length} failed (see Activity tab).`,
+        }));
     });
 
     // ------------------------------------------------------------------
-    // POST /maintenance/uninstall    owner
+    // POST /maintenance/reset-everything    owner (v0.5.232)
     //
-    // Body: { confirm: "remove" }
+    // Body: { confirm: "RESET EVERYTHING" }     case-sensitive
     //
-    // Detaches a script that DELETEs the extension via pc2-node
-    // (purge=false), leaving /var/lib/pc2/data/extensions/elastos-
-    // node-manager intact for recovery.
+    // The single in-app destructive flow. Wipes ALL data (chain data,
+    // keystore, nodekey, enm.db, audit log, healing history) and SIGKILLs
+    // ENM, but KEEPS the bundle and the pc2-node installed_apps row so
+    // pc2-node's process supervisor respawns ENM with empty data — the
+    // setup wizard appears, and the iframe is never orphaned. Replaces
+    // the retired /maintenance/uninstall, /maintenance/nuke, and
+    // /identity/reset routes (all return 410 Gone now).
     // ------------------------------------------------------------------
-    router.post('/uninstall', limit('admin'), requireOwner, async (req, res) => {
+    router.post('/reset-everything', limit('admin'), requireOwner, async (req, res) => {
         const { value, details } = RequestSchemas.validateBody(
-            RequestSchemas.maintenanceUninstallBody, req.body,
+            RequestSchemas.maintenanceResetEverythingBody, req.body,
         );
         if (details) {
             return res.status(400).json({
@@ -259,9 +326,9 @@ function build(deps) {
             });
         }
         const wallet = readActorWallet(req);
-        if (value.confirm !== 'remove') {
+        if (value.confirm !== 'RESET EVERYTHING') {
             return res.status(400).json(errorBody(
-                'Confirmation must be the word "remove".',
+                'Confirmation must be exactly "RESET EVERYTHING" (uppercase).',
             ));
         }
         try {
@@ -269,97 +336,55 @@ function build(deps) {
                 walletAddress: wallet,
                 ruleId: null, tier: 'CRITICAL-INFO',
                 decision: 'executed', executor: 'operator',
-                outcome: 'Maintenance uninstall queued (data dir preserved)',
-                payload: { action: 'uninstall' },
+                outcome: 'Reset everything queued — all data wiped, ENM will restart to wizard',
+                payload: { action: 'reset-everything' },
             });
-            const r = await MaintenanceManager.uninstall({ log: extensionHandle.log });
+            const r = await MaintenanceManager.resetEverything({ log: extensionHandle.log });
             return res.json(successBody({
                 queued: true,
                 logFile: r.logFile,
-                message: 'Uninstall queued. ENM will be removed within ~10 seconds — '
-                    + 'this page will disconnect when it does. Chain data + keystore '
-                    + 'stay on disk so a reinstall can recover them.',
+                message: 'Reset queued. ENM will wipe all data and restart within '
+                    + '~10 seconds. The setup wizard will reappear when it comes '
+                    + 'back up. If the page does not reload automatically, refresh it.',
             }));
         } catch (err) {
-            extensionHandle.log.error(`${ENM_LOG_PREFIX} POST /maintenance/uninstall: ${err.message}`);
+            extensionHandle.log.error(`${ENM_LOG_PREFIX} POST /maintenance/reset-everything: ${err.message}`);
             await _audit(getDb, extensionHandle.log, {
                 walletAddress: wallet,
                 ruleId: null, tier: 'CRITICAL-INFO',
                 decision: 'failed', executor: 'operator',
-                outcome: `Maintenance uninstall failed: ${err.message}`,
-                payload: { action: 'uninstall', code: err.code },
+                outcome: `Reset everything failed: ${err.message}`,
+                payload: { action: 'reset-everything', code: err.code },
             });
             const status = err.code === 'BUSY' ? 409 : 500;
-            // Same Sessions 64/67/79 pattern: BUSY message is operator-
-            // meaningful ("Another maintenance action is in progress");
-            // 500 fallback goes to the Activity tab for the audit-row
-            // err.message above (line 285-291).
-            const responseMessage = status === 500
-                ? 'Uninstall failed. Check the Activity tab for the underlying error.'
-                : err.message;
-            return res.status(status).json(errorBody(responseMessage));
-        }
-    });
-
-    // ------------------------------------------------------------------
-    // POST /maintenance/nuke    owner
-    //
-    // Body: { confirm: "WIPE EVERYTHING" }     case-sensitive
-    //
-    // Detaches a script that DELETEs the extension (purge=true) and
-    // rm -rf the data dir. Operator loses keystore. Extra confirm-
-    // word friction reflects the impact.
-    // ------------------------------------------------------------------
-    router.post('/nuke', limit('admin'), requireOwner, async (req, res) => {
-        const { value, details } = RequestSchemas.validateBody(
-            RequestSchemas.maintenanceNukeBody, req.body,
-        );
-        if (details) {
-            return res.status(400).json({
-                ...errorBody('Invalid request body.'),
-                details,
-            });
-        }
-        const wallet = readActorWallet(req);
-        // Case-sensitive — "wipe everything" / "WIPE everything" both
-        // bounce. Operator must type the exact gate string.
-        if (value.confirm !== 'WIPE EVERYTHING') {
-            return res.status(400).json(errorBody(
-                'Confirmation must be exactly "WIPE EVERYTHING" (uppercase).',
-            ));
-        }
-        try {
-            await _audit(getDb, extensionHandle.log, {
-                walletAddress: wallet,
-                ruleId: null, tier: 'CRITICAL-INFO',
-                decision: 'executed', executor: 'operator',
-                outcome: 'Maintenance NUKE queued — extension uninstall + data wipe',
-                payload: { action: 'nuke' },
-            });
-            const r = await MaintenanceManager.nuke({ log: extensionHandle.log });
-            return res.json(successBody({
-                queued: true,
-                logFile: r.logFile,
-                message: 'Nuclear wipe queued. ENM and all its data — including '
-                    + 'the keystore — will be destroyed within ~10 seconds. This '
-                    + 'page will disconnect when it does. There is no undo.',
-            }));
-        } catch (err) {
-            extensionHandle.log.error(`${ENM_LOG_PREFIX} POST /maintenance/nuke: ${err.message}`);
-            await _audit(getDb, extensionHandle.log, {
-                walletAddress: wallet,
-                ruleId: null, tier: 'CRITICAL-INFO',
-                decision: 'failed', executor: 'operator',
-                outcome: `Maintenance nuke failed: ${err.message}`,
-                payload: { action: 'nuke', code: err.code },
-            });
-            const status = err.code === 'BUSY' ? 409 : 500;
-            // Same pattern as /uninstall above + Sessions 64/67/79.
             const responseMessage = status === 500
                 ? 'Reset failed. Check the Activity tab for the underlying error.'
                 : err.message;
             return res.status(status).json(errorBody(responseMessage));
         }
+    });
+
+    // ------------------------------------------------------------------
+    // RETIRED v0.5.232 — these three endpoints all return 410 Gone with
+    // a message pointing to the replacement flow. Kept in the router so
+    // any external caller (or a stale frontend mid-upgrade) gets a useful
+    // error instead of a silent 404. Remove after 2 release cycles.
+    // ------------------------------------------------------------------
+    router.post('/uninstall', requireOwner, (_req, res) => {
+        return res.status(410).json(errorBody(
+            'POST /maintenance/uninstall was retired in v0.5.232. To remove the ENM '
+            + 'extension from PC2, right-click the ENM tile on the PC2 desktop and '
+            + 'choose Uninstall. To wipe data and start fresh inside the app, use '
+            + 'Settings → Reset ENM.',
+        ));
+    });
+    router.post('/nuke', requireOwner, (_req, res) => {
+        return res.status(410).json(errorBody(
+            'POST /maintenance/nuke was retired in v0.5.232. Use Settings → Reset ENM '
+            + '(POST /maintenance/reset-everything) instead — the new flow wipes the '
+            + 'same data but keeps the extension installed so the wizard reappears '
+            + 'in place, fixing the "another pc2 inside the app" reload bug.',
+        ));
     });
 
     return router;

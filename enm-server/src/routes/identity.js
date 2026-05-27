@@ -306,108 +306,27 @@ function build(deps) {
             }
         });
 
-    // POST /identity/reset
-    router.post('/reset', limit('admin'), requireOwner, async (req, res) => {
-        const { value, details } = RequestSchemas.validateBody(
-            RequestSchemas.identityResetBody, req.body,
-        );
-        if (details) {
-            return res.status(400).json({
-                ...errorBody('Invalid request body.'),
-                details,
-            });
-        }
-        const wallet = readActorWallet(req);
-        if (value.confirm !== RESET_CONFIRM_PHRASE) {
-            return res.status(400).json(errorBody(
-                `Confirmation must be exactly "${RESET_CONFIRM_PHRASE}".`,
-            ));
-        }
-        // Anti-snipe gate, mirroring SelfHealingEngine's pattern.
-        try {
-            const cfg = await ConfigStore.load();
-            const hash = cfg && cfg.global && cfg.global.antiSnipePasswordHash;
-            if (typeof hash === 'string' && hash.length > 0) {
-                if (!value.antiSnipePassword) {
-                    return res.status(412).json(errorBody(
-                        'Anti-snipe password required. The Settings → Security tab has it set.',
-                    ));
-                }
-                const ok = await _verifyAntiSnipe(hash, value.antiSnipePassword);
-                if (!ok) {
-                    return res.status(401).json(errorBody('Anti-snipe password incorrect.'));
-                }
-            }
-        } catch (err) {
-            return res.status(500).json(errorBody('Anti-snipe verification failed. Please try again.'));
-        }
-        // Producer-state guard.
-        const producer = await KeystoreIdentity.getProducerState(CHAIN_ID);
-        // P1 (v0.5.183) — see _producerStateIndeterminate: a null state with an
-        // existing keystore identity means the on-chain producer record
-        // couldn't be verified (likely RPC down). Resetting then could wipe an
-        // Active producer keystore. Block unless force=true.
-        const indeterminate = await _producerStateIndeterminate(producer);
-        if (indeterminate && !value.force) {
-            return res.status(412).json({
-                ...errorBody(
-                    'Couldn\'t verify the on-chain producer state (the mainchain RPC may be '
-                    + 'briefly unreachable). Resetting the keystore now could orphan an Active '
-                    + 'producer registration and lose block-production rewards. Retry once the node '
-                    + 'is synced and reachable, or acknowledge the rewards-loss warning to proceed anyway.',
-                ),
-                code: 'PRODUCER_STATE_UNVERIFIED',
-            });
-        }
-        if (producer && LOCKED_IN_PRODUCER_STATES.has(producer.state) && !value.force) {
-            return res.status(412).json({
-                ...errorBody(
-                    `Producer is ${producer.state}. Resetting generates a new node public key, `
-                    + 'orphaning your on-chain registration. You\'ll miss block-production rewards '
-                    + 'until you sign DPoSV2UpdateProducer in Essentials with the new key. No deposit '
-                    + 'penalty (InactivePenalty=0 on mainnet). Acknowledge the rewards-loss warning to proceed.',
-                ),
-                code: 'PRODUCER_LOCKED_IN',
-                producerState: producer.state,
-            });
-        }
-        try {
-            const r = await KeystoreIdentity.resetKeystore(CHAIN_ID, {
-                log: extensionHandle.log,
-            });
-            if (!r.ok) {
-                await _audit(getDb, extensionHandle.log, {
-                    walletAddress: wallet,
-                    decision: 'failed',
-                    outcome: `Identity reset failed: ${r.error}`,
-                    payload: { action: 'identity-reset' },
-                });
-                return res.status(500).json(errorBody(r.error));
-            }
-            await _audit(getDb, extensionHandle.log, {
-                walletAddress: wallet,
-                decision: 'executed',
-                outcome: `Identity reset: new pubkey ${r.publicKey.slice(0, 10)}…${r.publicKey.slice(-6)} (archived → ${r.archivedTo || 'none'})`,
-                payload: {
-                    action: 'identity-reset',
-                    publicKey: r.publicKey,
-                    address: r.address,
-                    archivedTo: r.archivedTo,
-                },
-            });
-            return res.json(successBody({
-                publicKey: r.publicKey,
-                address: r.address,
-                // Returned ONCE — caller (the operator) is responsible
-                // for showing + having the operator acknowledge save.
-                generatedPassword: r.generatedPassword,
-                archivedTo: r.archivedTo,
-                keystorePath: r.keystorePath,
-            }));
-        } catch (err) {
-            extensionHandle.log.error(`${ENM_LOG_PREFIX} POST /identity/reset: ${err.message}`);
-            return res.status(500).json(errorBody('Keystore reset failed. Try again.'));
-        }
+    // POST /identity/reset — RETIRED v0.5.232.
+    //
+    // Folded into POST /maintenance/reset-everything. The standalone
+    // identity reset was footgun-shaped: rotating the keystore without
+    // wiping chain data orphans the on-chain producer/CR registration
+    // (the new pubkey doesn't match), and the operator still has to
+    // re-walk wizard cards anyway. The new reset-everything flow does
+    // both in one atomic operation. Returns 410 Gone to surface the
+    // change to any stale frontend or external caller. The original
+    // handler is preserved in git history (see commit b19c15bf and
+    // earlier) — anti-snipe gate, producer-state guard, and
+    // KeystoreIdentity.resetKeystore call all live there if any future
+    // work needs to revive a narrower "keystore-only" rotation path.
+    router.post('/reset', requireOwner, (_req, res) => {
+        return res.status(410).json(errorBody(
+            'POST /identity/reset was retired in v0.5.232. Use Settings → Reset ENM '
+            + '(POST /maintenance/reset-everything) instead — full reset wipes the '
+            + 'keystore alongside chain data and restarts ENM with the wizard, in '
+            + 'place. A standalone keystore rotation orphans your on-chain producer/'
+            + 'CR registration anyway, so the unified reset is the only safe path.',
+        ));
     });
 
     // ------------------------------------------------------------------

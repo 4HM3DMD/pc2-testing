@@ -1395,6 +1395,11 @@
         if (key === 'danger' && typeof this._refreshUpdateInfo === 'function') {
             this._refreshUpdateInfo();
         }
+        // v0.5.232 — repaint the Resync sub-card based on the operator's
+        // current setupRole (Council vs BPoS). Idempotent.
+        if (key === 'danger' && typeof this._refreshDangerResyncCard === 'function') {
+            this._refreshDangerResyncCard();
+        }
         // beta.3.43 — Identity tab: refresh /identity (current cached
         // pubkey + address, producer state, keystore-exists flag) so the
         // operator sees current info on every entry.
@@ -2312,72 +2317,44 @@
         };
         updateBtn.addEventListener('click', function () { self._doUpdate(); });
 
-        // ---------- Sub-card 2: Chain resync ----------
+        // ---------- Sub-card 2: Resync chains (v0.5.232, mode-aware) ----------
+        // Pre-v0.5.232 this card was hard-coded to mainchain, which broke
+        // Council operators (couldn't resync EID/ESC/PG from the UI). Now
+        // the card paints differently based on cfg setupRole:
+        //   - BPoS: single "Resync mainchain" button (mainchain is the only
+        //     chain with chaindata on a BPoS supernode)
+        //   - Council: checkbox list of {mainchain, esc, eid, pg} (the 4
+        //     chains with chaindata; arbiter + oracles are services, no
+        //     chaindata to wipe). Default all checked.
+        // Mode lookup happens on section activation via _refreshDangerResyncCard
+        // (calls /system/identity).
         var resyncCard = _buildDangerCard({
             kind: 'warn',
             title: t('settings.danger_resync_title'),
             help: t('settings.danger_resync_help'),
         });
         body.appendChild(resyncCard.el);
-        var resyncConfirm = _buildTypedConfirm({
-            label: t('settings.danger_resync_confirm_label'),
-            placeholder: 'mainchain',
-            expected: 'mainchain',
-        });
-        resyncCard.body.appendChild(resyncConfirm.el);
-        var resyncBtn = document.createElement('button');
-        resyncBtn.type = 'button';
-        resyncBtn.className = 'enm-btn enm-btn-danger';
-        resyncBtn.textContent = t('settings.danger_resync_btn');
-        resyncBtn.disabled = true;
+        // Mode container — _refreshDangerResyncCard re-renders this inner
+        // body once setupRole is known.
+        var resyncModeContainer = document.createElement('div');
+        resyncModeContainer.className = 'enm-danger-resync-modes';
+        resyncCard.body.appendChild(resyncModeContainer);
         var resyncStatus = document.createElement('div');
         resyncStatus.className = 'enm-danger-status';
         resyncStatus.setAttribute('role', 'status');
         resyncStatus.setAttribute('aria-live', 'polite');
         resyncCard.foot.appendChild(resyncStatus);
-        resyncCard.foot.appendChild(resyncBtn);
-        resyncConfirm.input.addEventListener('input', function () {
-            resyncBtn.disabled = !resyncConfirm.matches();
-        });
-        resyncBtn.addEventListener('click', function () {
-            self._doChainResync('mainchain', resyncConfirm.input.value);
-        });
+        // Track the resync card so _refreshDangerResyncCard can repaint.
         this._danger.resync = {
-            confirm: resyncConfirm, btn: resyncBtn, status: resyncStatus,
-        };
-
-        // ---------- Sub-card 3: App removal ----------
-        var removeCard = _buildDangerCard({
-            kind: 'warn',
-            title: t('settings.danger_remove_title'),
-            help: t('settings.danger_remove_help'),
-        });
-        body.appendChild(removeCard.el);
-        var removeConfirm = _buildTypedConfirm({
-            label: t('settings.danger_remove_confirm_label'),
-            placeholder: 'remove',
-            expected: 'remove',
-        });
-        removeCard.body.appendChild(removeConfirm.el);
-        var removeBtn = document.createElement('button');
-        removeBtn.type = 'button';
-        removeBtn.className = 'enm-btn enm-btn-danger';
-        removeBtn.textContent = t('settings.danger_remove_btn');
-        removeBtn.disabled = true;
-        var removeStatus = document.createElement('div');
-        removeStatus.className = 'enm-danger-status';
-        removeStatus.setAttribute('role', 'status');
-        removeStatus.setAttribute('aria-live', 'polite');
-        removeCard.foot.appendChild(removeStatus);
-        removeCard.foot.appendChild(removeBtn);
-        removeConfirm.input.addEventListener('input', function () {
-            removeBtn.disabled = !removeConfirm.matches();
-        });
-        removeBtn.addEventListener('click', function () {
-            self._doUninstall(removeConfirm.input.value);
-        });
-        this._danger.remove = {
-            confirm: removeConfirm, btn: removeBtn, status: removeStatus,
+            card: resyncCard.el,
+            modeContainer: resyncModeContainer,
+            foot: resyncCard.foot,
+            status: resyncStatus,
+            // Populated by the mode-specific render path:
+            mode: null,              // 'bpos' | 'council' | null until known
+            checkboxes: {},          // council only — chainId → input
+            confirm: null,
+            btn: null,
         };
 
         // ---------- Sub-card 3b: Staged chain resume (v0.5.228) ----------
@@ -2603,48 +2580,184 @@
             getInstance: function () { return stageInstance; },
         };
 
-        // ---------- Sub-card 4: Nuclear wipe ----------
-        var nukeCard = _buildDangerCard({
+        // ---------- Sub-card 4: Reset ENM (full wipe + in-place restart) ----------
+        // v0.5.232 — replaces the old "Nuke" + "Remove app" + "Reset keystore"
+        // cards. Wipes ALL data (chain data, keystore, nodekey, settings,
+        // audit log) and restarts ENM in place via pc2-node's process
+        // supervisor — the bundle is preserved, so the iframe never
+        // serves the orphan-pc2 root content that caused the "another
+        // pc2 inside the app" symptom. After 200 OK, the frontend
+        // location.reload's so the wizard appears automatically.
+        var resetCard = _buildDangerCard({
             kind: 'critical',
-            title: t('settings.danger_nuke_title'),
-            help: t('settings.danger_nuke_help'),
+            title: t('settings.danger_reset_title'),
+            help: t('settings.danger_reset_help'),
         });
-        body.appendChild(nukeCard.el);
-        var nukeWarn = document.createElement('div');
-        nukeWarn.className = 'enm-danger-warning';
-        nukeWarn.textContent = t('settings.danger_nuke_warning');
-        nukeCard.body.appendChild(nukeWarn);
-        var nukeConfirm = _buildTypedConfirm({
-            label: t('settings.danger_nuke_confirm_label'),
-            placeholder: 'WIPE EVERYTHING',
-            expected: 'WIPE EVERYTHING',
+        body.appendChild(resetCard.el);
+        var resetWarn = document.createElement('div');
+        resetWarn.className = 'enm-danger-warning';
+        resetWarn.textContent = t('settings.danger_reset_warning');
+        resetCard.body.appendChild(resetWarn);
+        var resetConfirm = _buildTypedConfirm({
+            label: t('settings.danger_reset_confirm_label'),
+            placeholder: 'RESET EVERYTHING',
+            expected: 'RESET EVERYTHING',
             // Case-sensitive — matches the backend gate exactly.
             caseSensitive: true,
         });
-        nukeCard.body.appendChild(nukeConfirm.el);
-        var nukeBtn = document.createElement('button');
-        nukeBtn.type = 'button';
-        nukeBtn.className = 'enm-btn enm-btn-danger';
-        nukeBtn.textContent = t('settings.danger_nuke_btn');
-        nukeBtn.disabled = true;
-        var nukeStatus = document.createElement('div');
-        nukeStatus.className = 'enm-danger-status';
-        nukeStatus.setAttribute('role', 'status');
-        nukeStatus.setAttribute('aria-live', 'polite');
-        nukeCard.foot.appendChild(nukeStatus);
-        nukeCard.foot.appendChild(nukeBtn);
-        nukeConfirm.input.addEventListener('input', function () {
-            nukeBtn.disabled = !nukeConfirm.matches();
+        resetCard.body.appendChild(resetConfirm.el);
+        var resetBtn = document.createElement('button');
+        resetBtn.type = 'button';
+        resetBtn.className = 'enm-btn enm-btn-danger';
+        resetBtn.textContent = t('settings.danger_reset_btn');
+        resetBtn.disabled = true;
+        var resetStatus = document.createElement('div');
+        resetStatus.className = 'enm-danger-status';
+        resetStatus.setAttribute('role', 'status');
+        resetStatus.setAttribute('aria-live', 'polite');
+        resetCard.foot.appendChild(resetStatus);
+        resetCard.foot.appendChild(resetBtn);
+        resetConfirm.input.addEventListener('input', function () {
+            resetBtn.disabled = !resetConfirm.matches();
         });
-        nukeBtn.addEventListener('click', function () {
-            self._doNuke(nukeConfirm.input.value);
+        resetBtn.addEventListener('click', function () {
+            self._doResetEverything(resetConfirm.input.value);
         });
-        this._danger.nuke = {
-            confirm: nukeConfirm, btn: nukeBtn, status: nukeStatus,
+        this._danger.reset = {
+            confirm: resetConfirm, btn: resetBtn, status: resetStatus,
         };
 
         return card;
     };
+
+    /**
+     * v0.5.232 — Paint the Resync sub-card based on the operator's
+     * setupRole. Called on Danger Zone section activation, idempotent.
+     * BPoS gets a single "Resync mainchain" button; Council gets a
+     * checkbox list of {mainchain, esc, eid, pg} with "Resync selected"
+     * + a static "RESYNC" typed-confirm gate.
+     */
+    SettingsTab.prototype._refreshDangerResyncCard = function () {
+        var self = this;
+        var t = root.enmTOrFallback;
+        if (!self._danger || !self._danger.resync) { return; }
+        var pane = self._danger.resync;
+        // Wipe previous render so consecutive activations don't accumulate.
+        pane.modeContainer.innerHTML = '';
+        pane.checkboxes = {};
+        pane.confirm = null;
+        pane.btn = null;
+        self.api.get('/system/identity', { skipCache: true })
+            .then(function (resp) {
+                if (self._destroyed) { return; }
+                var r = (resp && resp.result) || resp || {};
+                var role = r.setupRole || 'unknown';
+                pane.mode = role === 'council' ? 'council' : 'bpos';
+                if (pane.mode === 'council') {
+                    _paintCouncilResync(self, pane, t);
+                } else {
+                    _paintBposResync(self, pane, t);
+                }
+            })
+            .catch(function () {
+                if (self._destroyed) { return; }
+                // Fail safe: assume BPoS (single mainchain button) — least
+                // surprising default for any operator who ever set up ENM.
+                pane.mode = 'bpos';
+                _paintBposResync(self, pane, t);
+            });
+    };
+
+    function _paintBposResync(self, pane, t) {
+        // Single-chain (BPoS) — typed-confirm "mainchain", single button.
+        var help = document.createElement('div');
+        help.className = 'enm-danger-resync-help';
+        help.textContent = t('settings.danger_resync_bpos_help');
+        pane.modeContainer.appendChild(help);
+        var confirm = _buildTypedConfirm({
+            label: t('settings.danger_resync_bpos_confirm_label'),
+            placeholder: 'mainchain',
+            expected: 'mainchain',
+        });
+        pane.modeContainer.appendChild(confirm.el);
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'enm-btn enm-btn-danger';
+        btn.textContent = t('settings.danger_resync_bpos_btn');
+        btn.disabled = true;
+        pane.foot.appendChild(btn);
+        confirm.input.addEventListener('input', function () {
+            btn.disabled = !confirm.matches();
+        });
+        btn.addEventListener('click', function () {
+            self._doChainResync({ chainIds: ['mainchain'], confirm: confirm.input.value });
+        });
+        pane.confirm = confirm;
+        pane.btn = btn;
+    }
+
+    function _paintCouncilResync(self, pane, t) {
+        // Multi-chain (Council) — checkbox list of {mainchain, esc, eid, pg}
+        // + static "RESYNC" typed-confirm + single "Resync selected" button.
+        var help = document.createElement('div');
+        help.className = 'enm-danger-resync-help';
+        help.textContent = t('settings.danger_resync_council_help');
+        pane.modeContainer.appendChild(help);
+        var list = document.createElement('div');
+        list.className = 'enm-danger-resync-checklist';
+        var COUNCIL_CHAINS = [
+            { id: 'mainchain', label: 'ELA mainchain' },
+            { id: 'esc',       label: 'ESC (Smart Contract)' },
+            { id: 'eid',       label: 'EID (Identity)' },
+            { id: 'pg',        label: 'PG (Privacy)' },
+        ];
+        COUNCIL_CHAINS.forEach(function (c) {
+            var row = document.createElement('label');
+            row.className = 'enm-danger-resync-row';
+            var cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.checked = true; // default all selected
+            cb.dataset.chainId = c.id;
+            var span = document.createElement('span');
+            span.textContent = c.label;
+            row.appendChild(cb);
+            row.appendChild(span);
+            list.appendChild(row);
+            pane.checkboxes[c.id] = cb;
+        });
+        pane.modeContainer.appendChild(list);
+        var confirm = _buildTypedConfirm({
+            label: t('settings.danger_resync_council_confirm_label'),
+            placeholder: 'RESYNC',
+            expected: 'RESYNC',
+            caseSensitive: true,
+        });
+        pane.modeContainer.appendChild(confirm.el);
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'enm-btn enm-btn-danger';
+        btn.textContent = t('settings.danger_resync_council_btn');
+        btn.disabled = true;
+        pane.foot.appendChild(btn);
+        function refreshGate() {
+            var anyChecked = COUNCIL_CHAINS.some(function (c) {
+                return pane.checkboxes[c.id] && pane.checkboxes[c.id].checked;
+            });
+            btn.disabled = !(anyChecked && confirm.matches());
+        }
+        confirm.input.addEventListener('input', refreshGate);
+        Object.keys(pane.checkboxes).forEach(function (id) {
+            pane.checkboxes[id].addEventListener('change', refreshGate);
+        });
+        btn.addEventListener('click', function () {
+            var picked = COUNCIL_CHAINS
+                .filter(function (c) { return pane.checkboxes[c.id] && pane.checkboxes[c.id].checked; })
+                .map(function (c) { return c.id; });
+            self._doChainResync({ chainIds: picked, confirm: confirm.input.value });
+        });
+        pane.confirm = confirm;
+        pane.btn = btn;
+    }
 
     /**
      * Render an update-info refresh against /maintenance/check-update.
@@ -2719,86 +2832,84 @@
         });
     };
 
-    SettingsTab.prototype._doChainResync = function (chainId, confirmText) {
+    /**
+     * v0.5.232 — Submit a chain resync. Accepts the new object shape
+     * { chainIds:[], confirm:string }. Posts to /maintenance/chain-resync.
+     * Status appears in the shared resync-card status element. Caller
+     * has already enforced the typed-confirm gate.
+     */
+    SettingsTab.prototype._doChainResync = function (opts) {
         var self = this;
         var t = root.enmTOrFallback;
-        var s = self._danger.resync;
-        // v0.5.217 audit Phase 3 (AUDIT-FLOW-DZ01, P2) — native confirm()
-        // removed. Typed-confirm gate ("mainchain") already protects.
-        s.status.textContent = t('settings.danger_resync_in_progress');
-        s.status.classList.remove('ok', 'err');
-        return root.enmRunOnce(s.btn, t('settings.danger_resync_in_progress'), function () {
-            return self.api.post('/maintenance/chain-resync', {
-                chainId: chainId,
-                confirm: confirmText,
-            })
+        var pane = self._danger.resync;
+        if (!pane || !pane.btn) { return; }
+        var body = {
+            chainIds: opts && opts.chainIds ? opts.chainIds : [],
+            confirm: opts && opts.confirm ? opts.confirm : '',
+        };
+        if (body.chainIds.length === 0) {
+            pane.status.textContent = t('settings.danger_resync_no_selection') || 'Pick at least one chain.';
+            pane.status.classList.add('err');
+            return;
+        }
+        pane.status.textContent = t('settings.danger_resync_in_progress');
+        pane.status.classList.remove('ok', 'err');
+        return root.enmRunOnce(pane.btn, t('settings.danger_resync_in_progress'), function () {
+            return self.api.post('/maintenance/chain-resync', body)
                 .then(function (resp) {
                     if (self._destroyed) { return; }
                     var r = (resp && resp.result) || resp || {};
-                    s.status.textContent = r.message || t('settings.danger_resync_ok');
-                    s.status.classList.add('ok');
-                    s.confirm.input.value = '';
-                    s.btn.disabled = true;
+                    pane.status.textContent = r.message || t('settings.danger_resync_ok');
+                    pane.status.classList.add('ok');
+                    if (pane.confirm && pane.confirm.input) { pane.confirm.input.value = ''; }
+                    pane.btn.disabled = true;
                 })
                 .catch(function (err) {
                     if (self._destroyed) { return; }
                     // 0.5.130 audit Session 130 — silence on 401, see _doUpdate.
                     if (err && err.status === 401) { return; }
-                    s.status.textContent = (err && err.message) || 'Resync failed.';
-                    s.status.classList.add('err');
+                    pane.status.textContent = (err && err.message) || 'Resync failed.';
+                    pane.status.classList.add('err');
                 });
         });
     };
 
-    SettingsTab.prototype._doUninstall = function (confirmText) {
+    /**
+     * v0.5.232 — Submit a full reset (POST /maintenance/reset-everything).
+     * On 200 OK, schedule a location.reload() after 6 seconds so the
+     * setup wizard appears as soon as pc2-node respawns ENM. Replaces
+     * the old _doUninstall + _doNuke (both routes return 410 Gone now).
+     */
+    SettingsTab.prototype._doResetEverything = function (confirmText) {
         var self = this;
         var t = root.enmTOrFallback;
-        var s = self._danger.remove;
-        // v0.5.217 audit Phase 3 (AUDIT-FLOW-DZ01, P2) — native confirm()
-        // removed. Typed-confirm gate ("remove") already protects.
-        s.status.textContent = t('settings.danger_remove_in_progress');
+        var s = self._danger.reset;
+        if (!s) { return; }
+        s.status.textContent = t('settings.danger_reset_in_progress');
         s.status.classList.remove('ok', 'err');
-        return root.enmRunOnce(s.btn, t('settings.danger_remove_in_progress'), function () {
-            return self.api.post('/maintenance/uninstall', { confirm: confirmText })
+        return root.enmRunOnce(s.btn, t('settings.danger_reset_in_progress'), function () {
+            return self.api.post('/maintenance/reset-everything', { confirm: confirmText })
                 .then(function (resp) {
                     if (self._destroyed) { return; }
                     var r = (resp && resp.result) || resp || {};
-                    s.status.textContent = r.message || t('settings.danger_remove_queued');
+                    s.status.textContent = r.message || t('settings.danger_reset_queued');
                     s.status.classList.add('ok');
+                    // v0.5.232 — auto-reload after ~6s so the setup wizard
+                    // appears once pc2-node respawns ENM. The teardown
+                    // script's own 2s sleep + ENM's own boot is usually
+                    // <5s; we give a small margin then reload. The boot
+                    // guard in app.js will retry /health if the iframe
+                    // happens to hit a brief window where ENM isn't up
+                    // yet — belt-and-suspenders.
+                    setTimeout(function () {
+                        try { window.location.reload(); }
+                        catch (_) { /* iframe sandbox edge case */ }
+                    }, 6000);
                 })
                 .catch(function (err) {
                     if (self._destroyed) { return; }
-                    // 0.5.130 audit Session 130 — silence on 401, see _doUpdate.
                     if (err && err.status === 401) { return; }
-                    s.status.textContent = (err && err.message) || 'Uninstall failed.';
-                    s.status.classList.add('err');
-                });
-        });
-    };
-
-    SettingsTab.prototype._doNuke = function (confirmText) {
-        var self = this;
-        var t = root.enmTOrFallback;
-        var s = self._danger.nuke;
-        // v0.5.217 audit Phase 3 (AUDIT-FLOW-DZ01, P2) — native confirm()
-        // removed. The case-sensitive typed-confirm gate ("WIPE EVERYTHING")
-        // is the strongest gate in the app + provides the muscle-memory
-        // friction the native dialog was trying to add.
-        s.status.textContent = t('settings.danger_nuke_in_progress');
-        s.status.classList.remove('ok', 'err');
-        return root.enmRunOnce(s.btn, t('settings.danger_nuke_in_progress'), function () {
-            return self.api.post('/maintenance/nuke', { confirm: confirmText })
-                .then(function (resp) {
-                    if (self._destroyed) { return; }
-                    var r = (resp && resp.result) || resp || {};
-                    s.status.textContent = r.message || t('settings.danger_nuke_queued');
-                    s.status.classList.add('ok');
-                })
-                .catch(function (err) {
-                    if (self._destroyed) { return; }
-                    // 0.5.130 audit Session 130 — silence on 401, see _doUpdate.
-                    if (err && err.status === 401) { return; }
-                    s.status.textContent = (err && err.message) || 'Nuke failed.';
+                    s.status.textContent = (err && err.message) || 'Reset failed.';
                     s.status.classList.add('err');
                 });
         });
@@ -3098,49 +3209,14 @@
         this._identity.importWarn = importWarn;
 
         // ----- Card 5: Reset -----------------------------------------
-        var resetCard = _buildDangerCard({
-            kind: 'critical',
-            title: t('settings.identity_reset_title'),
-            help:  t('settings.identity_reset_help'),
-        });
-        body.appendChild(resetCard.el);
-        var resetWarn = document.createElement('div');
-        resetWarn.className = 'enm-danger-warning';
-        resetWarn.hidden = true;
-        resetWarn.textContent = t('settings.identity_slashing_warning');
-        resetCard.body.appendChild(resetWarn);
-        var resetConfirm = _buildTypedConfirm({
-            label: t('settings.identity_reset_confirm_label'),
-            placeholder: 'reset keystore',
-            expected: 'reset keystore',
-            caseSensitive: false,
-        });
-        resetCard.body.appendChild(resetConfirm.el);
-        var resetBtn = document.createElement('button');
-        resetBtn.type = 'button';
-        resetBtn.className = 'enm-btn enm-btn-danger';
-        resetBtn.textContent = t('settings.identity_reset_btn');
-        resetBtn.disabled = true;
-        var resetStatus = _statusEl();
-        resetCard.foot.appendChild(resetStatus);
-        resetCard.foot.appendChild(resetBtn);
-        resetConfirm.input.addEventListener('input', function () {
-            resetBtn.disabled = !resetConfirm.matches();
-        });
-        resetBtn.addEventListener('click', function () {
-            self._doIdentityReset(resetBtn, resetStatus, resetWarn, resetConfirm);
-        });
-        // Reveal area for the new password — populated inline on success.
-        var resetReveal = document.createElement('div');
-        resetReveal.className = 'enm-identity-reset-reveal';
-        resetReveal.hidden = true;
-        resetCard.body.appendChild(resetReveal);
-        this._identity.resetCard = resetCard.el;
-        this._identity.resetConfirm = resetConfirm;
-        this._identity.resetBtn = resetBtn;
-        this._identity.resetStatus = resetStatus;
-        this._identity.resetWarn = resetWarn;
-        this._identity.resetReveal = resetReveal;
+        // v0.5.232 — REMOVED. The standalone "reset keystore" was a footgun:
+        // rotating the key without wiping chain data orphans the on-chain
+        // producer/CR registration (new pubkey doesn't match), and the
+        // operator still has to re-walk wizard cards anyway. The new
+        // Settings → Danger Zone → Reset ENM card wipes keystore + chain
+        // data in one atomic flow. Server-side POST /identity/reset now
+        // returns 410 Gone — see routes/identity.js for the operator-
+        // facing message that points them to the unified reset.
 
         // ----- Card 6: Server integrity (beta.3.46) -------------------
         // Quiet by default — collapsed, only runs when expanded. Cached
@@ -3415,15 +3491,8 @@
         var self = this;
         var t = root.enmTOrFallback;
         if (!self._identity) { return; }
-        // v0.5.216 audit Phase 2 (AUDIT-FLOW-I01, P1) — skip the repaint
-        // while the operator hasn't yet ack'd a freshly-revealed Reset
-        // password. _doIdentityReset sets _resetRevealPendingAck=true;
-        // dismiss handler clears it then calls back into this method.
-        // Without this gate, the parent setting-tab activation hook
-        // (line ~1237) would call _refreshIdentity, rebuild the cards,
-        // and clobber the reveal panel with the new password the
-        // operator hasn't saved yet.
-        if (self._resetRevealPendingAck) { return; }
+        // v0.5.232 — the _resetRevealPendingAck guard is gone with the
+        // identity reset card itself (folded into Settings → Reset ENM).
         self.api.get('/identity', { skipCache: true })
             .then(function (resp) {
                 if (self._destroyed) { return; }
@@ -3476,10 +3545,11 @@
                 // Unlock card is visible only when keystore exists but
                 // we don't have its identity cached yet.
                 self._identity.unlockCard.hidden = !r.identityCacheMissing;
-                // Slashing-risk callouts on destructive cards.
+                // Slashing-risk callout on the keystore-import card (the
+                // only destructive identity card left after v0.5.232 —
+                // the standalone reset card was retired).
                 var lockedIn = !!(p && (p.state === 'Active' || p.state === 'Pending'));
                 self._identity.importWarn.hidden = !lockedIn;
-                self._identity.resetWarn.hidden = !lockedIn;
                 // Wire copy buttons (idempotent).
                 self._wireIdentityCopyButtons(id);
             })
@@ -3726,161 +3796,12 @@
     };
 
     /** POST /identity/reset with the typed confirm + optional anti-snipe. */
-    SettingsTab.prototype._doIdentityReset = function (btn, status, warnEl, confirmObj) {
-        var self = this;
-        var t = root.enmTOrFallback;
-        // v0.5.217 audit Phase 3 (AUDIT-FLOW-I13, P2) — native confirm()
-        // removed. The typed-confirm gate ("reset keystore") + the post-
-        // reveal ack checkbox (added in Phase 2 for I01) together provide
-        // strong defense-in-depth; the native dialog was redundant.
-        status.textContent = t('settings.identity_reset_running');
-        status.classList.remove('ok', 'err');
-        var force = !warnEl.hidden;
-        var body = { confirm: confirmObj.input.value };
-        if (force) { body.force = true; }
-        return root.enmRunOnce(btn,
-            t('settings.identity_reset_running'),
-            function () {
-                return self.api.post('/identity/reset', body)
-                    .then(function (resp) {
-                        if (self._destroyed) { return; }
-                        var r = (resp && resp.result) || resp || {};
-                        var newPw = r.generatedPassword || '';
-                        var last4 = newPw.slice(-4);
-                        // v0.5.216 audit Phase 2 (AUDIT-FLOW-I01, P1) — the
-                        // reveal now includes an ACK CHECKBOX + LAST-4
-                        // anti-typo gate matching the setup wizard Card 3
-                        // pattern. Pre-v0.5.216 the operator could reveal
-                        // the new password, copy it, switch tabs — and
-                        // lose it forever (clipboard cleared on next copy
-                        // / refresh / navigation) → permanently locked out
-                        // of an Active producer keystore. The gate keeps
-                        // the rest of Identity inert until the operator
-                        // confirms they have the password saved.
-                        self._identity.resetReveal.hidden = false;
-                        self._identity.resetReveal.innerHTML =
-                            '<div class="enm-password-warning" role="alert">'
-                              + '<span class="enm-password-warning-icon" aria-hidden="true">⚠</span>'
-                              + '<span class="enm-password-warning-body">'
-                                + _h(t('settings.identity_reset_password_warning'))
-                              + '</span>'
-                            + '</div>'
-                            + '<div class="enm-password-reveal">'
-                              + '<div class="enm-password-label">'
-                                + _h(t('friendly.setup.card_c.password_label'))
-                              + '</div>'
-                              + '<code class="enm-password-value">'
-                                + _h(newPw)
-                              + '</code>'
-                              + '<div class="enm-password-actions">'
-                                + '<span class="enm-password-copy-slot"></span>'
-                              + '</div>'
-                            + '</div>'
-                            // Ack gate — checkbox + last-4 retype.
-                            + '<div class="enm-password-ack" role="group" aria-label="Confirm you saved the new password">'
-                              + '<label class="enm-password-ack-row">'
-                                + '<input type="checkbox" data-fill="reveal-ack" />'
-                                + '<span>I have saved this password to my password manager.</span>'
-                              + '</label>'
-                              + '<label class="enm-password-ack-row">'
-                                + '<span>Retype the last 4 characters to confirm:</span>'
-                                + '<input type="text" data-fill="reveal-last4" maxlength="4" autocomplete="off" spellcheck="false" style="text-transform: lowercase; width: 6em; font-family: monospace;" />'
-                              + '</label>'
-                              + '<button type="button" data-action="reveal-dismiss" class="enm-btn enm-btn-primary" disabled>I have saved it — close this</button>'
-                              + '<p class="enm-password-ack-warn" style="margin-top: 8px; color: var(--state-warning, #c97a00); font-size: 12px;">⚠ The other Identity controls are locked until you confirm. If you lose this password, your keystore is unrecoverable.</p>'
-                            + '</div>';
-                        // Wire copy button on the password.
-                        var pwEl = self._identity.resetReveal.querySelector('.enm-password-value');
-                        if (typeof root.enmCopyButton === 'function' && newPw) {
-                            var copyBtn = root.enmCopyButton({
-                                value: newPw,
-                                label: t('friendly.setup.card_c.cta_copy') || 'Copy',
-                                copiedLabel: t('friendly.setup.card_c.cta_copied') || 'Copied!',
-                                ariaLabel: 'Copy new password',
-                                resetMs: 1500,
-                                notifications: self.notifications,
-                                getDisplayEl: function () { return pwEl; },
-                            });
-                            copyBtn.classList.add('enm-password-copy');
-                            var slot = self._identity.resetReveal.querySelector('.enm-password-copy-slot');
-                            if (slot && slot.parentNode) {
-                                slot.parentNode.replaceChild(copyBtn, slot);
-                            }
-                        }
-                        // Wire the ack-gate handlers + lock the rest of
-                        // Identity until the operator confirms.
-                        self._resetRevealPendingAck = true;
-                        var lockTargets = [
-                            self._identity.currentCard,
-                            self._identity.unlockCard,
-                            self._identity.backupCard,
-                            self._identity.importCard,
-                            self._identity.integrity && self._identity.integrity.card,
-                        ];
-                        lockTargets.forEach(function (el) {
-                            if (el) {
-                                el.setAttribute('inert', '');
-                                el.setAttribute('aria-hidden', 'true');
-                                el.style.opacity = '0.35';
-                                el.style.pointerEvents = 'none';
-                            }
-                        });
-                        // Also disable the Reset card's own Reset button
-                        // so the operator can't trigger ANOTHER reset
-                        // (would generate yet another password without
-                        // saving this one).
-                        if (self._identity.resetBtn) {
-                            self._identity.resetBtn.disabled = true;
-                        }
-                        var ackBox = self._identity.resetReveal.querySelector('[data-fill="reveal-ack"]');
-                        var last4Input = self._identity.resetReveal.querySelector('[data-fill="reveal-last4"]');
-                        var dismissBtn = self._identity.resetReveal.querySelector('[data-action="reveal-dismiss"]');
-                        function refreshGate() {
-                            var typed = (last4Input.value || '').trim().toLowerCase();
-                            dismissBtn.disabled = !(ackBox.checked && typed === last4.toLowerCase());
-                        }
-                        ackBox.addEventListener('change', refreshGate);
-                        last4Input.addEventListener('input', refreshGate);
-                        dismissBtn.addEventListener('click', function () {
-                            if (dismissBtn.disabled) { return; }
-                            // Operator confirmed — re-enable everything.
-                            self._resetRevealPendingAck = false;
-                            self._identity.resetReveal.hidden = true;
-                            self._identity.resetReveal.innerHTML = '';
-                            lockTargets.forEach(function (el) {
-                                if (el) {
-                                    el.removeAttribute('inert');
-                                    el.removeAttribute('aria-hidden');
-                                    el.style.opacity = '';
-                                    el.style.pointerEvents = '';
-                                }
-                            });
-                            if (self._identity.resetBtn) {
-                                self._identity.resetBtn.disabled = true; // typed-confirm still empty
-                            }
-                            self._refreshIdentity();
-                        });
-                        status.textContent = t('settings.identity_reset_ok');
-                        status.classList.add('ok');
-                        confirmObj.input.value = '';
-                        btn.disabled = true;
-                        if (typeof self.api.invalidate === 'function') {
-                            try { self.api.invalidate('/system/identity'); }
-                            catch (_) { /* ignore */ }
-                        }
-                        // Deferred — _refreshIdentity now early-returns
-                        // while _resetRevealPendingAck is true (see method),
-                        // so it'll fire after the operator acks.
-                    })
-                    .catch(function (err) {
-                        if (self._destroyed) { return; }
-                        // 0.5.131 audit Session 131 — silence on 401, see _refreshIdentity line 2221.
-                        if (err && err.status === 401) { return; }
-                        status.textContent = (err && err.message) || 'Reset failed.';
-                        status.classList.add('err');
-                    });
-            });
-    };
+    // v0.5.232 — SettingsTab.prototype._doIdentityReset removed. The
+    // standalone keystore-reset flow was folded into Settings → Reset
+    // ENM (see _doResetEverything below). The 150-line method that lived
+    // here, including the reveal-ack flow with last-4 anti-typo gate, is
+    // preserved in git history (commit b19c15bf and earlier) for any
+    // future work that needs to revive a narrower rotation path.
 
     /** Build a labelled control row used inside Identity sub-cards. */
     function _wrapLabel(labelText, control) {
