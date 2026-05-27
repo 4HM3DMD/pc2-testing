@@ -2321,10 +2321,10 @@
         // Pre-v0.5.232 this card was hard-coded to mainchain, which broke
         // Council operators (couldn't resync EID/ESC/PG from the UI). Now
         // the card paints differently based on cfg setupRole:
-        //   - BPoS: single "Resync mainchain" button (mainchain is the only
-        //     chain with chaindata on a BPoS supernode)
-        //   - Council: checkbox list of {mainchain, esc, eid, pg} (the 4
-        //     chains with chaindata; arbiter + oracles are services, no
+        //   - BPoS: single "Resync Main chain" button (Main chain is the
+        //     only chain with chaindata on a BPoS supernode)
+        //   - Council: checkbox list of {Main chain, ESC, EID, PG} (the 4
+        //     chains with chaindata; Arbiter + oracles are services, no
         //     chaindata to wipe). Default all checked.
         // Mode lookup happens on section activation via _refreshDangerResyncCard
         // (calls /system/identity).
