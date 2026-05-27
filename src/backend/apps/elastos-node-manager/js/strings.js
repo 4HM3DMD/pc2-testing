@@ -214,7 +214,7 @@
                     // beta.3.38 — explicit warning callout above the password
                     // block + a row label so the operator's eye lands on the
                     // value, not on the surrounding chrome.
-                    warning:          "This password is shown ONCE. If you lose it, you can't recover the keystore — you'd have to re-register the supernode from scratch. A password manager is the safest place.",
+                    warning:          "This password is shown ONCE. If you lose it, you can't recover the keystore — you'd have to re-register the node from scratch (BPoS producer-register OR CR Council claim, depending on your role). A password manager is the safest place.",
                     password_label:   'Password',
                     cta_generate:     'Generate my password',
                     cta_continue:     'Continue',
@@ -272,10 +272,12 @@
                     reward_hint:  'Paste your Ethereum-style address from Essentials. '
                                 + 'Same address is used for ESC, EID, PG, and the Arbiter — '
                                 + 'one wallet, one input.',
-                    note_mining_off: 'Heads up: mining is OFF by default on the EVM sidechains. '
+                    note_mining_off: 'Heads up: ENM does not toggle EVM sidechain mining — it activates '
+                                + 'automatically the moment this node\'s public key appears in the on-chain '
+                                + 'arbiter slate (once you bind your CR Council seat in Elastos Essentials). '
                                 + 'Most Council rewards come from BPoS mainchain blocks and Arbiter '
-                                + 'SideChainPow heartbeats. You can turn sidechain mining on later via '
-                                + 'Settings → Mining & Rewards if you want the extra (small) rewards.',
+                                + 'SideChainPow heartbeats; sidechain rewards arrive automatically when '
+                                + 'on-duty. The reward addresses you set here are persisted for that moment.',
                     cta:          'Install Council stack',
                 },
                 card_f: {
@@ -1209,7 +1211,7 @@
             heading_storage:  'Storage',
             // Per-section one-line intros rendered as help under the heading.
             access_intro:     'Allow specific tools to reach this node’s JSON-RPC. Loopback (127.0.0.1) is always allowed so ENM itself can talk to ela.',
-            security_intro:   'Defense-in-depth for your BPoS supernode.',
+            security_intro:   'Defense-in-depth for your node — both BPoS supernode and CR Council operators benefit.',
             network_intro:    'How DPoS peers reach this node. Set once at first boot; only change if your public IP moves.',
             storage_intro:    'How much history ENM keeps locally before pruning.',
             advanced_intro:   'Runtime tuning for the ela chain process. Defaults are correct for almost every operator.',
@@ -1217,7 +1219,7 @@
             // visible at the bottom of Settings with this banner above the
             // controls explaining the risk of changing them.
             advanced_warn_title: 'Don’t change these unless you know why.',
-            advanced_warn_body:  'Defaults are right for almost every BPoS supernode. Changing these can degrade chain performance or cost you blocks. Each change here needs a chain restart to apply.',
+            advanced_warn_body:  'Defaults are right for almost every operator — BPoS supernode and CR Council alike. Changing these can degrade chain performance or cost you blocks. Each change here needs a chain restart to apply.',
             // "What this protects" callouts surfaced inside the Security
             // section so operators understand the WHY behind the toggle/
             // password they’re configuring.
@@ -1417,12 +1419,75 @@
             // Nuclear card (uninstall AND wipe everything).
             danger_nuke_title:              'Nuclear — remove app AND wipe everything',
             danger_nuke_help:               'Uninstall the ENM extension AND delete every piece of ENM data, including your keystore. This is the truly-start-from-zero option. There is no recovery without an off-server backup of the keystore.',
-            danger_nuke_warning:            'This deletes your keystore. If you re-register as a BPoS supernode after this, you do so as a new producer with a new node identity. Any stake delegated to your current owner public key remains under your control in Elastos Essentials.',
+            danger_nuke_warning:            'This deletes your keystore. If you re-register afterwards — as a BPoS supernode (producer-register TX) or rebind a CR Council seat (CRCouncilMemberClaimNode TX) — you do so with a new node identity (a different public key). Any stake delegated to your current OwnerPublicKey remains under your control in Elastos Essentials regardless of what happens to this node.',
             danger_nuke_confirm_label:      'Type WIPE EVERYTHING (uppercase) to confirm:',
             danger_nuke_btn:                'Wipe everything',
             danger_nuke_confirm_dialog:     'This will DELETE your keystore. There is no undo. Continue?',
             danger_nuke_in_progress:        'Wiping everything in a few seconds…',
             danger_nuke_queued:             '✓ Nuclear wipe queued. ENM and all its data will be removed within ~10 seconds — this page will disconnect when it does.',
+
+            // v0.5.228 — EVM chains (shared settings). Operator directive
+            // 2026-05-27: shared settings across esc/eid/pg should live in
+            // one place. This section reads from all 3 EVM chains in
+            // parallel, surfaces shared values when all 3 match (and
+            // flags divergence when they don't), and writes back to all
+            // 3 chains via PUT /chains/:id/class-b-config in one click.
+            heading_evm_shared:                 'EVM chains',
+            evm_shared_intro:                   'Shared settings across all three EVM sidechains (esc, eid, pg). Per-chain overrides (bootnodes, ports, EVM account) live in each chain’s own detail view.',
+            evm_shared_reward_title:            'Block reward address',
+            evm_shared_reward_help:             'Operator address that receives EVM block rewards (geth flag --pbft.miner.address). On a Council node this is typically the same address on all three sidechains, but you can diverge per-chain from the chain’s own card.',
+            evm_shared_reward_placeholder:      '0x… (40 hex characters)',
+            evm_shared_reward_loading:          'Reading current value from all three chains…',
+            evm_shared_reward_shared:           '✓ Same on all three chains.',
+            evm_shared_reward_diverged:         '⚠ Diverged across chains: {summary}. Editing here overwrites all three.',
+            evm_shared_reward_unset:            'No reward address set on any chain. Setting one here applies to all three.',
+            evm_shared_reward_apply_btn:        'Apply to all three EVM chains',
+            evm_shared_reward_apply_progress:   'Applying — {done} of 3 done…',
+            evm_shared_reward_apply_ok:         '✓ Saved on all three. Restart any running chain to apply.',
+            evm_shared_reward_apply_partial:    '⚠ Saved on {okCount} of 3. Failed: {failed}.',
+            evm_shared_reward_validation_err:   'Not a valid Ethereum address. Need 0x + 40 hex characters.',
+            evm_shared_reward_eip55_err:        'EIP-55 checksum mismatch. Suggested correct form: {suggested}',
+            evm_shared_mining_title:            'Validator status (per chain)',
+            evm_shared_mining_help:             'Derived from the on-chain CR-Council / DPoS arbiter slate, not from operator setting. Mining activates automatically when this node\'s public key is bound to a Council seat (via Elastos Essentials) and the chain\'s current rotation includes it. ENM re-checks on every chain start.',
+            // v0.5.228d (audit F9) — evm_shared_mining_summary
+            // ("{onCount} on, {offCount} off") was orphaned by the
+            // v228 inline rewrite of _fillEvmShared; every caller now
+            // builds the status text from plain-English literals
+            // (validator/follower wording, no "on/off" template).
+            // Removed.
+            evm_shared_sync_title:              'Sync mode',
+            evm_shared_sync_help:               'How geth catches up to the chain tip. ‘fast’ downloads block headers + state snapshots (default, fastest). ‘full’ re-executes every transaction. ‘archive’ keeps every historical state (massive disk).',
+            evm_shared_sync_shared:             '✓ All three chains on ‘{mode}’.',
+            evm_shared_sync_diverged:           '⚠ Diverged: {summary}',
+            evm_shared_sync_apply_btn:          'Apply to all three',
+            evm_shared_perchain_footer:         'Per-chain settings (bootnodes, ports, binary version, EVM account address) live in each chain’s own card on the dashboard.',
+
+            // v0.5.228 — Staged chain resume. Gated behind a Danger Zone
+            // enable/disable toggle (operator directive 2026-05-26: the
+            // staged-start orchestrator is destructive and must require
+            // explicit opt-in, not auto-reveal based on host detection).
+            danger_stage_title:             'Staged chain resume',
+            danger_stage_help:              'Starts your chains one at a time, waiting for each to reach Synced before starting the next. Use this only on a constrained host where running all chains together saturates CPU. A full pass can take several hours.',
+            danger_stage_warn:              'Destructive: while this runs, the host is intentionally pinned at near-full CPU for hours. Do not use on a host you also need responsive for other workloads.',
+            danger_stage_enable_label:      'Allow staged chain resume',
+            danger_stage_enabled_sub:       'On — controls below are unlocked.',
+            danger_stage_disabled_sub:      'Off — staged resume is locked and cannot be started.',
+            danger_stage_start_btn:         'Start staged resume',
+            danger_stage_pause_btn:         'Pause after current chain',
+            danger_stage_resume_btn:        'Resume',
+            danger_stage_cancel_btn:        'Cancel',
+            danger_stage_idle:              'Idle. Click Start to begin.',
+            danger_stage_locked:            'Enable the toggle above to unlock these controls.',
+            danger_stage_phase_starting:   'Starting {chain}…',
+            danger_stage_phase_waiting:    'Waiting for {chain} to sync ({minutes}m elapsed)…',
+            danger_stage_phase_synced:     '✓ {chain} synced. Next: {next}',
+            danger_stage_phase_timeout:    '⚠ {chain} did not sync within 4h — moved to next chain. Check logs.',
+            danger_stage_phase_complete:   '✓ Staged resume complete. All chains processed.',
+            danger_stage_phase_paused:     'Paused after current chain. Click Resume to continue.',
+            danger_stage_phase_resumed:    'Resumed.',
+            danger_stage_phase_cancelled:  'Cancelled.',
+            danger_stage_phase_error:      '✗ Error: {message}',
+            danger_stage_helper_missing:    'Staged-resume helper failed to load. Refresh the page.',
 
             // beta.3.43 — Identity tab. Five cards: current identity
             // view, unlock-and-cache, backup, import, reset.
@@ -1586,6 +1651,39 @@
             // step-by-step instructions.
             essentials_guide_title:     'Register your supernode in Elastos Essentials',
             essentials_guide_body:      'Open Elastos Essentials → Wallet → Voting → BPoS supernodes → "Register as new supernode". Paste this node’s public key into the Node Public Key field, sign with the wallet that holds the 2,000 ELA deposit, then wait ~6 blocks (about 12 minutes) for chain confirmation.',
+        },
+
+        // v0.5.229 (audit 2026-05-27) — Council-mode parallel to bpos_card.
+        // validator-registration-card.js's _renderCouncil() reads these keys
+        // when the operator is in a CR Council context (cfg.global.council
+        // .installed=true OR /system/identity returns crMember.isCrMember).
+        // The card was BPoS-only pre-229; Council operators saw the wrong
+        // copy ("BPoS supernode: not yet registered") regardless of their
+        // actual on-chain Council binding. Six sub-states map to six head
+        // title + head sub pairs:
+        //   elected    — on Committee, MemberState=Elected, producing
+        //   inactive   — on Committee, MemberState=Inactive
+        //   impeached  — on Committee, MemberState=Impeached|Returned|
+        //                Terminated|Illegal (terminal-ish)
+        //   next_term  — in NEXT term's Committee (waiting term boundary)
+        //   unclaimed  — Council install but pubkey not bound to any
+        //                current Committee seat (e.g. operator unclaimed
+        //                via Essentials)
+        //   no_term    — Council install but Committee not currently in
+        //                an election period (between terms)
+        council_card: {
+            head_title_elected:    'CR Council member — On-duty',
+            head_sub_elected:      'Your node is in the on-chain CR Committee arbiter slate. EVM sidechain mining + mainchain BPoS signing activate automatically when your slot rotates in.',
+            head_title_inactive:   'CR Council member — Inactive',
+            head_sub_inactive:     'You are a CR Committee member but on-chain MemberState is Inactive (the chain skipped your slot for too many consecutive rounds). Recover via Essentials → Activate.',
+            head_title_impeached:  'CR Council member — Impeached',
+            head_sub_impeached:    'Your CR Committee membership has been impeached, terminated, returned, or flagged illegal on-chain. The current term seat is lost; check Essentials for the specific reason and recovery options.',
+            head_title_next_term:  'CR Council member — Next term',
+            head_sub_next_term:    'You won the next CR Committee election. Your node will enter the arbiter slate when the next term begins.',
+            head_title_unclaimed:  'Council install — Not currently bound',
+            head_sub_unclaimed:    'ENM detects a Council install but your node’s public key is not currently bound to any CR Committee seat on-chain. If you intend to be a Council member, claim your node via Elastos Essentials (CRCouncilMemberClaimNode TX).',
+            head_title_no_term:    'Council install — Committee between terms',
+            head_sub_no_term:      'The CR Council is not currently in an election period. No active Committee means no arbiter slots to fill — your node will be added when the next term begins.',
         },
 
         // 0.5.138 audit Session 138 — entire validator_card namespace

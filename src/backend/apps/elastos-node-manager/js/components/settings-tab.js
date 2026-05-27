@@ -283,16 +283,114 @@
             tag: { kind: 'muted', label: 'Restart to apply' },
         });
 
-        var enabledToggle = makeToggleRow({
-            initial: !!miner.enabled,
-            getLabel: function (on) {
-                return on
-                    ? { title: 'Mining on', sub: 'Produces blocks for this chain and earns the block reward.' }
-                    : { title: 'Mining off', sub: 'Sync-only node — does not produce blocks.' };
-            },
-            onChange: function () { sec.setDirty(true); },
-        });
-        sec.body.appendChild(enabledToggle.el);
+        // v0.5.228 — replace the writable "Mining on/off" toggle with a
+        // READ-ONLY "Validator status" badge. Mining on an Elastos EVM
+        // sidechain is not an operator-settable knob: it's derived from
+        // on-chain producer / Council membership (the chain's PBFT
+        // engine self-gates Seal() based on the current arbiter slate;
+        // see EvmSidechainAdapter.detectProducerRole + start, both
+        // already shipped since v0.5.188). The pre-v228 toggle was
+        // misleading — clicking it changed cfg.miner.enabled in
+        // ConfigStore, but EvmSidechainAdapter.start always overwrote
+        // it before spawn, so the toggle was visible but ineffectual.
+        // Operator directive 2026-05-27: "node.sh doesn't work like
+        // that for council nodes — after binding, the chain itself
+        // recognized it's a council node and the set evm mining
+        // addresses automatically became mining addresses".
+        //
+        // The badge is populated asynchronously from
+        // GET /api/enm/system/council-status, which exposes the same
+        // detectProducerRole the spawn path uses. Initial render shows
+        // a loading state. If the fetch fails or times out, the badge
+        // falls back to whatever cfg.miner.enabled currently reads as
+        // (the cached derived value from the last successful spawn).
+        var statusRow = document.createElement('div');
+        statusRow.className = 'enm-classb-validator-row';
+        statusRow.setAttribute('role', 'group');
+        statusRow.setAttribute('aria-label', 'Validator status');
+        var statusBadgeId = 'enm-classb-validator-' + chainId;
+        statusRow.innerHTML = ''
+            + '<div class="enm-classb-validator-head">'
+            +   '<div class="enm-classb-validator-label">Validator status</div>'
+            +   '<div class="enm-classb-validator-help">'
+            +     'Derived from the on-chain CR-Council / DPoS arbiter slate. '
+            +     'Mining activates automatically when this node\'s public key '
+            +     'is bound to a Council seat (via Elastos Essentials) and the '
+            +     'current rotation includes it — there is no manual toggle.'
+            +   '</div>'
+            + '</div>'
+            + '<div class="enm-classb-validator-body">'
+            +   '<span id="' + statusBadgeId + '" class="enm-classb-validator-badge"'
+            +     ' data-state="loading">Checking on-chain status…</span>'
+            + '</div>';
+        sec.body.appendChild(statusRow);
+        // Fire the council-status fetch immediately so the badge resolves
+        // soon after render. Fallback to the cached miner.enabled if the
+        // endpoint is unreachable (boot path, mainchain still syncing).
+        (function (badgeId, cid, cachedEnabled) {
+            self.api.get('/system/council-status').then(function (env) {
+                if (self._destroyed) { return; }
+                var data = (env && env.data) || env || {};
+                var perChain = (data.chains && data.chains[cid]) || null;
+                var badge = self.root.querySelector('#' + badgeId);
+                if (!badge) { return; }
+                var s = (perChain && perChain.chainState) || 'unknown';
+                // Map raw chainState → visible label + badge color.
+                // 'on-duty'  → green   "On-duty"
+                // 'standby'  → amber   "Standby"
+                // 'inactive' → gray    "Inactive (not in current rotation)"
+                // 'unknown'  → gray    "Detecting…"
+                // 'follower' → gray    "Follower (not configured for mining)"
+                var labelMap = {
+                    'on-duty':  { label: 'On-duty',   sub: 'Producing blocks this rotation — rewards land at the address below.' },
+                    'standby':  { label: 'Standby',   sub: 'Bound to a Council seat; in the next rotation\'s arbiter slate.' },
+                    'inactive': { label: 'Inactive',  sub: 'Not in the current or next arbiter slate. Mining activates automatically when this node\'s public key is on-duty.' },
+                    'unknown':  { label: 'Detecting', sub: 'Reading mainchain arbiter slate… retry every chain start.' },
+                    'follower': { label: 'Follower',  sub: 'Chain not configured for mining (no init was run).' },
+                };
+                var meta = labelMap[s] || labelMap.unknown;
+                badge.dataset.state = s;
+                badge.textContent = meta.label;
+                // Add the explanatory sub-line right after the badge.
+                var subEl = badge.parentNode.querySelector('.enm-classb-validator-sub');
+                if (!subEl) {
+                    subEl = document.createElement('div');
+                    subEl.className = 'enm-classb-validator-sub';
+                    badge.parentNode.appendChild(subEl);
+                }
+                subEl.textContent = meta.sub;
+            }).catch(function (err) {
+                if (self._destroyed) { return; }
+                if (err && err.status === 401) { return; }
+                // v0.5.228d (audit F3) — fallback wording. The pre-228d
+                // label "(cached)" implied the backend had recently
+                // confirmed this state; in reality the fallback reads
+                // cfg.miner.enabled from disk, which is the value the
+                // last successful spawn wrote — could be hours/days
+                // stale. "(from last spawn)" is honest about the
+                // source. Real-time state lives on /system/council-status
+                // which this fallback only runs when we couldn't
+                // reach.
+                var badge = self.root.querySelector('#' + badgeId);
+                if (!badge) { return; }
+                if (cachedEnabled) {
+                    badge.dataset.state = 'on-duty';
+                    badge.textContent = 'On-duty (from last spawn)';
+                } else {
+                    badge.dataset.state = 'inactive';
+                    badge.textContent = 'Inactive (from last spawn)';
+                }
+                var subEl = badge.parentNode.querySelector('.enm-classb-validator-sub');
+                if (!subEl) {
+                    subEl = document.createElement('div');
+                    subEl.className = 'enm-classb-validator-sub';
+                    badge.parentNode.appendChild(subEl);
+                }
+                subEl.textContent = 'Could not reach /system/council-status; '
+                    + 'showing the value from this node\'s last spawn. '
+                    + 'Live status refreshes on every chain start.';
+            });
+        }(statusBadgeId, chainId, !!miner.enabled));
 
         var rewardInput = makeInput({ value: miner.rewardAddress || '', placeholder: '0x…40 hex chars', mono: true, ariaLabel: 'Reward address' });
         rewardInput.setAttribute('spellcheck', 'false');
@@ -403,31 +501,87 @@
         peersCard.body.appendChild(peersMount);
         parent.appendChild(peersCard.card);
 
-        // ---- soft address validation (disable Save on invalid) ----
-        var validateEth = function (v) {
-            v = (v || '').trim();
-            if (!v) { return 'empty'; }
-            if (!/^0x[0-9a-fA-F]{40}$/.test(v)) { return 'bad'; }
-            return 'ok';
+        // ---- v0.5.216 audit Phase 2 (AUDIT-FLOW-B01, P1) — address
+        // validation now routes through the SHARED root.enmEthAddress
+        // helper (same source the setup wizard Card 4 uses), so the
+        // EIP-55 mixed-case hard-block that protects new operators at
+        // install time also protects operators ROTATING addresses via
+        // Settings. Pre-v0.5.216 this section had only basic format
+        // validation — paste a mixed-case address with one char's case
+        // flipped, save, and future rewards went to a different
+        // account silently. Now blocked + suggested-correct-case shown
+        // inline. Closes XFLOW-04 + XFLOW-16 duplication of validateEth.
+        var ethApi = root.enmEthAddress;
+        var classifyAddr = function (v) {
+            var str = (v || '').trim();
+            if (!str) { return { kind: 'empty' }; }
+            if (!ethApi || typeof ethApi.check !== 'function') {
+                // Defensive fallback if utils-eth failed to load —
+                // preserves the pre-v0.5.216 format-only check.
+                return /^0x[0-9a-fA-F]{40}$/.test(str)
+                    ? { kind: 'ok' }
+                    : { kind: 'bad' };
+            }
+            var r = ethApi.check(str);
+            if (r.ok) {
+                return r.warn === 'no_keccak'
+                    ? { kind: 'ok-degraded' }
+                    : { kind: 'ok' };
+            }
+            if (r.error === 'eip55_checksum') {
+                return { kind: 'checksum', suggested: r.suggested };
+            }
+            return { kind: 'bad' };
+        };
+        // Tiny helper to surface a one-line correction hint inline in
+        // the row's existing status area. The row's data-validity attr
+        // also drives any per-row CSS (red border on 'bad'/'checksum').
+        var setRowStatus = function (row, msg) {
+            // Find or create a status span at the foot of the row.
+            var slot = row.querySelector('.enm-row-status') || (function () {
+                var s = document.createElement('div');
+                s.className = 'enm-row-status';
+                s.setAttribute('aria-live', 'polite');
+                row.appendChild(s);
+                return s;
+            }());
+            slot.textContent = msg || '';
+            slot.hidden = !msg;
         };
         var refreshValidity = function () {
-            var r = validateEth(rewardInput.value);
-            var e = validateEth(evmInput.value);
-            rewardRow.setAttribute('data-validity', r);
-            evmRow.setAttribute('data-validity', e);
-            sec.saveBtn.disabled = (r === 'bad') || (e === 'bad');
+            var r = classifyAddr(rewardInput.value);
+            var e = classifyAddr(evmInput.value);
+            rewardRow.setAttribute('data-validity', r.kind);
+            evmRow.setAttribute('data-validity', e.kind);
+            setRowStatus(rewardRow, r.kind === 'checksum'
+                ? 'Wrong checksum — did you mean: ' + r.suggested + '?'
+                : '');
+            setRowStatus(evmRow, e.kind === 'checksum'
+                ? 'Wrong checksum — did you mean: ' + e.suggested + '?'
+                : '');
+            // Disable Save on either field being a definite typo: 'bad'
+            // (format) or 'checksum' (mixed-case mismatch). 'empty' and
+            // 'ok-degraded' still allow save — empty is a real signal
+            // (operator clearing the field to disable mining), and the
+            // degraded mode means keccak couldn't verify so we default
+            // to permissive (same as pre-v0.5.216 behavior).
+            sec.saveBtn.disabled = (r.kind === 'bad' || r.kind === 'checksum')
+                || (e.kind === 'bad' || e.kind === 'checksum');
         };
         rewardInput.addEventListener('input', function () { sec.setDirty(true); refreshValidity(); });
         evmInput.addEventListener('input', function () { sec.setDirty(true); refreshValidity(); });
         refreshValidity();
 
         // ---- save (reads control handles; enmRunOnce guards double-submit) ----
-        var controls = { enabled: enabledToggle, reward: rewardInput, evm: evmInput, threads: threadsInput, syncMode: syncSel };
+        // v0.5.228 — controls.enabled is intentionally absent. The save
+        // body below no longer includes miner.enabled — the backend
+        // derives it from on-chain arbiter slate at every chain start.
+        var controls = { reward: rewardInput, evm: evmInput, threads: threadsInput, syncMode: syncSel };
         sec.saveBtn.addEventListener('click', function () {
             self._saveClassB(chainId, controls, sec);
         });
         sec.revertBtn.addEventListener('click', function () {
-            enabledToggle.setValue(!!miner.enabled);
+            // No enabledToggle to revert — it's a derived read-only badge.
             rewardInput.value = miner.rewardAddress || '';
             evmInput.value = miner.evmKeystoreAddr || '';
             threadsInput.value = Number.isInteger(miner.threads) ? miner.threads : 1;
@@ -465,9 +619,12 @@
     SettingsTab.prototype._saveClassB = function (chainId, controls, sec) {
         var self = this;
         var status = sec.statusEl;
+        // v0.5.228 — miner.enabled removed from the request body. It's
+        // a derived value (computed at every chain start from on-chain
+        // arbiter slate), not operator-settable. Sending it from this
+        // form would be a no-op at best and misleading at worst.
         var body = {
             miner: {
-                enabled: controls.enabled.getValue(),
                 rewardAddress: (controls.reward.value || '').trim(),
                 evmKeystoreAddr: (controls.evm.value || '').trim(),
                 threads: parseInt(controls.threads.value, 10) || 1,
@@ -1070,6 +1227,13 @@
             { key: 'alerts',   glyph: '⚑', label: t('settings.heading_alerts'),   build: this._buildAlertsSection },
             { key: 'storage',  glyph: '◳', label: t('settings.heading_storage'),  build: this._buildStorageSection },
             { key: 'advanced', glyph: '⚙', label: t('settings.heading_advanced'), build: this._buildAdvancedSection },
+            // v0.5.228 — EVM chains (shared). Single surface for editing
+            // settings that apply across all three EVM sidechains
+            // (reward address, mining, sync mode). Operator directive
+            // 2026-05-27 ("the multi EVM shared settings for all services
+            // isn't there either"). Per-chain overrides still live in
+            // each chain's dashboard card.
+            { key: 'evm',      glyph: '◧', label: t('settings.heading_evm_shared'), build: this._buildEvmSharedSection },
             // beta.3.33 — Danger Zone. Update / chain-resync / uninstall
             // / nuke. Distinct red-accented styling (.enm-section-danger)
             // and no Save/Revert pattern — each card is independently
@@ -1145,7 +1309,7 @@
     // beta.3.19 — Alerts section inserted between Network and Storage
     // (it's about when-to-notify, sits between the access/network and
     // the data-at-rest sections).
-    var SECTION_KEYS = ['access', 'identity', 'security', 'network', 'alerts', 'storage', 'advanced', 'danger'];
+    var SECTION_KEYS = ['access', 'identity', 'security', 'network', 'alerts', 'storage', 'advanced', 'evm', 'danger'];
     SettingsTab.prototype._sectionRef = function (key) {
         return this['_' + key];
     };
@@ -1236,6 +1400,12 @@
         // operator sees current info on every entry.
         if (key === 'identity' && typeof this._refreshIdentity === 'function') {
             this._refreshIdentity();
+        }
+        // v0.5.228 — EVM shared tab: re-fetch /chains/{esc,eid,pg} on
+        // every activation so the values + divergence indicator reflect
+        // any changes made from per-chain cards since the last visit.
+        if (key === 'evm' && typeof this._refreshEvmShared === 'function') {
+            this._refreshEvmShared();
         }
     };
 
@@ -1477,6 +1647,14 @@
         warn.appendChild(warnBody);
         sec.body.appendChild(warn);
 
+        // v0.5.228 — Stage-sync card moved to Settings → Danger Zone
+        // (operator directive 2026-05-26: the staged-start orchestrator is
+        // destructive — pins the host at near-full CPU for hours, runs
+        // per-chain start calls — and must require explicit opt-in via a
+        // Danger Zone toggle, not auto-reveal based on host detection).
+        // Previous home: this section, auto-revealed when enmHostLimits.
+        // isConstrained returned true. New home: Danger Zone sub-card 3b.
+
         // Row 1 — Log level.
         this._advanced.logLevel = makeSelectWrap({
             options: [
@@ -1536,6 +1714,502 @@
         sec.revertBtn.addEventListener('click', function () { self.refresh('advanced'); });
 
         return sec.card;
+    };
+
+    // -----------------------------------------------------------------
+    // Section: EVM chains (shared) — v0.5.228
+    //
+    // Operator directive 2026-05-27: "the multi EVM shared settings for
+    // all services isn't there either". Pre-228 every EVM setting was
+    // per-chain only, so changing one knob (reward address, sync mode)
+    // across the Council quartet required 3 separate trips into 3
+    // separate chain cards. This section is the single source of truth
+    // for settings that are typically homogeneous across the EVMs.
+    //
+    // Data flow:
+    //   - Activation triggers _refreshEvmShared, which fires 3 parallel
+    //     GET /chains/{esc,eid,pg} requests.
+    //   - The response shape includes miner.{rewardAddress,enabled} and
+    //     sync.mode (when present on the cfg).
+    //   - "All three match" → shared input + green "✓ same on all".
+    //   - "Diverged"        → input shows nothing (so a save doesn't
+    //                         silently overwrite without explicit intent)
+    //                         and a warning lists the per-chain values.
+    //   - "Apply" issues 3 sequential PUT /chains/X/class-b-config
+    //     requests; partial failure surfaces ok/fail counts inline so
+    //     the operator can retry just the failed chains from per-chain.
+    //
+    // Per-chain overrides (bootnodes, ports, binary version, the
+    // auto-generated EVM keystore account) still live in the dashboard
+    // EVM cards — this section is for the homogeneous knobs only.
+    // -----------------------------------------------------------------
+    var EVM_SHARED_CHAINS = ['esc', 'eid', 'pg'];
+
+    SettingsTab.prototype._buildEvmSharedSection = function (t) {
+        var self = this;
+
+        var card = document.createElement('section');
+        card.className = 'enm-section-card enm-section-evm-shared';
+
+        var head = document.createElement('div');
+        head.className = 'enm-section-card-head';
+        var icon = document.createElement('div');
+        icon.className = 'enm-section-card-icon';
+        icon.setAttribute('aria-hidden', 'true');
+        icon.textContent = '◧';
+        head.appendChild(icon);
+        var headbody = document.createElement('div');
+        headbody.className = 'enm-section-card-headbody';
+        var title = document.createElement('div');
+        title.className = 'enm-section-card-title';
+        title.id = 'enm-section-h-evm';
+        title.textContent = t('settings.heading_evm_shared');
+        headbody.appendChild(title);
+        var help = document.createElement('div');
+        help.className = 'enm-section-card-help';
+        help.textContent = t('settings.evm_shared_intro');
+        headbody.appendChild(help);
+        head.appendChild(headbody);
+        card.appendChild(head);
+
+        var body = document.createElement('div');
+        body.className = 'enm-section-card-body';
+        card.appendChild(body);
+
+        this._evmShared = {
+            card: card,
+            body: body,
+            // No section-level save — each row has its own Apply button.
+            setDirty: function () {},
+            // Latest snapshot of {chainId → {rewardAddress, enabled, syncMode}}
+            // populated by _refreshEvmShared; null until first fetch resolves.
+            latest: null,
+        };
+
+        // --- Reward address row -----------------------------------------
+        var rewardCard = _buildDangerCard({
+            kind: 'info',
+            title: t('settings.evm_shared_reward_title'),
+            help:  t('settings.evm_shared_reward_help'),
+        });
+        body.appendChild(rewardCard.el);
+        var rewardInputId = 'enm-evm-shared-reward-input';
+        var rewardInputWrap = document.createElement('div');
+        rewardInputWrap.className = 'enm-evm-shared-input-row';
+        rewardInputWrap.innerHTML = ''
+            + '<label class="enm-sr-only" for="' + rewardInputId + '">'
+            +   _h(t('settings.evm_shared_reward_title')) + '</label>'
+            + '<input type="text" id="' + rewardInputId
+            +   '" class="enm-input enm-mono enm-evm-shared-input"'
+            +   ' autocomplete="off" spellcheck="false" inputmode="text"'
+            +   ' placeholder="' + _h(t('settings.evm_shared_reward_placeholder')) + '">';
+        rewardCard.body.appendChild(rewardInputWrap);
+        var rewardStatusEl = document.createElement('div');
+        rewardStatusEl.className = 'enm-evm-shared-status';
+        rewardStatusEl.setAttribute('role', 'status');
+        rewardStatusEl.setAttribute('aria-live', 'polite');
+        rewardStatusEl.textContent = t('settings.evm_shared_reward_loading');
+        rewardCard.body.appendChild(rewardStatusEl);
+        var rewardBtn = document.createElement('button');
+        rewardBtn.type = 'button';
+        rewardBtn.className = 'enm-btn enm-btn-primary';
+        rewardBtn.textContent = t('settings.evm_shared_reward_apply_btn');
+        rewardBtn.disabled = true;  // enabled when latest loads
+        rewardCard.foot.appendChild(rewardBtn);
+        var rewardInputEl = rewardInputWrap.querySelector('input');
+        rewardInputEl.addEventListener('click', function () {
+            // First click on the input clears the divergence-blocked empty
+            // state so the operator knows they can type freely.
+            rewardInputEl.removeAttribute('readonly');
+        });
+        rewardBtn.addEventListener('click', function () {
+            self._applyEvmSharedReward(rewardInputEl.value, rewardBtn, rewardStatusEl);
+        });
+        this._evmShared.reward = {
+            input: rewardInputEl,
+            status: rewardStatusEl,
+            btn: rewardBtn,
+        };
+
+        // --- Mining state row -------------------------------------------
+        // Read-only summary per chain. Bulk mining toggle is intentionally
+        // deferred — flipping mining is a structural change (validator vs
+        // follower) that warrants per-chain confirmation, not a bulk swap.
+        var miningCard = _buildDangerCard({
+            kind: 'info',
+            title: t('settings.evm_shared_mining_title'),
+            help:  t('settings.evm_shared_mining_help'),
+        });
+        body.appendChild(miningCard.el);
+        var miningGrid = document.createElement('div');
+        miningGrid.className = 'enm-evm-shared-mining-grid';
+        EVM_SHARED_CHAINS.forEach(function (cid) {
+            var cell = document.createElement('div');
+            cell.className = 'enm-evm-shared-mining-cell';
+            cell.dataset.chain = cid;
+            cell.innerHTML = ''
+                + '<span class="enm-evm-shared-mining-name">' + _h(cid) + '</span>'
+                + '<span class="enm-evm-shared-mining-pill" data-mining="?">—</span>';
+            miningGrid.appendChild(cell);
+        });
+        miningCard.body.appendChild(miningGrid);
+        var miningStatusEl = document.createElement('div');
+        miningStatusEl.className = 'enm-evm-shared-status';
+        miningStatusEl.setAttribute('role', 'status');
+        miningCard.body.appendChild(miningStatusEl);
+        this._evmShared.mining = {
+            grid: miningGrid,
+            status: miningStatusEl,
+        };
+
+        // --- Sync mode row ----------------------------------------------
+        var syncCard = _buildDangerCard({
+            kind: 'info',
+            title: t('settings.evm_shared_sync_title'),
+            help:  t('settings.evm_shared_sync_help'),
+        });
+        body.appendChild(syncCard.el);
+        var syncSelectWrap = document.createElement('div');
+        syncSelectWrap.className = 'enm-evm-shared-input-row';
+        syncSelectWrap.innerHTML = ''
+            + '<select class="enm-select enm-evm-shared-select" aria-label="Sync mode">'
+            +   '<option value="fast">fast</option>'
+            +   '<option value="full">full</option>'
+            +   '<option value="archive">archive</option>'
+            + '</select>';
+        syncCard.body.appendChild(syncSelectWrap);
+        var syncStatusEl = document.createElement('div');
+        syncStatusEl.className = 'enm-evm-shared-status';
+        syncStatusEl.setAttribute('role', 'status');
+        syncStatusEl.setAttribute('aria-live', 'polite');
+        syncStatusEl.textContent = t('settings.evm_shared_reward_loading');
+        syncCard.body.appendChild(syncStatusEl);
+        var syncBtn = document.createElement('button');
+        syncBtn.type = 'button';
+        syncBtn.className = 'enm-btn enm-btn-primary';
+        syncBtn.textContent = t('settings.evm_shared_sync_apply_btn');
+        syncBtn.disabled = true;
+        syncCard.foot.appendChild(syncBtn);
+        var syncSelectEl = syncSelectWrap.querySelector('select');
+        syncBtn.addEventListener('click', function () {
+            self._applyEvmSharedSync(syncSelectEl.value, syncBtn, syncStatusEl);
+        });
+        this._evmShared.sync = {
+            select: syncSelectEl,
+            status: syncStatusEl,
+            btn: syncBtn,
+        };
+
+        // --- Per-chain footer note --------------------------------------
+        var footer = document.createElement('div');
+        footer.className = 'enm-evm-shared-footer-note';
+        footer.textContent = t('settings.evm_shared_perchain_footer');
+        body.appendChild(footer);
+
+        return card;
+    };
+
+    /**
+     * Fetch /chains/{esc,eid,pg} in parallel and fill the shared
+     * settings UI based on whether values match or diverge.
+     * @private
+     */
+    SettingsTab.prototype._refreshEvmShared = function () {
+        var self = this;
+        if (!this._evmShared || !this.api) { return; }
+
+        Promise.all(EVM_SHARED_CHAINS.map(function (cid) {
+            return self.api.get('/chains/' + cid).then(function (env) {
+                var d = (env && env.result) || (env && env.data) || env || {};
+                return {
+                    chainId: cid,
+                    rewardAddress: (d.miner && d.miner.rewardAddress) || '',
+                    // v0.5.228d (audit follow-up) — keep `enabled` for
+                    // back-compat (older readers) but the authoritative
+                    // value for the mining-row pills is `chainState`,
+                    // attached by GET /chains/:id when the adapter is
+                    // class B. Null/undefined means we couldn't reach
+                    // the mainchain RPC to derive it — the renderer
+                    // treats that as 'unknown' (showing "Detecting…")
+                    // rather than guessing "On" or "Off".
+                    enabled: !!(d.miner && d.miner.enabled),
+                    chainState: (d.miner && d.miner.chainState) || null,
+                    // sync.mode isn't currently returned by /chains/:id;
+                    // when missing we treat all as 'fast' (the schema
+                    // default) so the row still works. A future
+                    // backend pass should add sync.mode to the response.
+                    syncMode: (d.sync && d.sync.mode) || 'fast',
+                    ok: true,
+                };
+            }).catch(function () {
+                return { chainId: cid, ok: false };
+            });
+        })).then(function (results) {
+            if (self._destroyed) { return; }
+            self._evmShared.latest = results;
+            self._fillEvmShared(results);
+        });
+    };
+
+    /** @private */
+    SettingsTab.prototype._fillEvmShared = function (results) {
+        var t = root.enmTOrFallback || root.enmT || function (k) { return k; };
+        if (!this._evmShared) { return; }
+
+        // --- Reward address ---------------------------------------------
+        // v0.5.228 patch — split the "all failed" case out FIRST. Pre-patch
+        // a wholly-failed fetch silently passed through allEmpty=true (the
+        // vacuous `[].every` truthiness) and rendered "No reward address
+        // set on any chain" — a lie that made operators think their setup
+        // values were wiped. Now we explicitly say "Couldn't read from
+        // chains" so the operator knows it's a transport problem, not a
+        // missing-data problem, and can retry instead of re-entering the
+        // address.
+        var ok = results.filter(function (r) { return r.ok; });
+        var failedCount = results.length - ok.length;
+        var values = ok.map(function (r) { return r.rewardAddress; });
+        var allEmpty = ok.length > 0 && values.every(function (v) { return !v; });
+        var allMatch = ok.length > 0 && values.every(function (v) { return v === values[0] && !!v; });
+        var reward = this._evmShared.reward;
+        if (reward) {
+            if (ok.length === 0) {
+                // Hard failure across all 3 chains — most likely auth lapsed
+                // or the backend is mid-restart. Don't fake an "unset" state.
+                reward.input.value = '';
+                reward.btn.disabled = true;
+                reward.status.textContent = 'Could not read from chains (' + failedCount + ' of '
+                    + results.length + ' failed). Try refreshing this section, or check the dashboard '
+                    + 'for chain connectivity.';
+                reward.status.className = 'enm-evm-shared-status is-err';
+            } else {
+                reward.btn.disabled = false;
+                if (allMatch) {
+                    reward.input.value = values[0];
+                    var matchMsg = t('settings.evm_shared_reward_shared');
+                    if (failedCount > 0) {
+                        matchMsg += ' (' + failedCount + ' of ' + results.length
+                            + ' chains didn\'t respond — refresh to retry)';
+                    }
+                    reward.status.textContent = matchMsg;
+                    reward.status.className = 'enm-evm-shared-status is-ok';
+                } else if (allEmpty) {
+                    reward.input.value = '';
+                    reward.status.textContent = t('settings.evm_shared_reward_unset');
+                    reward.status.className = 'enm-evm-shared-status is-warn';
+                } else {
+                    var summary = ok.map(function (r) {
+                        return r.chainId + '=' + (r.rewardAddress ? (r.rewardAddress.slice(0, 6) + '…' + r.rewardAddress.slice(-4)) : '(unset)');
+                    }).join(', ');
+                    reward.input.value = '';  // intentionally blank to require explicit input
+                    reward.status.textContent = t('settings.evm_shared_reward_diverged')
+                        .replace('{summary}', summary);
+                    reward.status.className = 'enm-evm-shared-status is-warn';
+                }
+            }
+        }
+
+        // --- Validator status (per-chain pills) -------------------------
+        // v0.5.228d (audit follow-up) — render the same 5-state taxonomy
+        // the dashboard EVM card + the per-chain Validator-status badge
+        // use, sourced from miner.chainState (attached to GET /chains/:id
+        // for class B chains; see chainStateFromRole in routes/chains.js).
+        // Pre-228d the pills binary-mapped miner.enabled → "On" / "Off",
+        // which (a) failed to distinguish Standby from Inactive, (b) lied
+        // when the on-disk cfg.miner.enabled diverged from the live
+        // arbiter slate after a Council binding, and (c) reinforced the
+        // operator-toggle mental model that we're explicitly retiring.
+        var PILL_LABELS = {
+            'on-duty':  { text: 'On-duty',   dataState: 'on-duty'  },
+            'standby':  { text: 'Standby',   dataState: 'standby'  },
+            'inactive': { text: 'Inactive',  dataState: 'off'      },
+            'unknown':  { text: 'Detecting', dataState: '?'        },
+            'follower': { text: 'Follower',  dataState: 'off'      },
+        };
+        var mining = this._evmShared.mining;
+        if (mining) {
+            var stateCounts = { 'on-duty': 0, 'standby': 0, 'inactive': 0, 'unknown': 0, 'follower': 0 };
+            var cells = mining.grid.querySelectorAll('.enm-evm-shared-mining-cell');
+            Array.prototype.forEach.call(cells, function (cell) {
+                var cid = cell.dataset.chain;
+                var r = results.find(function (rr) { return rr.chainId === cid; });
+                var pill = cell.querySelector('.enm-evm-shared-mining-pill');
+                if (!r || !r.ok) {
+                    pill.textContent = '—';
+                    pill.dataset.mining = '?';
+                    return;
+                }
+                // Prefer chainState from /chains/:id. If absent (older
+                // backend), fall back to the legacy enabled→on/off map
+                // so the pill still renders something honest.
+                var s = r.chainState
+                    || (r.enabled ? 'on-duty' : 'inactive');
+                stateCounts[s] = (stateCounts[s] || 0) + 1;
+                var meta = PILL_LABELS[s] || PILL_LABELS.inactive;
+                pill.textContent = meta.text;
+                pill.dataset.mining = meta.dataState;
+            });
+            // Plain-English summary line over the same taxonomy. Wording
+            // explicitly distances mining from being an operator choice.
+            var summary;
+            if (stateCounts['on-duty'] === 3) {
+                summary = 'All three EVMs are on-duty — producing blocks this rotation. '
+                    + 'Rewards land at the reward address above.';
+            } else if (stateCounts.inactive + stateCounts.follower === 3) {
+                summary = 'All three EVMs are inactive — this node is not in the current arbiter slate, '
+                    + 'so it does not produce blocks. The reward address above stays configured '
+                    + 'for when (or if) the on-chain Council binding includes this node.';
+            } else if (stateCounts.unknown === 3) {
+                summary = 'Detecting — couldn\'t read the on-chain arbiter slate yet '
+                    + '(mainchain RPC may still be warming up). Refreshes on every chain start.';
+            } else {
+                var parts = [];
+                if (stateCounts['on-duty']) { parts.push(stateCounts['on-duty'] + ' on-duty'); }
+                if (stateCounts.standby)   { parts.push(stateCounts.standby   + ' standby'); }
+                if (stateCounts.inactive)  { parts.push(stateCounts.inactive  + ' inactive'); }
+                if (stateCounts.unknown)   { parts.push(stateCounts.unknown   + ' detecting'); }
+                if (stateCounts.follower)  { parts.push(stateCounts.follower  + ' follower'); }
+                summary = parts.join(', ')
+                    + '. Validator status is derived from the on-chain arbiter slate, not '
+                    + 'operator-set. ENM re-checks on every chain start.';
+            }
+            mining.status.textContent = summary;
+            mining.status.className = 'enm-evm-shared-status';
+        }
+
+        // --- Sync mode --------------------------------------------------
+        var modes = ok.map(function (r) { return r.syncMode; });
+        var syncAllMatch = modes.length > 0 && modes.every(function (m) { return m === modes[0]; });
+        var sync = this._evmShared.sync;
+        if (sync) {
+            sync.btn.disabled = false;
+            if (syncAllMatch) {
+                sync.select.value = modes[0];
+                sync.status.textContent = t('settings.evm_shared_sync_shared')
+                    .replace('{mode}', modes[0]);
+                sync.status.className = 'enm-evm-shared-status is-ok';
+            } else {
+                var sm = ok.map(function (r) { return r.chainId + '=' + r.syncMode; }).join(', ');
+                sync.status.textContent = t('settings.evm_shared_sync_diverged')
+                    .replace('{summary}', sm);
+                sync.status.className = 'enm-evm-shared-status is-warn';
+            }
+        }
+    };
+
+    /** @private — write rewardAddress to all 3 EVM chains in parallel. */
+    SettingsTab.prototype._applyEvmSharedReward = function (raw, btn, statusEl) {
+        var self = this;
+        var t = root.enmTOrFallback || root.enmT || function (k) { return k; };
+        // Client-side validation via enmEthAddress.check (same path the
+        // per-chain EVM card uses). Empty value clears the override on
+        // all 3 chains; non-empty must pass EIP-55 + format.
+        var payload;
+        var trimmed = String(raw || '').trim();
+        if (trimmed === '') {
+            payload = '';
+        } else {
+            var rootScope = (typeof window !== 'undefined') ? window : globalThis;
+            var check = (rootScope.enmEthAddress && rootScope.enmEthAddress.check)
+                ? rootScope.enmEthAddress.check(trimmed)
+                : null;
+            if (!check) {
+                statusEl.textContent = t('settings.evm_shared_reward_validation_err');
+                statusEl.className = 'enm-evm-shared-status is-err';
+                return;
+            }
+            if (!check.ok) {
+                if (check.error === 'eip55_checksum') {
+                    statusEl.textContent = t('settings.evm_shared_reward_eip55_err')
+                        .replace('{suggested}', check.suggested);
+                } else {
+                    statusEl.textContent = t('settings.evm_shared_reward_validation_err');
+                }
+                statusEl.className = 'enm-evm-shared-status is-err';
+                return;
+            }
+            payload = check.normalized;
+        }
+
+        var doApply = function () {
+            var done = 0;
+            var failed = [];
+            statusEl.textContent = t('settings.evm_shared_reward_apply_progress').replace('{done}', 0);
+            statusEl.className = 'enm-evm-shared-status';
+            return Promise.all(EVM_SHARED_CHAINS.map(function (cid) {
+                return self.api.put('/chains/' + cid + '/class-b-config', {
+                    miner: { rewardAddress: payload },
+                }).then(function () {
+                    done += 1;
+                    statusEl.textContent = t('settings.evm_shared_reward_apply_progress')
+                        .replace('{done}', done);
+                }).catch(function () {
+                    failed.push(cid);
+                });
+            })).then(function () {
+                if (failed.length === 0) {
+                    statusEl.textContent = t('settings.evm_shared_reward_apply_ok');
+                    statusEl.className = 'enm-evm-shared-status is-ok';
+                } else {
+                    statusEl.textContent = t('settings.evm_shared_reward_apply_partial')
+                        .replace('{okCount}', 3 - failed.length)
+                        .replace('{failed}', failed.join(', '));
+                    statusEl.className = 'enm-evm-shared-status is-err';
+                }
+                // Re-fetch so the divergence summary reflects post-save state.
+                self._refreshEvmShared();
+            });
+        };
+        var rootScope = (typeof window !== 'undefined') ? window : globalThis;
+        if (typeof rootScope.enmRunOnce === 'function' && btn) {
+            rootScope.enmRunOnce(btn, 'Saving…', doApply);
+        } else {
+            doApply();
+        }
+    };
+
+    /** @private — write sync.mode to all 3 EVM chains in parallel. */
+    SettingsTab.prototype._applyEvmSharedSync = function (mode, btn, statusEl) {
+        var self = this;
+        var t = root.enmTOrFallback || root.enmT || function (k) { return k; };
+        if (['fast', 'full', 'archive'].indexOf(mode) < 0) {
+            statusEl.textContent = 'Invalid sync mode.';
+            statusEl.className = 'enm-evm-shared-status is-err';
+            return;
+        }
+        var doApply = function () {
+            var done = 0;
+            var failed = [];
+            statusEl.textContent = t('settings.evm_shared_reward_apply_progress').replace('{done}', 0);
+            statusEl.className = 'enm-evm-shared-status';
+            return Promise.all(EVM_SHARED_CHAINS.map(function (cid) {
+                return self.api.put('/chains/' + cid + '/class-b-config', {
+                    sync: { mode: mode },
+                }).then(function () {
+                    done += 1;
+                    statusEl.textContent = t('settings.evm_shared_reward_apply_progress')
+                        .replace('{done}', done);
+                }).catch(function () {
+                    failed.push(cid);
+                });
+            })).then(function () {
+                if (failed.length === 0) {
+                    statusEl.textContent = t('settings.evm_shared_reward_apply_ok');
+                    statusEl.className = 'enm-evm-shared-status is-ok';
+                } else {
+                    statusEl.textContent = t('settings.evm_shared_reward_apply_partial')
+                        .replace('{okCount}', 3 - failed.length)
+                        .replace('{failed}', failed.join(', '));
+                    statusEl.className = 'enm-evm-shared-status is-err';
+                }
+                self._refreshEvmShared();
+            });
+        };
+        var rootScope = (typeof window !== 'undefined') ? window : globalThis;
+        if (typeof rootScope.enmRunOnce === 'function' && btn) {
+            rootScope.enmRunOnce(btn, 'Saving…', doApply);
+        } else {
+            doApply();
+        }
     };
 
     // -----------------------------------------------------------------
@@ -1706,6 +2380,229 @@
             confirm: removeConfirm, btn: removeBtn, status: removeStatus,
         };
 
+        // ---------- Sub-card 3b: Staged chain resume (v0.5.228) ----------
+        // Operator directive 2026-05-26 — staged chain start is a destructive
+        // operation (pins the host at near-full CPU for hours; per-chain
+        // start API calls; not safe on a host that needs to stay responsive
+        // for other workloads). Gated behind an explicit enable/disable
+        // toggle that persists to localStorage so the operator's decision
+        // sticks across reloads. Previously auto-revealed in Advanced based
+        // on enmHostLimits.isConstrained — that auto-reveal is now removed.
+        var stageCard = _buildDangerCard({
+            kind: 'warn',
+            title: t('settings.danger_stage_title'),
+            help: t('settings.danger_stage_help'),
+        });
+        body.appendChild(stageCard.el);
+        var stageWarn = document.createElement('div');
+        stageWarn.className = 'enm-danger-warning';
+        stageWarn.textContent = t('settings.danger_stage_warn');
+        stageCard.body.appendChild(stageWarn);
+
+        // Persisted enable/disable toggle. Default OFF.
+        var STAGE_LS_KEY = 'enm:danger:staged-resume:enabled';
+        function stageReadEnabled() {
+            try {
+                return window.localStorage.getItem(STAGE_LS_KEY) === '1';
+            } catch (_) { return false; }
+        }
+        function stageWriteEnabled(on) {
+            try {
+                if (on) {
+                    window.localStorage.setItem(STAGE_LS_KEY, '1');
+                } else {
+                    window.localStorage.removeItem(STAGE_LS_KEY);
+                }
+            } catch (_) { /* private mode / quota — toggle is in-memory only */ }
+        }
+
+        var stageToggleRow = document.createElement('div');
+        stageToggleRow.className = 'enm-danger-toggle-row';
+        var stageToggleLabel = document.createElement('label');
+        stageToggleLabel.className = 'enm-danger-toggle-label';
+        var stageToggleInput = document.createElement('input');
+        stageToggleInput.type = 'checkbox';
+        stageToggleInput.className = 'enm-danger-toggle-input';
+        stageToggleInput.checked = stageReadEnabled();
+        var stageToggleText = document.createElement('span');
+        stageToggleText.className = 'enm-danger-toggle-text';
+        stageToggleText.textContent = t('settings.danger_stage_enable_label');
+        var stageToggleSub = document.createElement('span');
+        stageToggleSub.className = 'enm-danger-toggle-sub';
+        stageToggleSub.textContent = stageToggleInput.checked
+            ? t('settings.danger_stage_enabled_sub')
+            : t('settings.danger_stage_disabled_sub');
+        stageToggleLabel.appendChild(stageToggleInput);
+        stageToggleLabel.appendChild(stageToggleText);
+        stageToggleRow.appendChild(stageToggleLabel);
+        stageToggleRow.appendChild(stageToggleSub);
+        stageCard.body.appendChild(stageToggleRow);
+
+        // Controls row — hidden until the toggle is on.
+        var stageControls = document.createElement('div');
+        stageControls.className = 'enm-danger-stage-controls';
+        stageControls.hidden = !stageToggleInput.checked;
+        var stageStartBtn = document.createElement('button');
+        stageStartBtn.type = 'button';
+        stageStartBtn.className = 'enm-btn enm-btn-primary';
+        stageStartBtn.textContent = t('settings.danger_stage_start_btn');
+        var stagePauseBtn = document.createElement('button');
+        stagePauseBtn.type = 'button';
+        stagePauseBtn.className = 'enm-btn';
+        stagePauseBtn.textContent = t('settings.danger_stage_pause_btn');
+        stagePauseBtn.hidden = true;
+        var stageResumeBtn = document.createElement('button');
+        stageResumeBtn.type = 'button';
+        stageResumeBtn.className = 'enm-btn';
+        stageResumeBtn.textContent = t('settings.danger_stage_resume_btn');
+        stageResumeBtn.hidden = true;
+        var stageCancelBtn = document.createElement('button');
+        stageCancelBtn.type = 'button';
+        stageCancelBtn.className = 'enm-btn enm-btn-danger';
+        stageCancelBtn.textContent = t('settings.danger_stage_cancel_btn');
+        stageCancelBtn.hidden = true;
+        stageControls.appendChild(stageStartBtn);
+        stageControls.appendChild(stagePauseBtn);
+        stageControls.appendChild(stageResumeBtn);
+        stageControls.appendChild(stageCancelBtn);
+        stageCard.body.appendChild(stageControls);
+
+        var stageStatusEl = document.createElement('div');
+        stageStatusEl.className = 'enm-danger-status';
+        stageStatusEl.setAttribute('role', 'status');
+        stageStatusEl.setAttribute('aria-live', 'polite');
+        stageStatusEl.textContent = stageToggleInput.checked
+            ? t('settings.danger_stage_idle')
+            : t('settings.danger_stage_locked');
+        stageCard.foot.appendChild(stageStatusEl);
+
+        // Default chain order — matches the Council install plan.
+        var STAGE_CHAIN_ORDER = [
+            'mainchain', 'esc', 'eid', 'pg',
+            'arbiter', 'esc-oracle', 'eid-oracle', 'pg-oracle',
+        ];
+        var stageInstance = null;
+
+        // Tiny string-template helper — replaces {chain} / {minutes} / etc.
+        function stageFormat(key, vars) {
+            var s = t('settings.' + key) || '';
+            if (!vars) { return s; }
+            return s.replace(/\{(\w+)\}/g, function (_m, k) {
+                return (vars[k] == null) ? '' : String(vars[k]);
+            });
+        }
+
+        function stageHandlePhase(ev) {
+            var msg = '';
+            switch (ev.phase) {
+                case 'starting':
+                    msg = stageFormat('danger_stage_phase_starting',
+                        { chain: ev.chainId || '?' });
+                    break;
+                case 'waiting':
+                    msg = stageFormat('danger_stage_phase_waiting',
+                        { chain: ev.chainId || '?', minutes: ev.elapsedMinutes });
+                    break;
+                case 'synced':
+                    msg = stageFormat('danger_stage_phase_synced', {
+                        chain: ev.chainId || '?',
+                        next: (ev.remainingChains && ev.remainingChains[0]) || 'done',
+                    });
+                    break;
+                case 'timeout':
+                    msg = stageFormat('danger_stage_phase_timeout',
+                        { chain: ev.chainId || '?' });
+                    break;
+                case 'complete':
+                    msg = t('settings.danger_stage_phase_complete');
+                    break;
+                case 'paused':
+                    msg = t('settings.danger_stage_phase_paused');
+                    break;
+                case 'resumed':
+                    msg = t('settings.danger_stage_phase_resumed');
+                    break;
+                case 'cancelled':
+                    msg = t('settings.danger_stage_phase_cancelled');
+                    break;
+                case 'error':
+                    msg = stageFormat('danger_stage_phase_error',
+                        { message: (ev.error && ev.error.message) || 'unknown' });
+                    break;
+            }
+            stageStatusEl.textContent = msg;
+            // Toggle button visibility based on phase.
+            if (ev.phase === 'starting' || ev.phase === 'waiting' || ev.phase === 'resumed') {
+                stageStartBtn.hidden = true;
+                stagePauseBtn.hidden = false;
+                stageResumeBtn.hidden = true;
+                stageCancelBtn.hidden = false;
+            } else if (ev.phase === 'paused') {
+                stageStartBtn.hidden = true;
+                stagePauseBtn.hidden = true;
+                stageResumeBtn.hidden = false;
+                stageCancelBtn.hidden = false;
+            } else if (ev.phase === 'complete' || ev.phase === 'cancelled' || ev.phase === 'error') {
+                stageStartBtn.hidden = false;
+                stagePauseBtn.hidden = true;
+                stageResumeBtn.hidden = true;
+                stageCancelBtn.hidden = true;
+                stageInstance = null;
+            }
+        }
+
+        stageToggleInput.addEventListener('change', function () {
+            var on = !!stageToggleInput.checked;
+            stageWriteEnabled(on);
+            stageToggleSub.textContent = on
+                ? t('settings.danger_stage_enabled_sub')
+                : t('settings.danger_stage_disabled_sub');
+            stageControls.hidden = !on;
+            if (!on) {
+                // Turning off mid-orchestration — cancel anything running.
+                if (stageInstance) { try { stageInstance.cancel(); } catch (_) {} stageInstance = null; }
+                stageStatusEl.textContent = t('settings.danger_stage_locked');
+                stageStartBtn.hidden = false;
+                stagePauseBtn.hidden = true;
+                stageResumeBtn.hidden = true;
+                stageCancelBtn.hidden = true;
+            } else {
+                stageStatusEl.textContent = t('settings.danger_stage_idle');
+            }
+        });
+
+        stageStartBtn.addEventListener('click', function () {
+            if (!stageToggleInput.checked) { return; }  // guard — UI was bypassed
+            if (typeof root.EnmStageSync !== 'function') {
+                stageStatusEl.textContent = t('settings.danger_stage_helper_missing');
+                return;
+            }
+            stageInstance = new root.EnmStageSync({
+                api: self.api,
+                chainOrder: STAGE_CHAIN_ORDER,
+                onPhase: stageHandlePhase,
+            });
+            stageInstance.start();
+        });
+        stagePauseBtn.addEventListener('click', function () {
+            if (stageInstance) { stageInstance.pause(); }
+        });
+        stageResumeBtn.addEventListener('click', function () {
+            if (stageInstance) { stageInstance.resume(); }
+        });
+        stageCancelBtn.addEventListener('click', function () {
+            if (stageInstance) { stageInstance.cancel(); }
+        });
+
+        this._danger.stage = {
+            card: stageCard.el,
+            toggle: stageToggleInput,
+            controls: stageControls,
+            status: stageStatusEl,
+            startBtn: stageStartBtn,
+            getInstance: function () { return stageInstance; },
+        };
+
         // ---------- Sub-card 4: Nuclear wipe ----------
         var nukeCard = _buildDangerCard({
             kind: 'critical',
@@ -1826,9 +2723,8 @@
         var self = this;
         var t = root.enmTOrFallback;
         var s = self._danger.resync;
-        if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
-            if (!window.confirm(t('settings.danger_resync_confirm_dialog'))) { return; }
-        }
+        // v0.5.217 audit Phase 3 (AUDIT-FLOW-DZ01, P2) — native confirm()
+        // removed. Typed-confirm gate ("mainchain") already protects.
         s.status.textContent = t('settings.danger_resync_in_progress');
         s.status.classList.remove('ok', 'err');
         return root.enmRunOnce(s.btn, t('settings.danger_resync_in_progress'), function () {
@@ -1858,9 +2754,8 @@
         var self = this;
         var t = root.enmTOrFallback;
         var s = self._danger.remove;
-        if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
-            if (!window.confirm(t('settings.danger_remove_confirm_dialog'))) { return; }
-        }
+        // v0.5.217 audit Phase 3 (AUDIT-FLOW-DZ01, P2) — native confirm()
+        // removed. Typed-confirm gate ("remove") already protects.
         s.status.textContent = t('settings.danger_remove_in_progress');
         s.status.classList.remove('ok', 'err');
         return root.enmRunOnce(s.btn, t('settings.danger_remove_in_progress'), function () {
@@ -1885,9 +2780,10 @@
         var self = this;
         var t = root.enmTOrFallback;
         var s = self._danger.nuke;
-        if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
-            if (!window.confirm(t('settings.danger_nuke_confirm_dialog'))) { return; }
-        }
+        // v0.5.217 audit Phase 3 (AUDIT-FLOW-DZ01, P2) — native confirm()
+        // removed. The case-sensitive typed-confirm gate ("WIPE EVERYTHING")
+        // is the strongest gate in the app + provides the muscle-memory
+        // friction the native dialog was trying to add.
         s.status.textContent = t('settings.danger_nuke_in_progress');
         s.status.classList.remove('ok', 'err');
         return root.enmRunOnce(s.btn, t('settings.danger_nuke_in_progress'), function () {
@@ -2042,22 +2938,38 @@
         body.appendChild(currentCard.el);
         var idGrid = document.createElement('div');
         idGrid.className = 'enm-identity-grid';
+        // v0.5.228 — public key is the PRIMARY identity (what gets shared
+        // with Essentials, what stakers vote on, what shows up on every
+        // explorer). Signing address is operationally internal and visually
+        // demoted. Modifier classes on each row drive the size/weight
+        // hierarchy in styles.css (pubkey row gets a larger value font + a
+        // "Share with Essentials" pill above it; address row gets a
+        // smaller value font + an "Internal · do not share" pill).
+        // v0.5.229d (P2 audit fix) — the pubkey pill text was hardcoded
+        // "Share with Essentials" (BPoS-only language). For Council
+        // operators it should read "Claim via Essentials" or "Bound to
+        // Council seat". We can't know which until /system/identity
+        // resolves, so render a neutral default ("Public key") and let
+        // _fillForm rewrite the pill text + class once the response
+        // lands. data-fill="pubkey-pill" tags the slot for the fill.
         idGrid.innerHTML =
-            '<div class="enm-identity-grid-row">'
+            '<div class="enm-identity-grid-row enm-identity-grid-row--primary" data-key="pubkey">'
               + '<div class="enm-identity-grid-label">'
                 + _h(t('settings.identity_pubkey_label'))
+                + '<span class="enm-identity-grid-pill enm-identity-grid-pill-action" data-fill="pubkey-pill">Public key</span>'
               + '</div>'
               + '<code class="enm-identity-grid-value enm-mono" data-fill="pubkey">—</code>'
               + '<span class="enm-identity-grid-copy" data-copy="pubkey"></span>'
             + '</div>'
-            + '<div class="enm-identity-grid-row">'
+            + '<div class="enm-identity-grid-row enm-identity-grid-row--secondary" data-key="address">'
               + '<div class="enm-identity-grid-label">'
                 + _h(t('settings.identity_address_label'))
+                + '<span class="enm-identity-grid-pill">Internal</span>'
               + '</div>'
               + '<code class="enm-identity-grid-value enm-mono" data-fill="address">—</code>'
               + '<span class="enm-identity-grid-copy" data-copy="address"></span>'
             + '</div>'
-            + '<div class="enm-identity-grid-row">'
+            + '<div class="enm-identity-grid-row" data-key="producer">'
               + '<div class="enm-identity-grid-label">'
                 + _h(t('settings.identity_producer_label'))
               + '</div>'
@@ -2135,7 +3047,14 @@
         importCard.body.appendChild(importWarn);
         var importFile = document.createElement('input');
         importFile.type = 'file';
-        importFile.accept = '.dat,application/octet-stream';
+        // v0.5.216 audit Phase 2 (AUDIT-FLOW-I02, P1) — broadened from
+        // '.dat,application/octet-stream' which hid .json keystores
+        // exported by Elastos Essentials / ENM v0.4.x in the file
+        // picker. Operators concluded their backup was the wrong format
+        // when in reality it was just an extension mismatch. Backend
+        // /identity/import validates the file contents regardless of
+        // extension, so widening the picker is safe + operator-friendly.
+        importFile.accept = '.dat,.json,application/octet-stream,application/json';
         importFile.className = 'enm-input';
         importCard.body.appendChild(_wrapLabel(t('settings.identity_import_file_label'), importFile));
         var importPassword = document.createElement('input');
@@ -2280,6 +3199,96 @@
             status: integrityStatus,
         };
 
+        // -------------------------------------------------------------
+        // v0.5.229 (Phase F) — Role-debug panel.
+        //
+        // Collapsed-by-default card that, when expanded, hits
+        // GET /system/role-debug and dumps the raw chain RPC responses
+        // + ENM's parsed view side-by-side. Designed so the operator
+        // can copy a JSON dump for support, or (just as important) so
+        // a future Council operator hitting the next-class-of-bug like
+        // the v228 currentarbiters typo can spot the mismatch in
+        // seconds without re-reading ENM source.
+        //
+        // "Copy debug JSON" puts the full payload on the clipboard
+        // (best-effort; falls back to a textarea select for older
+        // browsers). Sensitive fields: this endpoint already filters
+        // /listcurrentcrs to just the operator's own member record
+        // (server-side), so we're not exposing other members' PII.
+        // -------------------------------------------------------------
+        var debugCard = _buildDangerCard({
+            kind: 'info',
+            title: 'Role debug',
+            help: 'Raw RPC responses ENM uses to decide your on-chain role '
+                + '(Council / BPoS / follower) plus ENM\'s parsed view of each. '
+                + 'Useful when the Validator status badge says something different '
+                + 'than you expect — paste the JSON in a support ticket and a '
+                + 'developer can compare ENM\'s read vs the chain\'s truth side-by-side.',
+        });
+        body.appendChild(debugCard.el);
+        var debugStatus = document.createElement('div');
+        debugStatus.className = 'enm-danger-status';
+        debugStatus.setAttribute('role', 'status');
+        debugStatus.setAttribute('aria-live', 'polite');
+        debugStatus.textContent = 'Collapsed. Click "Refresh" to read live state.';
+        debugCard.body.appendChild(debugStatus);
+        var debugPre = document.createElement('pre');
+        debugPre.className = 'enm-role-debug-pre';
+        debugPre.hidden = true;
+        debugPre.style.maxHeight = '400px';
+        debugPre.style.overflow = 'auto';
+        debugPre.style.fontSize = '11px';
+        debugPre.style.fontFamily = 'var(--font-mono)';
+        debugPre.style.background = 'var(--bg-elevated)';
+        debugPre.style.border = '1px solid var(--border-subtle)';
+        debugPre.style.borderRadius = 'var(--r-sm)';
+        debugPre.style.padding = 'var(--sp-3)';
+        debugPre.style.whiteSpace = 'pre-wrap';
+        debugPre.style.wordBreak = 'break-word';
+        debugCard.body.appendChild(debugPre);
+        var debugRefreshBtn = document.createElement('button');
+        debugRefreshBtn.type = 'button';
+        debugRefreshBtn.className = 'enm-btn';
+        debugRefreshBtn.textContent = 'Refresh debug info';
+        debugCard.foot.appendChild(debugRefreshBtn);
+        var debugCopyBtn = document.createElement('button');
+        debugCopyBtn.type = 'button';
+        debugCopyBtn.className = 'enm-btn enm-btn-primary';
+        debugCopyBtn.textContent = 'Copy JSON';
+        debugCopyBtn.disabled = true;
+        debugCard.foot.appendChild(debugCopyBtn);
+        var debugPayload = null;
+        debugRefreshBtn.addEventListener('click', function () {
+            debugStatus.textContent = 'Reading on-chain state…';
+            debugStatus.className = 'enm-danger-status';
+            self.api.get('/system/role-debug').then(function (env) {
+                if (self._destroyed) { return; }
+                debugPayload = (env && env.result) || (env && env.data) || env;
+                debugPre.hidden = false;
+                debugPre.textContent = JSON.stringify(debugPayload, null, 2);
+                debugCopyBtn.disabled = false;
+                debugStatus.textContent = 'Fetched at ' + (debugPayload.summary && debugPayload.summary.lastChecked || '?');
+                debugStatus.className = 'enm-danger-status is-ok';
+            }).catch(function (err) {
+                if (self._destroyed) { return; }
+                debugStatus.textContent = 'Failed: ' + ((err && err.message) || String(err));
+                debugStatus.className = 'enm-danger-status is-err';
+            });
+        });
+        debugCopyBtn.addEventListener('click', function () {
+            if (!debugPayload) { return; }
+            var text = JSON.stringify(debugPayload, null, 2);
+            if (root.enmCopyToClipboard) {
+                root.enmCopyToClipboard(text, { notifications: self.notifications });
+            } else if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).then(function () {
+                    debugStatus.textContent = 'Copied to clipboard.';
+                }).catch(function () {
+                    debugStatus.textContent = 'Copy failed — select the JSON manually and Cmd+C.';
+                });
+            }
+        });
+
         return card;
     };
 
@@ -2406,6 +3415,15 @@
         var self = this;
         var t = root.enmTOrFallback;
         if (!self._identity) { return; }
+        // v0.5.216 audit Phase 2 (AUDIT-FLOW-I01, P1) — skip the repaint
+        // while the operator hasn't yet ack'd a freshly-revealed Reset
+        // password. _doIdentityReset sets _resetRevealPendingAck=true;
+        // dismiss handler clears it then calls back into this method.
+        // Without this gate, the parent setting-tab activation hook
+        // (line ~1237) would call _refreshIdentity, rebuild the cards,
+        // and clobber the reveal panel with the new password the
+        // operator hasn't saved yet.
+        if (self._resetRevealPendingAck) { return; }
         self.api.get('/identity', { skipCache: true })
             .then(function (resp) {
                 if (self._destroyed) { return; }
@@ -2414,12 +3432,46 @@
                 var id = r.identity || {};
                 self._identity.pubkeyEl.textContent = id.publicKey || '—';
                 self._identity.addressEl.textContent = id.address || '—';
-                // Producer chip: "Active · Rank #N" / "Pending" / "Inactive" /
-                // "Not registered yet" if no record.
+                // v0.5.229d (P2 audit fix) — rewrite the pubkey pill based
+                // on the Council/BPoS context. Pre-229d the pill always
+                // read "Share with Essentials" (BPoS-only). Now branches:
+                //   crMember.isCrMember=true → "Bound to Council seat"
+                //   setupRole='council'      → "Claim via Essentials"
+                //   else                     → "Share with Essentials"
+                var crMember = r.crMember || null;
+                var setupRole = r.setupRole || 'unknown';
+                var pubkeyPillEl = self._identity.card
+                    && self._identity.card.querySelector('[data-fill="pubkey-pill"]');
+                if (pubkeyPillEl) {
+                    if (crMember && crMember.isCrMember) {
+                        pubkeyPillEl.textContent = 'Bound to Council seat';
+                    } else if (setupRole === 'council') {
+                        pubkeyPillEl.textContent = 'Claim via Essentials';
+                    } else {
+                        pubkeyPillEl.textContent = 'Share with Essentials';
+                    }
+                }
+                // Producer chip — surface CR Council state when known,
+                // BPoS state otherwise, falling through to "Not registered".
+                // Pre-229d a Council operator who'd never registered as
+                // BPoS saw "Not registered yet" here despite being a CR
+                // member — wrong on its face.
                 var p = r.producer || null;
-                var prodText = (p && p.state)
-                    ? (p.rank != null ? (p.state + ' · Rank #' + p.rank) : p.state)
-                    : t('settings.identity_producer_unregistered');
+                var prodText;
+                if (crMember && crMember.isCrMember) {
+                    prodText = 'CR Council member · ' + (crMember.state || 'Elected')
+                        + (crMember.nickname ? (' · ' + crMember.nickname) : '');
+                    if (p && p.state) {
+                        // Operator is BOTH a Council member AND a BPoS producer
+                        prodText += ' (also BPoS · ' + p.state + ')';
+                    }
+                } else if (p && p.state) {
+                    prodText = p.rank != null ? (p.state + ' · Rank #' + p.rank) : p.state;
+                } else if (setupRole === 'council') {
+                    prodText = 'Council install — not currently bound (claim via Essentials)';
+                } else {
+                    prodText = t('settings.identity_producer_unregistered');
+                }
                 self._identity.producerEl.textContent = prodText;
                 // Unlock card is visible only when keystore exists but
                 // we don't have its identity cached yet.
@@ -2567,7 +3619,17 @@
                         }
                         var dispo = r.headers.get('Content-Disposition') || '';
                         var m = /filename="([^"]+)"/.exec(dispo);
-                        var name = m ? m[1] : 'keystore-backup.dat';
+                        // v0.5.216 audit Phase 2 (AUDIT-FLOW-I07, P2) —
+                        // sanitize the Content-Disposition filename
+                        // before handing it to the browser's download
+                        // API. Pre-v0.5.216 a backend bug (or MitM on a
+                        // misconfigured endpoint) could ship a filename
+                        // like '../etc/passwd' or 'malicious.exe' and
+                        // the browser would honor it. Defense in depth:
+                        // strip path separators + odd chars, cap length.
+                        var rawName = m ? m[1] : 'keystore-backup.dat';
+                        var name = rawName.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 64);
+                        if (!name) { name = 'keystore-backup.dat'; }
                         return r.blob().then(function (blob) { return { blob: blob, name: name }; });
                     })
                     .then(function (d) {
@@ -2603,9 +3665,11 @@
             status.classList.remove('ok'); status.classList.add('err');
             return;
         }
-        if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
-            if (!window.confirm(t('settings.identity_import_confirm_dialog'))) { return; }
-        }
+        // v0.5.217 audit Phase 3 (AUDIT-FLOW-I06, P2) — native confirm()
+        // removed. The typed-confirm gate ("import") + the import button
+        // already-disabled-unless-typed-confirm-matches state are
+        // sufficient defense-in-depth; the native browser dialog was
+        // jarring + inconsistent with the rest of ENM's UX.
         status.textContent = t('settings.identity_import_running');
         status.classList.remove('ok', 'err');
         // Whether to force = whether the slashing-risk warning is visible
@@ -2665,9 +3729,10 @@
     SettingsTab.prototype._doIdentityReset = function (btn, status, warnEl, confirmObj) {
         var self = this;
         var t = root.enmTOrFallback;
-        if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
-            if (!window.confirm(t('settings.identity_reset_confirm_dialog'))) { return; }
-        }
+        // v0.5.217 audit Phase 3 (AUDIT-FLOW-I13, P2) — native confirm()
+        // removed. The typed-confirm gate ("reset keystore") + the post-
+        // reveal ack checkbox (added in Phase 2 for I01) together provide
+        // strong defense-in-depth; the native dialog was redundant.
         status.textContent = t('settings.identity_reset_running');
         status.classList.remove('ok', 'err');
         var force = !warnEl.hidden;
@@ -2680,7 +3745,18 @@
                     .then(function (resp) {
                         if (self._destroyed) { return; }
                         var r = (resp && resp.result) || resp || {};
-                        // Inline password reveal — same pattern as Card C.
+                        var newPw = r.generatedPassword || '';
+                        var last4 = newPw.slice(-4);
+                        // v0.5.216 audit Phase 2 (AUDIT-FLOW-I01, P1) — the
+                        // reveal now includes an ACK CHECKBOX + LAST-4
+                        // anti-typo gate matching the setup wizard Card 3
+                        // pattern. Pre-v0.5.216 the operator could reveal
+                        // the new password, copy it, switch tabs — and
+                        // lose it forever (clipboard cleared on next copy
+                        // / refresh / navigation) → permanently locked out
+                        // of an Active producer keystore. The gate keeps
+                        // the rest of Identity inert until the operator
+                        // confirms they have the password saved.
                         self._identity.resetReveal.hidden = false;
                         self._identity.resetReveal.innerHTML =
                             '<div class="enm-password-warning" role="alert">'
@@ -2694,17 +3770,30 @@
                                 + _h(t('friendly.setup.card_c.password_label'))
                               + '</div>'
                               + '<code class="enm-password-value">'
-                                + _h(r.generatedPassword || '')
+                                + _h(newPw)
                               + '</code>'
                               + '<div class="enm-password-actions">'
                                 + '<span class="enm-password-copy-slot"></span>'
                               + '</div>'
+                            + '</div>'
+                            // Ack gate — checkbox + last-4 retype.
+                            + '<div class="enm-password-ack" role="group" aria-label="Confirm you saved the new password">'
+                              + '<label class="enm-password-ack-row">'
+                                + '<input type="checkbox" data-fill="reveal-ack" />'
+                                + '<span>I have saved this password to my password manager.</span>'
+                              + '</label>'
+                              + '<label class="enm-password-ack-row">'
+                                + '<span>Retype the last 4 characters to confirm:</span>'
+                                + '<input type="text" data-fill="reveal-last4" maxlength="4" autocomplete="off" spellcheck="false" style="text-transform: lowercase; width: 6em; font-family: monospace;" />'
+                              + '</label>'
+                              + '<button type="button" data-action="reveal-dismiss" class="enm-btn enm-btn-primary" disabled>I have saved it — close this</button>'
+                              + '<p class="enm-password-ack-warn" style="margin-top: 8px; color: var(--state-warning, #c97a00); font-size: 12px;">⚠ The other Identity controls are locked until you confirm. If you lose this password, your keystore is unrecoverable.</p>'
                             + '</div>';
                         // Wire copy button on the password.
                         var pwEl = self._identity.resetReveal.querySelector('.enm-password-value');
-                        if (typeof root.enmCopyButton === 'function' && r.generatedPassword) {
+                        if (typeof root.enmCopyButton === 'function' && newPw) {
                             var copyBtn = root.enmCopyButton({
-                                value: r.generatedPassword,
+                                value: newPw,
                                 label: t('friendly.setup.card_c.cta_copy') || 'Copy',
                                 copiedLabel: t('friendly.setup.card_c.cta_copied') || 'Copied!',
                                 ariaLabel: 'Copy new password',
@@ -2718,6 +3807,59 @@
                                 slot.parentNode.replaceChild(copyBtn, slot);
                             }
                         }
+                        // Wire the ack-gate handlers + lock the rest of
+                        // Identity until the operator confirms.
+                        self._resetRevealPendingAck = true;
+                        var lockTargets = [
+                            self._identity.currentCard,
+                            self._identity.unlockCard,
+                            self._identity.backupCard,
+                            self._identity.importCard,
+                            self._identity.integrity && self._identity.integrity.card,
+                        ];
+                        lockTargets.forEach(function (el) {
+                            if (el) {
+                                el.setAttribute('inert', '');
+                                el.setAttribute('aria-hidden', 'true');
+                                el.style.opacity = '0.35';
+                                el.style.pointerEvents = 'none';
+                            }
+                        });
+                        // Also disable the Reset card's own Reset button
+                        // so the operator can't trigger ANOTHER reset
+                        // (would generate yet another password without
+                        // saving this one).
+                        if (self._identity.resetBtn) {
+                            self._identity.resetBtn.disabled = true;
+                        }
+                        var ackBox = self._identity.resetReveal.querySelector('[data-fill="reveal-ack"]');
+                        var last4Input = self._identity.resetReveal.querySelector('[data-fill="reveal-last4"]');
+                        var dismissBtn = self._identity.resetReveal.querySelector('[data-action="reveal-dismiss"]');
+                        function refreshGate() {
+                            var typed = (last4Input.value || '').trim().toLowerCase();
+                            dismissBtn.disabled = !(ackBox.checked && typed === last4.toLowerCase());
+                        }
+                        ackBox.addEventListener('change', refreshGate);
+                        last4Input.addEventListener('input', refreshGate);
+                        dismissBtn.addEventListener('click', function () {
+                            if (dismissBtn.disabled) { return; }
+                            // Operator confirmed — re-enable everything.
+                            self._resetRevealPendingAck = false;
+                            self._identity.resetReveal.hidden = true;
+                            self._identity.resetReveal.innerHTML = '';
+                            lockTargets.forEach(function (el) {
+                                if (el) {
+                                    el.removeAttribute('inert');
+                                    el.removeAttribute('aria-hidden');
+                                    el.style.opacity = '';
+                                    el.style.pointerEvents = '';
+                                }
+                            });
+                            if (self._identity.resetBtn) {
+                                self._identity.resetBtn.disabled = true; // typed-confirm still empty
+                            }
+                            self._refreshIdentity();
+                        });
                         status.textContent = t('settings.identity_reset_ok');
                         status.classList.add('ok');
                         confirmObj.input.value = '';
@@ -2726,7 +3868,9 @@
                             try { self.api.invalidate('/system/identity'); }
                             catch (_) { /* ignore */ }
                         }
-                        self._refreshIdentity();
+                        // Deferred — _refreshIdentity now early-returns
+                        // while _resetRevealPendingAck is true (see method),
+                        // so it'll fire after the operator acks.
                     })
                     .catch(function (err) {
                         if (self._destroyed) { return; }
@@ -3241,8 +4385,14 @@
     // which rule they had toggled.
     SettingsTab.prototype._toggleHealingRule = function (ruleId, ruleTitle, nextEnabled, toggleEl) {
         var self = this;
-        if (!this.services || !this.services.api
-            || typeof this.services.api.put !== 'function') {
+        // v0.5.215 audit (AUDIT-FLOW-H01, P0) — restored from dead-on-arrival
+        // state. Pre-v0.5.215 this guard referenced this.services.api which
+        // was never assigned in the constructor (this.api is the canonical
+        // field — see line 116). Every healing toggle click was a silent
+        // no-op: the early-return fired before any API call or UI flip,
+        // leaving operators with NO functional kill switch for misbehaving
+        // F-rules (critical given the C19 F2 restart-loop history).
+        if (!this.api || typeof this.api.put !== 'function') {
             return;
         }
         // Compose the toast label once. If the title is the same as the
@@ -3259,10 +4409,10 @@
         toggleEl.classList.toggle('enm-healing-rules-toggle-off', !nextEnabled);
         var body = { enabledRules: {} };
         body.enabledRules[ruleId] = !!nextEnabled;
-        this.services.api.put('/config/healing', body)
+        this.api.put('/config/healing', body)
             .then(function () {
-                if (self.services && self.services.notifications) {
-                    self.services.notifications.show({
+                if (self.notifications) {
+                    self.notifications.show({
                         severity: 'info',
                         title: ruleLabel + ' is now ' + (nextEnabled ? 'on' : 'off'),
                         body: 'The healing engine will pick up this change within ~5 s.',
@@ -3289,8 +4439,8 @@
                 // _saveSecurity / _refreshHealingRules / _refreshHealingActivity.
                 if (err && err.status === 401) { return; }
                 var msg = (err && err.message) || String(err);
-                if (self.services && self.services.notifications) {
-                    self.services.notifications.show({
+                if (self.notifications) {
+                    self.notifications.show({
                         severity: 'warning',
                         title: 'Failed to update ' + ruleLabel,
                         body: msg,
@@ -3872,6 +5022,21 @@
         if (!Number.isInteger(syncMin) || syncMin < 1 || syncMin > 240) {
             setStatus(a.statusEl, 'error',
                 t('settings.save_failed', { error: t('settings.alerts_err_sync_grace') }));
+            a.syncGrace.input.setAttribute('aria-invalid', 'true');
+            try { a.syncGrace.input.focus({ preventScroll: true }); }
+            catch (e) { a.syncGrace.input.focus(); }
+            return;
+        }
+        // v0.5.222 audit Phase 9 (XFLOW-13, AUDIT-FLOW-AL03) — sync-stall
+        // grace MUST be >= peer-grace. Syncing requires peers first, so
+        // peer-zero alert should fire BEFORE sync-stall alert. Pre-v0.5.222
+        // operator could save peerGrace=10 + syncGrace=5 (backward) and
+        // the sync-stall alert would fire while the peer-zero alert
+        // hadn't yet triggered — confusing escalation order.
+        if (syncMin < peerMin) {
+            setStatus(a.statusEl, 'error',
+                'Sync-stall grace (' + syncMin + 'm) must be greater than or equal to '
+                + 'peer-zero grace (' + peerMin + 'm). Syncing requires peers first.');
             a.syncGrace.input.setAttribute('aria-invalid', 'true');
             try { a.syncGrace.input.focus({ preventScroll: true }); }
             catch (e) { a.syncGrace.input.focus(); }

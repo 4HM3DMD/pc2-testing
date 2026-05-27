@@ -234,6 +234,16 @@ const globalSchema = Joi.object({
         minerAddressStrategy: Joi.string().valid('shared', 'per-chain').optional(),
         sharedMinerAddress: Joi.string().regex(/^0x[0-9a-fA-F]{40}$/).allow('').default(''),
         setupCompletedAt: Joi.number().integer().allow(null).default(null),
+        // v0.5.229 (audit 2026-05-27) — explicit "this is a Council install"
+        // flag set by /setup/install-council when the orchestrator finishes
+        // the start-chains step. The dashboard uses this as the early-render
+        // hint for "show Council UI" before the live listcurrentcrs call
+        // resolves (mainchain RPC may still be warming up). Pre-229 the
+        // wizard saved 'council' to localStorage.enm:setup-intent only,
+        // which the dashboard never read — every Council operator saw the
+        // BPoS default labelling instead.
+        installed: Joi.boolean().default(false),
+        installedAt: Joi.number().integer().allow(null).default(null),
     }).default(),
 });
 

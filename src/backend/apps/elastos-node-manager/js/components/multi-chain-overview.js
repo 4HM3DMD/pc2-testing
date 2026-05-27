@@ -98,16 +98,28 @@
         disabled:     'Disabled',
         unconfigured: 'Not configured',
     };
-    // v0.5.203 — backwards-compat: backend may still return v1 ('running'/
-    // 'healthy') from older bundles during rollout, so normalize first.
+    // v0.5.219 audit Phase 5 (XFLOW-04 / XFLOW-16) — these helpers now
+    // DELEGATE to the canonical root.enmStateVocab helper (extracted in
+    // utils-state-vocab.js) so this file no longer maintains a parallel
+    // state-vocabulary mapping. Pre-v0.5.219 STATE_LABEL_V2 here was
+    // missing 'recovering' / 'error' / 'loading' (any backend addition
+    // would silently fall through to the raw state name). Inline stubs
+    // preserve the wrapper signatures the rest of this file calls so the
+    // migration is local. Defensive fallback preserved if utils-state-
+    // vocab.js failed to load.
     function normalizeStateV2(state) {
+        if (root.enmStateVocab && typeof root.enmStateVocab.normalize === 'function') {
+            return root.enmStateVocab.normalize(state);
+        }
         if (!state) return 'unconfigured';
-        // Legacy state names → new vocabulary mapping.
-        if (state === 'running') return 'synced';      // v1 'running' was used for any alive past-grace chain incl. synced + syncing
-        if (state === 'healthy') return 'synced';      // chains.js v1 'healthy' for class C/D alive
-        return state;                                  // synced / syncing / starting / stalled / stopped / disabled / unconfigured
+        if (state === 'running') return 'synced';
+        if (state === 'healthy') return 'synced';
+        return state;
     }
     function stateLabelForV2(state) {
+        if (root.enmStateVocab && typeof root.enmStateVocab.stateLabel === 'function') {
+            return root.enmStateVocab.stateLabel(state);
+        }
         var v2 = normalizeStateV2(state);
         return tFb('chain_state_v2.' + v2, STATE_LABEL_V2[v2] || v2);
     }
@@ -190,6 +202,12 @@
         // chain-state event doesn't have to wait for the next usage tick.
         this._lastUsage = null;
         this._usagePollHandle = null;
+        // v0.5.225 audit Phase 21 — provider-cap (cgroup limits) state.
+        // Auto-fetched on mount; surfaces a banner only when a tight cap
+        // is detected (cpu<4 cores OR mem<8 GB). Well-resourced operators
+        // never see it.
+        this._hostLimits = null;
+        this._constrainedDismissed = false;
     }
 
     EnmMultiChainOverviewPane.prototype.mount = function (parent) {
@@ -203,6 +221,21 @@
         this._subscribe();
         this._fetchInitial();
         this._startUsagePoll();
+        // v0.5.225 audit Phase 21 — fire-and-forget probe for cgroup limits.
+        // Cached 60s server-roundtrip-free after first hit. Renders nothing
+        // when no cap is detected (the typical bare-metal case).
+        var self = this;
+        if (root.enmHostLimits && typeof root.enmHostLimits.fetch === 'function') {
+            root.enmHostLimits.fetch(this.api).then(function (limits) {
+                if (self._destroyed) { return; }
+                self._hostLimits = limits;
+                if (limits && limits.isConstrained && self._lastSnap) {
+                    // Force a re-render so the banner appears on first load.
+                    self._lastHtml = null;
+                    self._render(self._lastSnap);
+                }
+            });
+        }
     };
 
     EnmMultiChainOverviewPane.prototype.destroy = function () {
@@ -327,6 +360,21 @@
             if (self._destroyed) { return; }
             self._renderError((err && err.message) || 'Network error');
         });
+        // v0.5.229d (P3 audit fix) — also fetch /system/identity to know
+        // the operator's CR Council role. Stashed on the instance and
+        // read by _summaryLineV2 to prepend a role-aware prefix to the
+        // existing "X synced · Y total" status line. Best-effort — if
+        // /system/identity fails, _summaryLineV2 silently falls back to
+        // the pre-229d format.
+        this.api.get('/system/identity').then(function (env) {
+            if (self._destroyed) { return; }
+            var d = (env && env.result) || (env && env.data) || env || {};
+            self._lastIdentity = d;
+            // Trigger a re-render if we already have a snapshot — the
+            // identity arrived after the chain data, the prefix needs
+            // to land in the next paint.
+            if (self._lastSnap) { self._render(self._lastSnap); }
+        }).catch(function () { /* graceful degrade — leave _lastIdentity null */ });
     };
 
     /** @private */
@@ -387,6 +435,11 @@
             escapeHtml(this._summaryLineV2(snap)),
             '</p>',
             '</header>',
+            // v0.5.225 audit Phase 21 — provider-cap banner. Only renders
+            // when /system/host-limits reports a tight cap AND operator
+            // hasn't dismissed it. Auto-detected; opt-in per operator
+            // directive 2026-05-25.
+            this._constrainedHostBannerHtml(),
             // v0.5.204 — sticky banner shown when ≥1 chain is in 'starting'
             // for > STARTUP_BANNER_THRESHOLD_SEC. Reassures the operator
             // that long warm-ups are expected + warns NOT to restart.
@@ -401,16 +454,113 @@
         ];
         var hasRows = false;
         var self = this;
-        CLASS_ORDER.forEach(function (k) {
+
+        // v0.5.228 — visual hierarchy rewrite. Operator directive 2026-05-27:
+        // "multi chain looks very ugly honestly". Pre-228 rendered the 8
+        // services as 4 flat sections with identical row treatment — the
+        // mainchain (the actual node) looked the same as a satellite
+        // oracle, and there was no visual link between an EVM and its
+        // companion oracle. The new structure matches the "one Council
+        // node, many services" mental model the operator reinforced this
+        // week (oracle pairing, arbiter pairing):
+        //
+        //   1. Main chain as a HERO card at the top (accent ring, larger
+        //      typography, prominent metrics) — it IS the node.
+        //   2. "EVM sidechains" group with one CARD per EVM that nests
+        //      its companion oracle visually inside. The card reads as
+        //      one functional unit (the cross-chain bridge for that EVM).
+        //   3. Arbiter as a compact card at the bottom — service-tier
+        //      treatment, not the operator's focus.
+        //   4. Orphan oracles + classes E/? fall back to the old flat
+        //      rendering so unusual installs still surface every service.
+        //
+        // Click routing stays per-row: each routable LI keeps the
+        // .enm-overview-row class with its own data-chain-id, so the
+        // existing event handler resolves the right destination by
+        // closest('.enm-overview-row').
+        var mainchain = (byClass['A'] || [])[0] || null;
+        var evmChains = byClass['B'] || [];
+        var oracles   = byClass['C'] || [];
+        var arbiters  = byClass['D'] || [];
+
+        if (mainchain) {
+            hasRows = true;
+            html.push('<section class="enm-overview-section enm-overview-section-hero" data-class="A">');
+            html.push('<ul class="enm-overview-rows" role="list">');
+            html.push(self._rowHtml(mainchain, { variant: 'hero' }));
+            html.push('</ul>');
+            html.push('</section>');
+        }
+
+        if (evmChains.length > 0) {
+            hasRows = true;
+            html.push('<section class="enm-overview-section enm-overview-section-evm" data-class="B">');
+            html.push('<h3 class="enm-overview-section-heading">'
+                + escapeHtml(tFb('overview_pane.evm_group_heading', 'EVM sidechains'))
+                + '</h3>');
+            html.push('<div class="enm-overview-evm-grid">');
+            evmChains.forEach(function (evm) {
+                var oracle = null;
+                for (var i = 0; i < oracles.length; i++) {
+                    if (oracles[i].parentChainId === evm.chainId) {
+                        oracle = oracles[i];
+                        break;
+                    }
+                }
+                html.push('<div class="enm-overview-evm-card">');
+                html.push('<ul class="enm-overview-rows" role="list">');
+                html.push(self._rowHtml(evm, { variant: 'evm' }));
+                if (oracle) {
+                    html.push(self._rowHtml(oracle, { variant: 'oracle-nested' }));
+                }
+                html.push('</ul>');
+                html.push('</div>');
+            });
+            html.push('</div>');
+            html.push('</section>');
+        }
+
+        // Orphan oracles (parent missing from snap — defensive). Renders
+        // under its own heading so the operator can still see + act on it.
+        var orphanOracles = oracles.filter(function (o) {
+            for (var i = 0; i < evmChains.length; i++) {
+                if (evmChains[i].chainId === o.parentChainId) { return false; }
+            }
+            return true;
+        });
+        if (orphanOracles.length > 0) {
+            hasRows = true;
+            html.push('<section class="enm-overview-section enm-overview-section-orphan" data-class="C">');
+            html.push('<h3 class="enm-overview-section-heading">'
+                + escapeHtml(tFb('overview_pane.orphan_oracles_heading', 'Oracles (parent chain not configured)'))
+                + '</h3>');
+            html.push('<ul class="enm-overview-rows" role="list">');
+            orphanOracles.forEach(function (c) { html.push(self._rowHtml(c)); });
+            html.push('</ul>');
+            html.push('</section>');
+        }
+
+        if (arbiters.length > 0) {
+            hasRows = true;
+            html.push('<section class="enm-overview-section enm-overview-section-arbiter" data-class="D">');
+            html.push('<ul class="enm-overview-rows" role="list">');
+            arbiters.forEach(function (c) {
+                html.push(self._rowHtml(c, { variant: 'arbiter' }));
+            });
+            html.push('</ul>');
+            html.push('</section>');
+        }
+
+        // Fallback rendering for any other class (E SPV module, unknown)
+        // so the operator never loses sight of a configured service.
+        ['E', '?'].forEach(function (k) {
             var rows = byClass[k];
             if (!rows || rows.length === 0) { return; }
             hasRows = true;
-            html.push('<section class="enm-overview-class" data-class="' + k + '">');
-            html.push('<h3>' + escapeHtml(classLabelFor(k)) + '</h3>');
+            html.push('<section class="enm-overview-section enm-overview-class" data-class="' + k + '">');
+            html.push('<h3 class="enm-overview-section-heading">' + escapeHtml(classLabelFor(k)) + '</h3>');
             html.push('<ul class="enm-overview-rows" role="list">');
-            rows.forEach(function (c) {
-                html.push(self._rowHtml(c));
-            });
+            rows.forEach(function (c) { html.push(self._rowHtml(c)); });
             html.push('</ul>');
             html.push('</section>');
         });
@@ -457,6 +607,21 @@
                     self._routeToChain(row.dataset.chainId);
                 });
             });
+            // v0.5.225 audit Phase 21 — constrained-host banner dismiss.
+            // Dismissal persists for the session (this._constrainedDismissed
+            // flag, not localStorage) so a page reload re-shows the banner
+            // — operator should be reminded each session their host is
+            // constrained.
+            var constrainedDismiss = this._root.querySelector('[data-action="dismiss-constrained-banner"]');
+            if (constrainedDismiss) {
+                var self_cb = this;
+                constrainedDismiss.addEventListener('click', function () {
+                    if (self_cb._destroyed) { return; }
+                    self_cb._constrainedDismissed = true;
+                    self_cb._lastHtml = null;
+                    if (self_cb._lastSnap) { self_cb._render(self_cb._lastSnap); }
+                });
+            }
             // v0.5.204 — wire dismiss button on the startup banner. Remembers
             // which chainIds are dismissed; banner re-shows when a NEW chain
             // enters starting state (handled in _startupBannerHtml's known-set
@@ -492,10 +657,19 @@
      * values are real (from the Phase 1-enriched /council/overview); when a value
      * is genuinely unknown (e.g. height before RPC warms) we show an honest
      * "height pending…", never a guess. */
-    EnmMultiChainOverviewPane.prototype._rowHtml = function (c) {
+    EnmMultiChainOverviewPane.prototype._rowHtml = function (c, opts) {
         // v0.5.203 — normalize state through the new vocabulary so a backend
         // returning legacy 'running' / 'healthy' (during rollout) still maps
         // to a styled chip.
+        // v0.5.228 — opts.variant adds a modifier class so the same markup
+        // can render at different visual weights:
+        //   'hero'           — mainchain at the top of the overview (large)
+        //   'evm'            — EVM sidechain inside its grouped card
+        //   'oracle-nested'  — oracle inside its parent's grouped card (small)
+        //   'arbiter'        — arbiter compact footer card
+        //   undefined        — default flat-row look (orphans, fallback)
+        // Variants are visual only; the data + click routing are identical.
+        var variant = opts && opts.variant ? opts.variant : null;
         var v2State = normalizeStateV2(c.state);
         var stateClass = 'state-' + escapeAttr(v2State);
         var uptime = c.uptimeSec != null ? formatUptime(c.uptimeSec) : '';
@@ -509,7 +683,13 @@
             : '<span class="enm-overview-uptime" aria-hidden="true"></span>';
         var stateChipAttrs = ' class="enm-overview-state ' + stateClass + '"';
         if (stateHint) { stateChipAttrs += ' title="' + escapeAttr(stateHint) + '"'; }
-        return '<li class="enm-overview-row" data-chain-id="' + chainIdAttr
+        var rowClasses = 'enm-overview-row';
+        if (variant) { rowClasses += ' enm-overview-row--' + variant; }
+        // Nested oracles don't get the spark/uptime/actions on the right —
+        // they're services, not chains-with-height. Same for arbiter; its
+        // SPV state is shown in metrics instead.
+        var isCompact = variant === 'oracle-nested' || variant === 'arbiter';
+        return '<li class="' + rowClasses + '" data-chain-id="' + chainIdAttr
             + '" data-state="' + escapeAttr(v2State) + '">'
             + '<span class="enm-overview-dot ' + stateClass + '" aria-hidden="true"></span>'
             + '<div class="enm-overview-main">'
@@ -520,12 +700,55 @@
             +   '<div class="enm-overview-meta">' + this._metaHtmlV2(c) + '</div>'
             +   '<div class="enm-overview-metrics">' + this._metricsHtml(c) + '</div>'
             + '</div>'
-            + '<span class="enm-overview-spark" data-chain-id="' + chainIdAttr + '"></span>'
-            + uptimeHtml
+            + (isCompact ? '' : '<span class="enm-overview-spark" data-chain-id="' + chainIdAttr + '"></span>')
+            + (isCompact ? '' : uptimeHtml)
             + this._actionsHtml(c)
             + '<button type="button" class="enm-overview-open" data-chain-id="' + chainIdAttr + '"'
             +   ' aria-label="' + escapeAttr(ariaLabel) + '">›</button>'
             + '</li>';
+    };
+
+    /**
+     * v0.5.225 audit Phase 21 — constrained-host banner.
+     * Surfaces only when cgroup limits are tight AND operator hasn't
+     * dismissed. Operator directive 2026-05-25 ("budget features should
+     * not be for everyone") → auto-detected + opt-in dismissal. Well-
+     * resourced operators never see this.
+     * @private
+     */
+    EnmMultiChainOverviewPane.prototype._constrainedHostBannerHtml = function () {
+        if (this._constrainedDismissed) { return ''; }
+        var hl = this._hostLimits;
+        if (!hl || !hl.isConstrained) { return ''; }
+        var capStr = '';
+        if (typeof hl.cpuCapCores === 'number' && hl.cpuCapCores < 4) {
+            capStr = hl.cpuCapCores + ' CPU core' + (hl.cpuCapCores === 1 ? '' : 's');
+        }
+        if (typeof hl.memoryCapGb === 'number' && hl.memoryCapGb < 8) {
+            capStr += (capStr ? ' + ' : '') + hl.memoryCapGb + ' GB RAM';
+        }
+        // Source label ("cgroup-v2" / "cgroup-v1") is for the title attribute
+        // (debug); operator-facing copy stays plain English.
+        var sourceTitle = 'Detected via ' + (hl.source || 'cgroup');
+        return ''
+            + '<div class="enm-overview-constrained-banner" role="status" aria-live="polite" '
+            +      'title="' + escapeAttr(sourceTitle) + '">'
+            +   '<div class="enm-overview-constrained-banner-icon" aria-hidden="true">⚠</div>'
+            +   '<div class="enm-overview-constrained-banner-body">'
+            +     '<div class="enm-overview-constrained-banner-title">Budget-tier host detected</div>'
+            +     '<div class="enm-overview-constrained-banner-body-text">'
+            +       'This host is limited to ' + escapeHtml(capStr) + '. '
+            +       'A full Council install (4 chains + arbiter + 3 oracles) typically needs '
+            +       '4+ CPU cores during EVM sync; on a budget VPS tier (common across most '
+            +       'shared / low-cost cloud providers) the provider may pause your node when '
+            +       'usage spikes. Consider enabling stage-sync in '
+            +       '<strong>Settings → Advanced → Stage-sync</strong> '
+            +       '(starts EVM chains one at a time so sync CPU spikes are sequential, not concurrent).'
+            +     '</div>'
+            +   '</div>'
+            +   '<button type="button" class="enm-overview-constrained-banner-dismiss" '
+            +     'data-action="dismiss-constrained-banner" aria-label="Dismiss">×</button>'
+            + '</div>';
     };
 
     // v0.5.206 — show the banner almost immediately. v0.5.204 used 120s which
@@ -874,24 +1097,89 @@
     EnmMultiChainOverviewPane.prototype._onAction = function (kind, chainId, btn) {
         if (!kind || !chainId || !btn) { return; }
         if (this._pendingAction) { return; }  // one action at a time, pane-wide
+        var self = this;
         var displayName = chainNameFor(chainId, null);
+        // v0.5.217 audit Phase 3 (AUDIT-FLOW-O04 + O05, P2) — replace
+        // native browser confirm() with enmDestructiveModal. Closes
+        // O04 (native dialog UX inconsistency) AND O05 (ambiguous
+        // "interrupted" copy that confused operators about whether the
+        // chain ends in STOPPED or RESTARTS). The modal's body copy is
+        // now action-specific + quantifies the impact.
         if (kind === 'stop' || kind === 'restart') {
-            var confirmMsg = tFb(
-                'overview_pane.action_confirm',
-                'Are you sure you want to {action} {chainName}? In-progress sync work will be interrupted.',
-                { action: kind, chainName: displayName });
-            if (typeof root.confirm === 'function' && !root.confirm(confirmMsg)) { return; }
+            if (typeof root.enmDestructiveModal !== 'function') {
+                // Defensive: modal failed to load — fall back to native.
+                var fb = 'Are you sure you want to ' + kind + ' ' + displayName + '?';
+                if (typeof root.confirm === 'function' && !root.confirm(fb)) { return; }
+                this._runAction(kind, chainId, btn, displayName);
+                return;
+            }
+            var bodyCopy = (kind === 'stop')
+                ? 'The chain process will stop and the node will no longer produce blocks or respond to RPC. Start it again from this card when ready. No chain data is lost.'
+                : 'The chain will stop, then start again automatically (typical pause: 20-60 seconds). Sync resumes from the current block — no data is lost.';
+            root.enmDestructiveModal({
+                title:        (kind === 'stop' ? 'Stop ' : 'Restart ') + displayName + '?',
+                body:         bodyCopy,
+                ackLabel:     (kind === 'stop') ? ('I understand this stops ' + displayName) : null,
+                cooldownSec:  (kind === 'stop') ? 2 : 1,
+                confirmLabel: (kind === 'stop' ? 'Stop ' : 'Restart ') + displayName,
+                confirmKind:  (kind === 'stop') ? 'danger' : 'primary',
+                notifications: self.notifications,
+                onConfirm: function () {
+                    self._runAction(kind, chainId, btn, displayName);
+                    return Promise.resolve();
+                },
+            });
+            return;
         }
+        // Non-destructive (start) — no confirm needed.
+        this._runAction(kind, chainId, btn, displayName);
+    };
+
+    /**
+     * @private — extracted from _onAction so the confirm path + the direct
+     * (start) path share the same POST + busy-state + 401/409 handling.
+     * v0.5.217 audit Phase 3.
+     */
+    EnmMultiChainOverviewPane.prototype._runAction = function (kind, chainId, btn, displayName) {
         this._pendingAction = { chainId: chainId, kind: kind };
         var self = this;
         var glyphSpan = btn.querySelector('span');
         var prevGlyph = glyphSpan ? glyphSpan.innerHTML : '';
         btn.disabled = true;
         btn.classList.add('is-busy');
-        var pastVerb = ({ start: 'started', stop: 'stopped', restart: 'restarted' })[kind] || kind;
+        // v0.5.220 audit Phase 6 (XFLOW-01, AUDIT-FLOW-O06) — present-
+        // progressive verbs replace past-tense (parallel of chain-card._do).
+        var progressiveVerb = ({ start: 'is starting…', stop: 'is stopping…', restart: 'is restarting…' })[kind] || kind;
         this.api.post('/chains/' + chainId + '/' + kind).then(function () {
             if (self.notifications && typeof self.notifications.info === 'function') {
-                self.notifications.info(displayName + ' ' + pastVerb, '');
+                self.notifications.info(displayName + ' ' + progressiveVerb, '');
+            }
+            // v0.5.220 audit Phase 6 (XFLOW-02, AUDIT-FLOW-O07) — startup
+            // watchdog for Start/Restart from the overview. If the chain
+            // hasn't reached alive in 90s, fire a warning. Predicate
+            // reads from the cached overview snapshot.
+            if ((kind === 'start' || kind === 'restart')
+                && typeof root.enmWatchAction === 'function'
+                && root.enmStateVocab) {
+                root.enmWatchAction({
+                    timeoutMs: 90000,
+                    pollMs: 5000,
+                    predicate: function () {
+                        if (self._destroyed) { return true; }
+                        if (!self._lastSnap || !Array.isArray(self._lastSnap.chains)) { return false; }
+                        var c = self._lastSnap.chains.filter(function (x) { return x.chainId === chainId; })[0];
+                        return c && root.enmStateVocab.isAlive(c.state);
+                    },
+                    onTimeout: function () {
+                        if (self._destroyed) { return; }
+                        if (self.notifications && typeof self.notifications.warning === 'function') {
+                            self.notifications.warning(
+                                displayName + ' didn\'t reach a running state',
+                                'The ' + kind + ' completed but the chain is still not alive. Check the chain card and logs.',
+                            );
+                        }
+                    },
+                });
             }
         }).catch(function (err) {
             if (err && err.status === 401) { return; }  // boot path owns re-auth UX
@@ -1073,6 +1361,31 @@
         var container = this._root.querySelector('.enm-overview-usage');
         if (!container) { return; }   // initial render hasn't placed it yet
         container.innerHTML = this._usageCardsHtml(this._lastSnap);
+        // v0.5.221 audit Phase 8 (XFLOW-12, AUDIT-FLOW-O10/O11/O12) —
+        // apply threshold-aware styling to the disk/CPU/memory cards.
+        // Pre-v0.5.221 these cards had no warn/critical visual state;
+        // operator got NO inline cue when disk was approaching full or
+        // CPU was saturated.
+        var u = this._lastUsage || {};
+        var apply = root.enmApplyThreshold;
+        if (typeof apply !== 'function') { return; }
+        var diskCard = container.querySelector('.enm-usage-card-disk');
+        if (diskCard && u.disk && typeof u.disk.freeGb === 'number') {
+            // freeGb LOW is bad. Default thresholds match the ENM package.json
+            // enm.warnDiskFreeGb (100) + enm.minDiskFreeGb (50). Backend may
+            // ship these in a future revision of /system/usage; until then,
+            // hardcoded matches the package.json declared values.
+            apply(diskCard, u.disk.freeGb, { warnAt: 100, criticalAt: 50 });
+        }
+        var cpuCard = container.querySelector('.enm-usage-card-cpu');
+        if (cpuCard && u.cpu && typeof u.cpu.loadPct === 'number') {
+            // loadPct HIGH is bad.
+            apply(cpuCard, u.cpu.loadPct, { warnAt: 80, criticalAt: 95, invert: true });
+        }
+        var memCard = container.querySelector('.enm-usage-card-mem');
+        if (memCard && u.memory && typeof u.memory.usedPct === 'number') {
+            apply(memCard, u.memory.usedPct, { warnAt: 85, criticalAt: 95, invert: true });
+        }
     };
 
     /**
@@ -1101,7 +1414,27 @@
             }
         });
         bits.push(totals.total + ' total');
-        return bits.join(' · ');
+        var chainsLine = bits.join(' · ');
+
+        // v0.5.229d (P3 audit fix) — prepend a Council-aware role prefix
+        // when the operator went through the Council install path AND/OR
+        // is currently a CR Committee member. Pre-229d the summary line
+        // was BPoS-only chain stats; a Council operator had no overview-
+        // level signal that ENM was running a Council node.
+        var id = this._lastIdentity;
+        if (!id) { return chainsLine; }
+        var cr = id.crMember || null;
+        var setupRole = id.setupRole || 'unknown';
+        var rolePrefix = '';
+        if (cr && cr.isCrMember) {
+            rolePrefix = 'CR Council · ' + (cr.state || 'Elected');
+            if (cr.nickname) { rolePrefix += ' (' + cr.nickname + ')'; }
+        } else if (setupRole === 'council') {
+            rolePrefix = 'CR Council install · not currently bound';
+        } else if (id.producer && id.producer.state) {
+            rolePrefix = 'BPoS · ' + id.producer.state;
+        }
+        return rolePrefix ? (rolePrefix + ' — ' + chainsLine) : chainsLine;
     };
 
     /** @private */

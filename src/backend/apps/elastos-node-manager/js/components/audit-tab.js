@@ -116,7 +116,13 @@
         // Filter state. `tier` is one of TIER_VALUES or '' (any).
         // `when` is a key of WHEN_PRESETS. `from`/`to` are epoch ms
         // derived from `when` at refresh() time.
-        this._filters = { tier: '', when: 'all', chain: '' };
+        // v0.5.218 audit Phase 4 (AUDIT-FLOW-AU04, P2) — persist via
+        // enmPrefs so the operator's filter survives tab remount /
+        // chain switch. Pre-v0.5.218 every remount reset filters.
+        var DEFAULT_FILTERS = { tier: '', when: 'all', chain: '' };
+        this._filters = (root.enmPrefs && typeof root.enmPrefs.get === 'function')
+            ? root.enmPrefs.get('audit-tab:filters', DEFAULT_FILTERS)
+            : DEFAULT_FILTERS;
 
         // Drawer state.
         this._drawer = null;
@@ -539,6 +545,7 @@
         }
         if (this._filters.when === key) { return; }
         this._filters.when = key;
+        this._persistFilters();
         this._syncChipGroup(this._whenChips, key);
         this.refresh();
     };
@@ -547,6 +554,7 @@
     AuditTab.prototype._onTierChip = function (tier) {
         if (this._filters.tier === tier) { return; }
         this._filters.tier = tier;
+        this._persistFilters();
         this._syncChipGroup(this._tierChips, tier);
         this.refresh();
     };
@@ -555,8 +563,23 @@
     AuditTab.prototype._onChainChip = function (chain) {
         if (this._filters.chain === chain) { return; }
         this._filters.chain = chain;
+        this._persistFilters();
         this._syncChipGroup(this._chainChips, chain);
         this.refresh();
+    };
+
+    /**
+     * v0.5.218 audit Phase 4 (AUDIT-FLOW-AU04, P2) — write current
+     * filters to sessionStorage so they persist across remount /
+     * chain switch. Called from every filter-mutator. Silent on
+     * private-mode storage failure.
+     * @private
+     */
+    AuditTab.prototype._persistFilters = function () {
+        if (root.enmPrefs && typeof root.enmPrefs.set === 'function') {
+            try { root.enmPrefs.set('audit-tab:filters', this._filters); }
+            catch (_) { /* silent */ }
+        }
     };
 
     /** @private */
@@ -593,6 +616,16 @@
         if (this._filters && this._filters.tier
             && String(e.tier) !== this._filters.tier) {
             return;
+        }
+        // v0.5.224 audit (AUDIT-FLOW-AU09, P2) — chain filter MUST be
+        // applied to live SSE rows. Pre-v0.5.224 only tier + when
+        // range were checked; "This chain only" operator filter
+        // silently leaked rows from other chains until next refresh.
+        if (this._filters && this._filters.chain) {
+            var rowChain = e.chainId || e.chain_id || '';
+            if (String(rowChain) !== this._filters.chain) {
+                return;
+            }
         }
         // Filter: time range. Same logic as _currentWhenRange — for
         // 'today'/'7d'/'30d' there's a from-ms cutoff; rows older

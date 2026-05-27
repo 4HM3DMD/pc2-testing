@@ -513,6 +513,62 @@ async function main() {
         global.__enmSignalHandlersInstalled = true;
         const onShutdown = async (signal) => {
             log('info', `received ${signal} — pre-marking running chains as manualStop`);
+
+            // v0.5.229c (P8 audit fix) — Fast-exit path for deploy-driven
+            // shutdowns. When the deploy marker is present, pc2-node OR
+            // a manual deploy script is restarting ENM for a code update.
+            // The child chains should KEEP RUNNING (their args are
+            // unchanged; reattach on the next ENM boot picks them up).
+            // The pre-229c path always sent SIGINT to children + awaited
+            // up to 120s for them to drain — for a code-only deploy that
+            // KILLED THE CHAINS and forced a full chain restart, wasting
+            // ~5 minutes of sync state per chain + tripping pc2-node's
+            // 3-strike AppProcessManager quarantine on rapid deploys.
+            //
+            // Detection: deploy-enm.sh + manual SCP-deploy + the v228+
+            // restart path all `touch /var/lib/pc2/data/.enm-deploy-in-
+            // progress` before tearing ENM down. EnmAutoStart already
+            // reads this marker at boot to skip auto-start during the
+            // deploy window (server.js EnmAutoStart.js:172-196). Here
+            // we use it for the symmetric "skip the child-chain drain"
+            // decision. Same 10-min staleness gate as autoStart so an
+            // abandoned marker eventually expires.
+            try {
+                const fs = require('node:fs');
+                const path = require('node:path');
+                const { pc2DataDir } = require('./services/DataDir');
+                const marker = path.join(pc2DataDir(), '.enm-deploy-in-progress');
+                const st = fs.statSync(marker);
+                if (st && (Date.now() - st.mtimeMs) < 600_000) {
+                    log('info', `${signal}: deploy marker present (age `
+                        + `${Math.round((Date.now() - st.mtimeMs) / 1000)}s) — `
+                        + 'fast-exit, leaving children running with current spawn args. '
+                        + 'Reattach picks them up on next ENM boot.');
+                    // Still mark manualStop on the in-memory ledger so a
+                    // later reattach doesn't misclassify a child whose
+                    // exit happens in our shutdown window as "external"
+                    // → F1 self-heal storm.
+                    try {
+                        const ps = ChainRegistry.getProcessService();
+                        const marked = ps.markAllManualStop();
+                        log('info', `${signal}: pre-marked ${marked.length} chain(s) `
+                            + '(deploy fast-exit; children stay alive)');
+                    } catch (_) { /* best-effort */ }
+                    // Stop the periodic timers so they don't keep the loop alive.
+                    try { if (storageMaintenanceHandle) { storageMaintenanceHandle.stop(); } } catch (_) {}
+                    try { if (peerCacheHandle) { peerCacheHandle.stop(); } } catch (_) {}
+                    // v0.5.229c — app.listen() socket + the audit-sweep
+                    // setInterval keep the event loop alive forever. The
+                    // normal-drain path also leaks these but tolerates a
+                    // few seconds of drain time anyway; on the fast-exit
+                    // path we WANT to exit in <1s for a clean deploy
+                    // respawn cycle. Process.exit(0) — clean exit, no
+                    // crash count increment in pc2-node's AppProcessManager.
+                    setTimeout(() => process.exit(0), 200);
+                    return;
+                }
+            } catch (_) { /* no marker — fall through to full drain */ }
+
             try {
                 const ps = ChainRegistry.getProcessService();
                 const marked = ps.markAllManualStop();

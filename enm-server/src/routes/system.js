@@ -270,6 +270,48 @@ function build(extensionHandle) {
                 } catch (_) { /* graceful degrade — leave producer null */ }
             }
 
+            // v0.5.229 (audit 2026-05-27) — CR Council membership lookup,
+            // in PARALLEL with the BPoS producer lookup above. Council and
+            // BPoS are independent roles on Elastos; an operator can be
+            // one, the other, both, or neither. Pre-229 the endpoint only
+            // surfaced BPoS state — so every Council operator saw "BPoS
+            // supernode: not yet registered" on the dashboard regardless
+            // of their actual CR Committee binding. node.sh:1117-1129
+            // shows the reference contract: query listcurrentcrs +
+            // listproducers SEPARATELY and surface BOTH side-by-side.
+            //
+            // CrMembershipService.detectCrMembership handles failure
+            // modes (no pubkey / no RPC / Committee not in election
+            // period) by returning a sentinel `source` value — we pass
+            // that through so the frontend can render the right copy
+            // even when isCrMember is false (e.g. "not bound" vs
+            // "Committee not currently active").
+            let crMember = null;
+            if (publicKey) {
+                try {
+                    const cfg2 = await ConfigStore.load();
+                    const CrMembershipService = require('../services/CrMembershipService');
+                    crMember = await CrMembershipService.detectCrMembership(cfg2, {
+                        log: extensionHandle.log,
+                    });
+                } catch (_) { /* graceful degrade — leave crMember null */ }
+            }
+
+            // v0.5.229 — derive setup-role hint from cfg.global.council
+            // so the frontend can pick Council-vs-BPoS UI even before
+            // listcurrentcrs returns (e.g. during mainchain warm-up).
+            // Defaults to 'unknown' when no install path can be inferred.
+            let setupRole = 'unknown';
+            try {
+                const cfg3 = await ConfigStore.load();
+                if (cfg3 && cfg3.global && cfg3.global.council
+                    && cfg3.global.council.installed === true) {
+                    setupRole = 'council';
+                } else if (publicKey && producer && producer.state) {
+                    setupRole = 'bpos';
+                }
+            } catch (_) { /* leave setupRole = 'unknown' */ }
+
             // beta.3.52 — `walletAddress` removed from response. ENM's identity
             // is the keystore (ELA mainchain producer), NOT the PC2 owner wallet.
             // The two are completely separate concerns:
@@ -283,6 +325,12 @@ function build(extensionHandle) {
                     address,
                 },
                 producer,
+                // v0.5.229 — CR Council membership (null when no pubkey).
+                // Frontend treats `isCrMember === true` as the canonical
+                // signal to render Council UI; otherwise falls back to
+                // producer + setupRole to decide BPoS / unregistered.
+                crMember,
+                setupRole,
             }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} /system/identity error: ${err.message}`);
@@ -466,6 +514,106 @@ function build(extensionHandle) {
     });
 
     /**
+     * GET /system/host-limits
+     *
+     * v0.5.225 — read provider-imposed cgroup limits so the frontend
+     * can surface a "constrained host" banner before EVM sync overwhelms
+     * the VPS. Triggered by the Hostinger incident 2026-05-25 where
+     * /var/lib/pc2's host had a 2-core cap and ESC + EID + PG starting
+     * simultaneously pushed total CPU past it; provider paused the node.
+     *
+     * Returns null fields when no limit is detected (bare-metal host,
+     * unlimited container). isConstrained derivation happens on the
+     * frontend (utils-host-limits.js) per operator directive that
+     * budget features should be opt-in / auto-detected, not default.
+     *
+     * cgroup v2 (newer Linux, most modern hosting): /sys/fs/cgroup/cpu.max
+     *   format: "<quota> <period>" microseconds, OR "max <period>" = no cap
+     * cgroup v1 (older + some VPS): /sys/fs/cgroup/cpu/cpu.cfs_quota_us +
+     *   cpu.cfs_period_us. quota = -1 means unlimited.
+     */
+    router.get('/host-limits', limit('read'), async (req, res) => {
+        if (!readActorWallet(req)) {
+            return res.status(401).json(errorBody('Authentication required.'));
+        }
+        try {
+            let cpuCapCores = null;
+            let memoryCapGb = null;
+            let source = 'none';
+
+            // ---- CPU cap — cgroup v2 first ----
+            try {
+                const v2 = await fsp.readFile('/sys/fs/cgroup/cpu.max', 'utf8');
+                const parts = v2.trim().split(/\s+/);
+                // "max <period>" → no cap. "<quota_us> <period_us>" → cap.
+                if (parts.length === 2 && parts[0] !== 'max') {
+                    const quotaUs = parseInt(parts[0], 10);
+                    const periodUs = parseInt(parts[1], 10);
+                    if (Number.isFinite(quotaUs) && Number.isFinite(periodUs)
+                        && quotaUs > 0 && periodUs > 0) {
+                        cpuCapCores = round(quotaUs / periodUs, 2);
+                        source = 'cgroup-v2';
+                    }
+                }
+            } catch (_) { /* not v2 — try v1 */ }
+
+            // ---- cgroup v1 fallback ----
+            if (cpuCapCores == null) {
+                try {
+                    const quotaRaw = await fsp.readFile('/sys/fs/cgroup/cpu/cpu.cfs_quota_us', 'utf8');
+                    const periodRaw = await fsp.readFile('/sys/fs/cgroup/cpu/cpu.cfs_period_us', 'utf8');
+                    const quotaUs = parseInt(quotaRaw.trim(), 10);
+                    const periodUs = parseInt(periodRaw.trim(), 10);
+                    if (Number.isFinite(quotaUs) && Number.isFinite(periodUs)
+                        && quotaUs > 0 && periodUs > 0) {
+                        cpuCapCores = round(quotaUs / periodUs, 2);
+                        source = 'cgroup-v1';
+                    }
+                } catch (_) { /* no cgroup v1 cpu — give up on CPU cap */ }
+            }
+
+            // ---- Memory cap — cgroup v2 first ----
+            try {
+                const v2 = await fsp.readFile('/sys/fs/cgroup/memory.max', 'utf8');
+                const trimmed = v2.trim();
+                if (trimmed !== 'max') {
+                    const bytes = parseInt(trimmed, 10);
+                    if (Number.isFinite(bytes) && bytes > 0) {
+                        memoryCapGb = round(bytes / (1024 ** 3), 2);
+                        if (source === 'none') { source = 'cgroup-v2'; }
+                    }
+                }
+            } catch (_) { /* try v1 */ }
+
+            if (memoryCapGb == null) {
+                try {
+                    const v1 = await fsp.readFile('/sys/fs/cgroup/memory/memory.limit_in_bytes', 'utf8');
+                    const bytes = parseInt(v1.trim(), 10);
+                    // cgroup v1 "unlimited" is usually 9223372036854771712 (≈8 EB).
+                    // Treat anything > total RAM × 16 as effectively unlimited.
+                    const sanityCap = os.totalmem() * 16;
+                    if (Number.isFinite(bytes) && bytes > 0 && bytes < sanityCap) {
+                        memoryCapGb = round(bytes / (1024 ** 3), 2);
+                        if (source === 'none') { source = 'cgroup-v1'; }
+                    }
+                } catch (_) { /* no v1 memory either */ }
+            }
+
+            return res.json(successBody({
+                cpuCapCores,           // null = no cap detected (or unreadable)
+                memoryCapGb,           // null = no cap
+                source,                // 'cgroup-v2' | 'cgroup-v1' | 'none'
+                cpuTotalCores: os.cpus().length,
+                memoryTotalGb: round(os.totalmem() / (1024 ** 3), 2),
+                readAt: Date.now(),
+            }));
+        } catch (err) {
+            extensionHandle.log.error(`${ENM_LOG_PREFIX} /system/host-limits error: ${err.message}`);
+            return res.status(500).json(errorBody('Failed to read host limits.'));
+        }
+    });
+
+    /**
      * GET /system/extip
      * Settings → Network → "Detect now". Hits checkip.amazonaws.com and
      * returns the resolved IP (with cache).
@@ -482,6 +630,377 @@ function build(extensionHandle) {
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} /system/extip error: ${err.message}`);
             return res.status(500).json(errorBody('Failed to resolve external IP.'));
+        }
+    });
+
+    // -----------------------------------------------------------------
+    // v0.5.228 — GET /system/council-status
+    //
+    // Operator directive 2026-05-27: ENM has been falsely modeling
+    // "mining" as an operator-settable toggle. In reality (per node.sh,
+    // verified end-to-end in this session):
+    //   - node.sh:2133 only gates --mine on existence of the password
+    //     file from `<chain>_init`, then always passes --mine
+    //   - The sidechain's PBFT consensus engine self-gates production
+    //     via IsProducer() + IsOnduty(); a node not in the arbiter
+    //     slate simply fails Seal() silently
+    //   - Council membership is BOUND on-chain via CRCouncilMember-
+    //     ClaimNode TX (submitted in Essentials); once confirmed,
+    //     ELA's getCRCArbitersV2 enrolls the node and each sidechain
+    //     polls the slate and starts producing automatically
+    //
+    // The backend (EvmSidechainAdapter.detectProducerRole + start)
+    // has already implemented this correctly since v0.5.188 — mining
+    // flags are derived per-spawn from on-chain arbiter slate, not
+    // from cfg.miner.enabled. This endpoint exposes that DERIVED
+    // status to the UI so the new "Validator status" badge replaces
+    // the misleading Mining on/off toggle in Settings.
+    //
+    // Returns per-EVM-chain status:
+    //   {
+    //     nodePublicKey: '04abc…',
+    //     chains: {
+    //       esc: { isOnDuty, inCurrent, inNext, source, error? },
+    //       eid: { ... },
+    //       pg:  { ... },
+    //     },
+    //     lastChecked: <iso>,
+    //   }
+    //
+    // The four state labels the UI uses are computed in the frontend
+    // from these flags:
+    //   - "On-duty"  — inCurrent=true (actively producing this rotation)
+    //   - "Standby"  — inNext=true && inCurrent=false (next rotation)
+    //   - "Inactive" — adapter exists + cfg present, but neither in
+    //                  current nor next slate (e.g. registered as
+    //                  producer but not Council-bound, or rotation
+    //                  doesn't include this node)
+    //   - "Follower" — adapter not registered / chain not configured
+    //                  (operator didn't run init for this chain)
+    //
+    // Cached: returns whatever detectProducerRole gave last time it
+    // ran (~30s freshness via its own internal call to mainchain RPC).
+    // No additional caching layer here — keeps this thin.
+    // -----------------------------------------------------------------
+    router.get('/council-status', limit('read'), async (req, res) => {
+        const wallet = readActorWallet(req);
+        if (!wallet) {
+            return res.status(401).json(errorBody('Authentication required.'));
+        }
+        try {
+            const cfg = await ConfigStore.load();
+            // Read the operator's node public key from the same cached
+            // keystore-account.json that /system/identity reads. We
+            // never expose it to non-owner callers, but the wallet
+            // already matched above so this is owner-gated.
+            let nodePublicKey = null;
+            try {
+                const ks = ChainRegistry.getKeystoreService();
+                const keystoreExists = await ks.exists();
+                if (keystoreExists) {
+                    const identityPath = path.join(chainDir('mainchain'), 'keystore-account.json');
+                    const raw = await fsp.readFile(identityPath, 'utf8');
+                    const parsed = JSON.parse(raw);
+                    nodePublicKey = parsed.publicKey || null;
+                }
+            } catch (_) { /* missing cache / keystore not unlocked — leave null */ }
+
+            const EVM_CHAINS = ['esc', 'eid', 'pg'];
+            // v0.5.228d (audit F10) — sequential 3× mainchain RPC was
+            // ~3× the wall-clock cost of necessary. detectProducerRole
+            // is pure-read against mainchain getarbitersinfo (no
+            // ordering dependency between EVM chains), so fire them in
+            // parallel via Promise.all. On a slow mainchain this drops
+            // page-load latency from ~15s worst-case to ~5s.
+            //
+            // Per-chain failures still degrade gracefully: a rejected
+            // promise becomes an `{ chainState: 'unknown', error: ... }`
+            // entry, the request as a whole still returns 200, and the
+            // operator gets a partial picture rather than a 500.
+            //
+            // The local chainStateFromRole helper mirrors the one used
+            // by GET /chains/:id (in routes/chains.js) so the dashboard
+            // card and the Settings badge label the same on-chain state
+            // identically. Kept inline (rather than imported) so this
+            // route stays self-contained.
+            function chainStateFromRole(role) {
+                if (!role) { return 'unknown'; }
+                if (role.inCurrent === true) { return 'on-duty'; }
+                if (role.inNext === true) { return 'standby'; }
+                if (role.isProducer === null) { return 'unknown'; }
+                return 'inactive';
+            }
+            const perChainEntries = await Promise.all(EVM_CHAINS.map(async (cid) => {
+                const adapter = ChainRegistry.getAdapter(cid);
+                if (!adapter) {
+                    return [cid, {
+                        isOnDuty: false,
+                        inCurrent: false,
+                        inNext: false,
+                        source: 'not-configured',
+                        chainState: 'follower',
+                    }];
+                }
+                if (typeof adapter.detectProducerRole !== 'function') {
+                    return [cid, {
+                        isOnDuty: false,
+                        inCurrent: false,
+                        inNext: false,
+                        source: 'unsupported',
+                        chainState: 'unknown',
+                        error: 'adapter does not support detectProducerRole',
+                    }];
+                }
+                try {
+                    const role = await adapter.detectProducerRole(cfg);
+                    return [cid, {
+                        isOnDuty: role.inCurrent === true,
+                        inCurrent: !!role.inCurrent,
+                        inNext: !!role.inNext,
+                        source: role.source,
+                        chainState: chainStateFromRole(role),
+                        // v0.5.228d (audit F11) — flag whether the
+                        // arbiter slate was actually known. When the
+                        // adapter returns empty slates we can't tell
+                        // "no arbiters" from "mainchain not synced
+                        // yet"; this lets the UI render "Detecting…"
+                        // vs "Inactive" honestly.
+                        arbiterSlateKnown: typeof role.arbiterCount === 'number'
+                            && role.arbiterCount > 0,
+                        error: role.error || undefined,
+                    }];
+                } catch (err) {
+                    return [cid, {
+                        isOnDuty: false,
+                        inCurrent: false,
+                        inNext: false,
+                        source: 'error',
+                        chainState: 'unknown',
+                        error: (err && err.message) || String(err),
+                    }];
+                }
+            }));
+            const perChain = Object.fromEntries(perChainEntries);
+
+            // v0.5.229 — include CR Council membership in the top-level
+            // response so the UI can render Council badges + the per-chain
+            // Validator-status badges from the same fetch. Same service
+            // /system/identity uses; cached in-process so adding it here
+            // is one in-memory hash lookup if recent, otherwise one
+            // listcurrentcrs RPC (under the 30s TTL).
+            let crMember = null;
+            try {
+                const CrMembershipService = require('../services/CrMembershipService');
+                crMember = await CrMembershipService.detectCrMembership(cfg, {
+                    log: extensionHandle.log,
+                });
+            } catch (_) { /* graceful — leave crMember null */ }
+
+            // v0.5.229 — setup-role hint, same logic as /system/identity.
+            let setupRole = 'unknown';
+            if (cfg && cfg.global && cfg.global.council
+                && cfg.global.council.installed === true) {
+                setupRole = 'council';
+            }
+
+            return res.json(successBody({
+                nodePublicKey,
+                chains: perChain,
+                crMember,
+                setupRole,
+                lastChecked: new Date().toISOString(),
+            }));
+        } catch (err) {
+            extensionHandle.log.error(
+                `${ENM_LOG_PREFIX} /system/council-status error: ${err.message}`,
+            );
+            return res.status(500).json(errorBody('Failed to read Council status.'));
+        }
+    });
+
+    // -----------------------------------------------------------------
+    // v0.5.229 (Phase F) — GET /system/role-debug
+    //
+    // Diagnostic endpoint that returns the RAW chain responses ENM uses
+    // to derive role state, alongside ENM's parsed view of each. The
+    // goal is to make a class of bug like the v0.5.228d
+    // `info.currentarbiters` field-name typo *impossible* to recur
+    // silently — anyone debugging the dashboard can curl this endpoint,
+    // compare ENM's parse to the raw chain response, and spot a mismatch
+    // in seconds.
+    //
+    // Three sections in the response:
+    //   chain.getarbitersinfo: raw response of the getarbitersinfo RPC
+    //   chain.listcurrentcrs:  raw response of the listcurrentcrs RPC
+    //   chain.listproducers:   raw response of the listproducers RPC
+    //                          (filtered to just the operator's pubkey)
+    //   parsed.fromGetarbiters: ENM's detectProducerRole output
+    //   parsed.fromListCurrent: ENM's CrMembershipService output
+    //   summary.{nodePubkey,setupRole,chainsAlive}: at-a-glance status
+    //
+    // Owner-gated. No persistent caching (the operator triggering this
+    // wants fresh data); CrMembershipService's 30s cache still applies
+    // under the hood.
+    // -----------------------------------------------------------------
+    router.get('/role-debug', limit('read'), async (req, res) => {
+        const wallet = readActorWallet(req);
+        if (!wallet) {
+            return res.status(401).json(errorBody('Authentication required.'));
+        }
+        try {
+            const cfg = await ConfigStore.load();
+            const mainCfg = cfg && cfg.chains && cfg.chains.mainchain;
+            const nodePubkey = mainCfg && mainCfg.dpos && mainCfg.dpos.nodePublicKey;
+            const out = {
+                summary: {
+                    nodePublicKey: nodePubkey || null,
+                    setupRole: (cfg && cfg.global && cfg.global.council
+                        && cfg.global.council.installed === true) ? 'council' : 'unknown',
+                    setupRoleSource: 'cfg.global.council.installed',
+                    lastChecked: new Date().toISOString(),
+                },
+                chain: {
+                    getarbitersinfo: null,
+                    listcurrentcrs: null,
+                    listproducers: null,
+                },
+                parsed: {
+                    fromGetarbiters: null,
+                    fromListCurrent: null,
+                },
+                errors: [],
+            };
+
+            // Build an RPC client identical to detectProducerRole / Cr-
+            // MembershipService so any auth/encoding issue surfaces the
+            // same way it does in production.
+            const rpcCfg = mainCfg && mainCfg.rpc;
+            if (!nodePubkey) {
+                out.errors.push('cfg.chains.mainchain.dpos.nodePublicKey is empty');
+                return res.json(successBody(out));
+            }
+            if (!rpcCfg || !rpcCfg.user) {
+                out.errors.push('cfg.chains.mainchain.rpc.user is empty');
+                return res.json(successBody(out));
+            }
+
+            const EnmCrypto = require('../services/EnmCrypto');
+            const { EnmRpcClient } = require('../services/EnmRpcClient');
+            let password = '';
+            if (rpcCfg.passwordEncrypted) {
+                try {
+                    password = EnmCrypto.decrypt(rpcCfg.passwordEncrypted);
+                } catch (e) {
+                    out.errors.push('rpc password decrypt failed: ' + (e.message || e));
+                    return res.json(successBody(out));
+                }
+            }
+            const client = new EnmRpcClient({
+                host: rpcCfg.host || '127.0.0.1',
+                port: rpcCfg.port || 20336,
+                user: rpcCfg.user,
+                password,
+                timeoutMs: 6000,
+            });
+
+            // Raw chain responses, parallel for speed.
+            const [arbInfo, crInfo, producerInfo] = await Promise.all([
+                client.getarbitersinfo().catch((err) => ({ _error: err.message || String(err) })),
+                client.listcurrentcrs().catch((err) => ({ _error: err.message || String(err) })),
+                // listproducers can return THOUSANDS of producers; filter
+                // server-side via getproducerinfo (single producer lookup)
+                // to avoid sending a 500KB payload through the response.
+                client.getproducerinfo(nodePubkey).catch(() => null),
+            ]);
+
+            // For arbiters: capture top-level keys + the operator's
+            // index in each slate so the operator can immediately see
+            // "I'm in arbiters[15]" or "I'm not in arbiters".
+            if (arbInfo && !arbInfo._error) {
+                const norm = (s) => String(s || '').toLowerCase().replace(/^0x/, '');
+                const me = norm(nodePubkey);
+                const arbiters = Array.isArray(arbInfo.arbiters) ? arbInfo.arbiters : [];
+                const nextArbiters = Array.isArray(arbInfo.nextarbiters) ? arbInfo.nextarbiters : [];
+                out.chain.getarbitersinfo = {
+                    topLevelKeys: Object.keys(arbInfo).sort(),
+                    arbitersLength: arbiters.length,
+                    nextArbitersLength: nextArbiters.length,
+                    emptyStringSlots: {
+                        arbiters: arbiters.filter((s) => s === '').length,
+                        nextArbiters: nextArbiters.filter((s) => s === '').length,
+                    },
+                    ourIndexInArbiters: arbiters.findIndex((k) => norm(k) === me),
+                    ourIndexInNextArbiters: nextArbiters.findIndex((k) => norm(k) === me),
+                    ondutyArbiter: arbInfo.ondutyarbiter || null,
+                    currentTurnStartHeight: arbInfo.currentturnstartheight || null,
+                    nextTurnStartHeight: arbInfo.nextturnstartheight || null,
+                };
+            } else {
+                out.errors.push('getarbitersinfo: ' + (arbInfo && arbInfo._error));
+            }
+
+            if (crInfo && !crInfo._error) {
+                const members = Array.isArray(crInfo.crmembersinfo) ? crInfo.crmembersinfo : [];
+                const normLow = (s) => String(s || '').toLowerCase().replace(/^0x/, '');
+                const meLow = normLow(nodePubkey);
+                const matchedIndex = members.findIndex(
+                    (m) => m && normLow(m.dpospublickey) === meLow,
+                );
+                out.chain.listcurrentcrs = {
+                    topLevelKeys: Object.keys(crInfo).sort(),
+                    totalcounts: crInfo.totalcounts || 0,
+                    membersLength: members.length,
+                    ourIndexInMembers: matchedIndex,
+                    // Don't dump every member's PII (nicknames, CIDs).
+                    // Just our own match record + the count of others.
+                    ourRecord: matchedIndex >= 0 ? members[matchedIndex] : null,
+                };
+            } else {
+                out.errors.push('listcurrentcrs: ' + (crInfo && crInfo._error));
+            }
+
+            if (producerInfo) {
+                out.chain.listproducers = {
+                    nickname: producerInfo.nickname || null,
+                    state: producerInfo.state || null,
+                    votes: producerInfo.votes || null,
+                    dposv2votes: producerInfo.dposv2votes || null,
+                    ownerpublickey: producerInfo.ownerpublickey || null,
+                    inactiveheight: producerInfo.inactiveheight || null,
+                    illegalheight: producerInfo.illegalheight || null,
+                };
+            } else {
+                out.chain.listproducers = null;  // not a registered BPoS producer
+            }
+
+            // Parsed views — what ENM concluded from these raw responses.
+            // v0.5.229e (P7 audit fix) — bypass the 30s CrMembershipService
+            // cache when the operator triggers this debug endpoint. The
+            // whole point of the role-debug surface is to see CURRENT
+            // chain truth; serving a 29-second-old cached result hurts
+            // exactly the diagnostic workflow this endpoint exists for.
+            try {
+                const ChainRegistry = require('../services/ChainRegistry');
+                const escAdapter = ChainRegistry.getAdapter('esc');
+                if (escAdapter && typeof escAdapter.detectProducerRole === 'function') {
+                    out.parsed.fromGetarbiters = await escAdapter.detectProducerRole(cfg);
+                }
+                const CrMembershipService = require('../services/CrMembershipService');
+                CrMembershipService.clearCache();  // best-effort — also invalidate cached value
+                out.parsed.fromListCurrent = await CrMembershipService.detectCrMembership(cfg, {
+                    log: extensionHandle.log,
+                    skipCache: true,
+                });
+            } catch (e) {
+                out.errors.push('parsed view: ' + (e.message || e));
+            }
+
+            return res.json(successBody(out));
+        } catch (err) {
+            extensionHandle.log.error(
+                `${ENM_LOG_PREFIX} /system/role-debug error: ${err.message}`,
+            );
+            return res.status(500).json(errorBody('Failed to read role debug info.'));
         }
     });
 

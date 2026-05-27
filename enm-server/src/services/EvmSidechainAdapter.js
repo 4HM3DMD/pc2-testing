@@ -296,8 +296,14 @@ class EvmSidechainAdapter extends ChainAdapter {
 
             // Lazy require (matches the codebase's adapter pattern; keeps the
             // import block untouched and unit tests light).
+            // v0.5.228 — EnmRpcClient is a NAMED export; the pre-228 bare
+            // require returned the whole module object and `new
+            // EnmRpcClient(...)` threw "EnmRpcClient is not a constructor"
+            // → every detectProducerRole call returned source='error', so
+            // /system/council-status reported every chain as "unknown".
+            // Destructure to grab the class itself.
             const EnmCrypto = require('./EnmCrypto');
-            const EnmRpcClient = require('./EnmRpcClient');
+            const { EnmRpcClient } = require('./EnmRpcClient');
 
             let password = '';
             if (mainRpc.passwordEncrypted) {
@@ -319,10 +325,24 @@ class EvmSidechainAdapter extends ChainAdapter {
             const info = await client.getarbitersinfo();
             const norm = (s) => String(s || '').toLowerCase().replace(/^0x/, '');
             const me = norm(nodePubkeyRaw);
-            const current = Array.isArray(info && info.currentarbiters)
-                ? info.currentarbiters.map(norm) : [];
+            // v0.5.229 (audit 2026-05-27) — TWO bugs fixed here:
+            //   1. The current-slate field is `arbiters`, NOT `currentarbiters`.
+            //      The pre-229 read of `info.currentarbiters` always landed on
+            //      undefined → empty array → every Council operator looked
+            //      Inactive even when on-duty. Verified against ELA struct
+            //      definition at Elastos.ELA/servers/interfaces.go:884-892
+            //      and confirmed by live curl 2026-05-27.
+            //   2. ELA's RPC handler at servers/interfaces.go:906-912 emits
+            //      an empty-string slot for any CRC arbiter whose IsNormal
+            //      is false (= MemberState != MemberElected). Filter empties
+            //      before .includes(me) so a Council member in MemberInactive
+            //      isn't silently hidden by an empty-string slot.
+            const current = Array.isArray(info && info.arbiters)
+                ? info.arbiters.map(norm).filter((s) => s.length > 0)
+                : [];
             const next = Array.isArray(info && info.nextarbiters)
-                ? info.nextarbiters.map(norm) : [];
+                ? info.nextarbiters.map(norm).filter((s) => s.length > 0)
+                : [];
             out.inCurrent = current.includes(me);
             out.inNext = next.includes(me);
             out.arbiterCount = current.length;
@@ -791,7 +811,88 @@ class EvmSidechainAdapter extends ChainAdapter {
         try {
             const allCfg = await ConfigStore.load();
             const role = await this.detectProducerRole(allCfg);
-            const shouldMine = (role.isProducer === true);
+            let shouldMine = (role.isProducer === true);
+
+            // v0.5.229c (P1 audit fix) — CROSS-REFERENCE crMember status.
+            //
+            // The chain's arbiter slate is FROZEN at compute-height before
+            // a rotation actually starts. If an operator unclaims via
+            // Essentials AFTER the next slate was frozen, their pubkey
+            // stays in nextarbiters[] until the rotation after next.
+            // detectProducerRole sees inNext=true → shouldMine=true →
+            // ENM would pass --mine to the chain on next restart.
+            //
+            // Operator directive 2026-05-27: "I removed my council binding
+            // to the server we are working until we fix it, so that i dont
+            // interrupt chains." The intent of unclaim is "do NOT mine."
+            // Without this cross-reference, ENM contradicts that intent
+            // for the entire window between unclaim-confirmed and slate-
+            // recomputed (potentially hours on mainnet).
+            //
+            // Decision rule: if the operator is a confirmed Council
+            // install (cfg.global.council.installed === true) AND
+            // CrMembershipService reports !isCrMember (the on-chain
+            // Committee has no record of their dpospublickey), demote
+            // to FOLLOWER regardless of nextarbiters membership. This
+            // honors operator intent (the unclaim) over the chain's
+            // frozen slate.
+            //
+            // Why this is safe even when wrong:
+            //   - If unclaim is genuine: PBFT would refuse Seal() anyway
+            //     when the rotation reaches the operator (the chain's
+            //     own IsProducer() check is the floor). Adding --mine
+            //     would force full-sync + try to seal blocks the chain
+            //     refuses → wasted CPU + log noise. Skipping --mine
+            //     saves both.
+            //   - If unclaim is mistaken / operator re-claims later:
+            //     CrMembershipService's 30s cache + next chain start
+            //     reconciles in under a minute. No deploy needed.
+            //
+            // Cited file:line for the unclaim semantics:
+            //   Elastos.ELA/dpos/state/arbitrators.go:2444+ (getCRC-
+            //   ArbitersV2 reads from CRCommittee.Members[].DPOSPublicKey,
+            //   not from the frozen arbiter slate)
+            let crMemberCheck = null;
+            const setupRole = (allCfg && allCfg.global && allCfg.global.council
+                && allCfg.global.council.installed === true) ? 'council' : 'unknown';
+            if (shouldMine && setupRole === 'council') {
+                try {
+                    const CrMembershipService = require('./CrMembershipService');
+                    crMemberCheck = await CrMembershipService.detectCrMembership(
+                        allCfg, { log: _roleLog },
+                    );
+                    if (crMemberCheck
+                        && crMemberCheck.source !== 'error'
+                        && crMemberCheck.isCrMember === false) {
+                        // Operator unclaimed (or never claimed) but chain
+                        // slate still has them queued. Honor intent over
+                        // frozen-slate.
+                        shouldMine = false;
+                        if (_roleLog) {
+                            _roleLog.info(
+                                `${ENM_LOG_PREFIX} ${this.chainId}: shouldMine demoted to FOLLOWER `
+                                + `despite inNext=${role.inNext}: setupRole=council but `
+                                + `crMember.isCrMember=false (source=${crMemberCheck.source}). `
+                                + 'The arbiter slate is frozen until the next rotation compute; '
+                                + 'until then the chain still has this node\'s pubkey queued. '
+                                + 'Spawning with --mine would contradict the operator\'s unclaim '
+                                + 'and waste CPU on Seal attempts the chain would refuse.',
+                            );
+                        }
+                    }
+                } catch (e) {
+                    // detectCrMembership threw — keep shouldMine as-is
+                    // (the original getarbitersinfo decision). Surface
+                    // the error so the operator can see it.
+                    if (_roleLog) {
+                        _roleLog.warn(
+                            `${ENM_LOG_PREFIX} ${this.chainId}: CrMembershipService check failed `
+                            + `(${e && e.message ? e.message : e}) — falling back to slate-only decision.`,
+                        );
+                    }
+                }
+            }
+
             const wasMiner = !!(cfg.miner && cfg.miner.enabled);
             if (cfg.miner) { cfg.miner.enabled = shouldMine; }
             if (shouldMine) {
@@ -804,10 +905,14 @@ class EvmSidechainAdapter extends ChainAdapter {
                 cfg.sync.mode = 'fast';
             }
             if (_roleLog) {
+                const crNote = crMemberCheck
+                    ? ` crMember.isCrMember=${crMemberCheck.isCrMember}, source=${crMemberCheck.source}.`
+                    : '';
                 _roleLog.info(
                     `${ENM_LOG_PREFIX} ${this.chainId}: producer-role check → isProducer=${role.isProducer} `
-                    + `(source=${role.source}, inCurrent=${role.inCurrent}, inNext=${role.inNext}) → `
-                    + `${shouldMine ? 'MINER (full sync)' : 'FOLLOWER (no --mine, fast sync)'}`
+                    + `(source=${role.source}, inCurrent=${role.inCurrent}, inNext=${role.inNext})`
+                    + crNote
+                    + ` → ${shouldMine ? 'MINER (full sync)' : 'FOLLOWER (no --mine, fast sync)'}`
                     + `${wasMiner !== shouldMine ? (shouldMine ? ' [PROMOTED]' : ' [demoted]') : ''}. `
                     + 'Mining is on-chain producer state, not an ENM toggle.',
                 );

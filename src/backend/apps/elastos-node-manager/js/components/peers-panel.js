@@ -109,6 +109,12 @@
         this._renderLoading();
 
         var self = this;
+        // v0.5.227 audit Phase 12 (AUDIT-FLOW-PP04, P3) — stale-indicator
+        // for after-first-success poll failures. Pre-v0.5.227 transient
+        // poll errors left the panel with stale data + no signal.
+        if (typeof root.enmStaleIndicator === 'function') {
+            this._staleIndicator = root.enmStaleIndicator(this._root, { staleAfterMs: 30000 });
+        }
         this._fetch();
         if (typeof root.enmUseVisibilityPause === 'function') {
             this._pauser = root.enmUseVisibilityPause(function () { self._fetch(); }, POLL_INTERVAL_MS);
@@ -121,6 +127,10 @@
     EnmPeersPanel.prototype.destroy = function () {
         if (this._destroyed) { return; }
         this._destroyed = true;
+        if (this._staleIndicator && typeof this._staleIndicator.destroy === 'function') {
+            try { this._staleIndicator.destroy(); } catch (_) { /* idempotent */ }
+            this._staleIndicator = null;
+        }
         if (this._pauser) { try { this._pauser.stop(); } catch (_) { /* idempotent */ } this._pauser = null; }
         if (this._timer) { clearInterval(this._timer); this._timer = null; }
         if (this._root && this._root.parentNode) {
@@ -149,13 +159,20 @@
                 } else {
                     self._updateStatus(snap);
                 }
+                if (self._staleIndicator) { self._staleIndicator.markFresh(); }
             })
             .catch(function (err) {
                 if (self._destroyed) { return; }
+                // v0.5.227 audit Phase 12 — mark stale on transient errors
+                // so the operator sees the data may not be current.
+                if (self._staleIndicator) { self._staleIndicator.markStale(); }
                 // Only paint the error state on FIRST load — a transient poll
                 // failure shouldn't blank a panel the operator may be typing in.
                 if (!self._builtOnce) {
-                    self._renderError((err && err.message) || 'Network error');
+                    var friendly = (typeof root.enmFriendlyError === 'function')
+                        ? root.enmFriendlyError(err)
+                        : ((err && err.message) || 'Network error');
+                    self._renderError(friendly || 'Network error');
                 }
             });
     };

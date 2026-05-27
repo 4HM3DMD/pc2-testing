@@ -94,11 +94,37 @@ function build(deps) {
             const producer = await KeystoreIdentity.getProducerState(CHAIN_ID);
             const ks = require('../services/ChainRegistry').getKeystoreService();
             const exists = await ks.exists();
+            // v0.5.229d (P2 audit fix) — Settings tab consumes /identity
+            // (this endpoint), NOT /system/identity. The Phase B
+            // crMember + setupRole fields were added to /system/identity
+            // only. Mirror them here so the Settings → Identity grid
+            // can branch the pill text on Council mode.
+            let crMember = null;
+            let setupRole = 'unknown';
+            try {
+                const ConfigStore = require('../services/ConfigStore');
+                const cfg = await ConfigStore.load();
+                if (cfg && cfg.global && cfg.global.council
+                    && cfg.global.council.installed === true) {
+                    setupRole = 'council';
+                } else if (cached && cached.publicKey && producer && producer.state) {
+                    setupRole = 'bpos';
+                }
+                if (cached && cached.publicKey) {
+                    const CrMembershipService = require('../services/CrMembershipService');
+                    crMember = await CrMembershipService.detectCrMembership(cfg, {
+                        log: extensionHandle.log,
+                    });
+                }
+            } catch (_) { /* graceful — leave defaults */ }
             return res.json(successBody({
                 chainId: CHAIN_ID,
                 keystoreExists: exists,
                 identity: cached || null,
                 producer: producer || null,
+                // v0.5.229d additions:
+                crMember,
+                setupRole,
                 // Convenience flag the UI uses to decide whether to
                 // show the Unlock card.
                 identityCacheMissing: exists && !cached,

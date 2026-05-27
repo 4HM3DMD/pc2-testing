@@ -295,6 +295,25 @@ function detectF4(snap) {
     // yet). Don't treat that as a stall during the initial start grace.
     if (withinInitialStartGrace(snap)) return null;
 
+    // v0.5.228 audit — false-positive stall suppression. If our height is at
+    // (or within 1 block of) the network's best known height, the chain isn't
+    // stalled — the WHOLE network just hasn't produced new blocks recently.
+    // Elastos mainchain can go 10-20 min between blocks during quiet periods;
+    // pre-v0.5.228 F4 fired on these naturally quiet windows and prompted
+    // operators to restart a perfectly healthy chain (real-world repro:
+    // 2026-05-26 — node held at block 2221127 for 14 min, ALL peers also at
+    // 2221127, then resumed normally; ENM had already proposed a restart).
+    //
+    // networkHeight is populated by the adapters' primaryHeight() probe:
+    //   - Class A (mainchain): max peer height from getnodestate.Neighbors
+    //   - Class B (EVM):       eth_syncing.highestBlock
+    // When it's a real number > 0 and we're at-or-near it, suppress the stall.
+    if (typeof snap.rpcSummary.networkHeight === 'number'
+        && snap.rpcSummary.networkHeight > 0
+        && snap.rpcSummary.height >= snap.rpcSummary.networkHeight - 1) {
+        return null;
+    }
+
     const firstStall = snap.ruleState && snap.ruleState.firstHeightStallAt;
     if (!firstStall) return null;
     if (Date.now() - firstStall < HEIGHT_STALL_GRACE_MS) return null;
@@ -886,6 +905,19 @@ function detectF24(snap) {
  * the operator-supplied address fails validation; F25 catches the
  * post-install case where the operator opened Settings and cleared
  * the address (or where the install never set one because miner.
+ *
+ * v0.5.229e (P11 audit note) — F-rule Council-mode safety review:
+ * every F-rule defined above null-guards on snap.bpos (or snap.bpos.
+ * producer) before reading producer.state etc. → a pure-Council
+ * operator with snap.bpos.producer === null never triggers any of
+ * F11 (rotation stuck), F12 (producer Inactive), F22 (DPoS state
+ * desync), so they don't fire wrongly. The remaining GAP is an
+ * unimplemented "F-rule for CR Committee MemberState=Inactive"
+ * (parallel to F12 but on crMember.state). It would consume the
+ * CrMembershipService output and warn when impeachmentVotes climbs
+ * or state flips to Inactive. Deferred — not a regression, just a
+ * missing feature; documented here so the next F-rule pass picks
+ * it up.
  * enabled was false at install time and is now true).
  */
 function detectF25(snap) {

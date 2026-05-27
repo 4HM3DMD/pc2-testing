@@ -103,6 +103,13 @@
     NodeIdentityCard.prototype.mount = function (parent) {
         parent.appendChild(this.root);
         var self = this;
+        // v0.5.223 audit Phase 12 (AUDIT-FLOW-NI05, P2) — attach stale
+        // indicator. Marks fresh on successful poll, stale after 30s of
+        // failed polls. Pre-v0.5.223 transient errors left the card with
+        // stale data + no operator-visible signal.
+        if (typeof root.enmStaleIndicator === 'function') {
+            this._staleIndicator = root.enmStaleIndicator(this.root, { staleAfterMs: 30000 });
+        }
         this._poll();
         if (typeof root.enmUseVisibilityPause === 'function') {
             this._pollPauser = root.enmUseVisibilityPause(
@@ -117,6 +124,10 @@
     NodeIdentityCard.prototype.refresh = function () { this._poll(); };
 
     NodeIdentityCard.prototype.destroy = function () {
+        if (this._staleIndicator && typeof this._staleIndicator.destroy === 'function') {
+            try { this._staleIndicator.destroy(); } catch (_) { /* idempotent */ }
+            this._staleIndicator = null;
+        }
         this._destroyed = true;
         if (this._pollPauser) {
             try { this._pollPauser.stop(); } catch (_) { /* idempotent */ }
@@ -139,10 +150,14 @@
             var payload = (env && env.data) || env || {};
             self._lastPayload = payload;
             self._render(payload);
+            if (self._staleIndicator) { self._staleIndicator.markFresh(); }
         }).catch(function (err) {
             if (self._destroyed) { return; }
             // 401-suppress — boot path owns re-auth (alpha.28 batch 60-61).
             if (err && err.status === 401) { return; }
+            // v0.5.223 audit Phase 12 — mark stale on non-401 errors so
+            // operator sees data may not be current.
+            if (self._staleIndicator) { self._staleIndicator.markStale(); }
             // Keep the last good render; only fall back to a skeleton if
             // we never had one. Avoids the card blinking on transient
             // backend hiccups.
@@ -237,35 +252,98 @@
         // rather than to SHARE (for first-time registration).
         var isRegistered = !!(producer && producer.state);
 
+        // v0.5.229 (audit 2026-05-27) — Council-mode branch. Council
+        // operators have a DIFFERENT registration path (CR Council
+        // election via Essentials + CRCouncilMemberClaimNode TX); the
+        // word "supernode" is BPoS-specific vocabulary and is wrong
+        // for Council members. Branch the header subtitle and the
+        // pubkey hint on isCrMember / setupRole, picking Council
+        // wording when either is true.
+        var crMember = data.crMember || null;
+        var setupRole = data.setupRole || 'unknown';
+        var isCouncilContext = (setupRole === 'council')
+            || !!(crMember && crMember.isCrMember);
+        var isCouncilBound = !!(crMember && crMember.isCrMember);
+
         var html = '';
 
         // ----- Header ------------------------------------------------
+        var subtitle;
+        if (isCouncilContext) {
+            // Council operator subtitle. Three variants: bound to current
+            // Committee, bound to next, or installed-but-unbound (re-claim
+            // required).
+            if (isCouncilBound) {
+                subtitle = 'The consensus-signing identity for this node\'s '
+                    + 'CR Council seat. Mining + signing activate automatically '
+                    + 'when the on-chain arbiter slate rotates your slot in. '
+                    + 'Keep this public key safe — it identifies your seat.';
+            } else {
+                subtitle = 'The consensus-signing identity this node uses on-chain. '
+                    + 'Bind this public key to your <strong>CR Council seat</strong> '
+                    + 'via Elastos Essentials (CRCouncilMemberClaimNode) — once the '
+                    + 'binding confirms, the chain enrolls your node in the arbiter '
+                    + 'slate automatically.';
+            }
+        } else if (isRegistered) {
+            subtitle = 'The consensus-signing identity this node uses on-chain. '
+                + 'Block rewards are credited to the <strong>Essentials wallet</strong> that '
+                + 'registered the producer, not to anything shown on this card.';
+        } else {
+            subtitle = 'The consensus-signing identity this node uses on-chain. '
+                + 'Paste the public key below into <strong>Elastos Essentials</strong> '
+                + 'when registering as a BPoS producer — the Essentials wallet that '
+                + 'signs the registration becomes the producer owner and is where '
+                + 'all block rewards are credited.';
+        }
         html += '<header class="enm-identity-head">'
             + '<h3 id="' + this._titleId + '">Node identity</h3>'
             + '<p class="enm-identity-subtitle">'
-            + (isRegistered
-                ? 'The consensus-signing identity this node uses on-chain. '
-                  + 'Block rewards are credited to the <strong>Essentials wallet</strong> that '
-                  + 'registered the supernode, not to anything shown on this card.'
-                : 'The consensus-signing identity this node uses on-chain. '
-                  + 'Paste the public key below into <strong>Elastos Essentials</strong> '
-                  + 'when registering as a BPoS supernode — the Essentials wallet that '
-                  + 'signs the registration becomes the producer owner and is where '
-                  + 'all block rewards are credited.')
+            + subtitle
             + '</p>'
             + '</header>';
 
         // ----- Node public key (only meaningful when keystore exists) -----
+        // v0.5.228 — public key is the PRIMARY identity surface. It's what
+        // gets shared with Essentials, what stakers vote on, and what
+        // appears on every explorer. The signing address below is
+        // operationally internal — useful for debugging but never
+        // share-worthy. We render the pubkey with the --primary modifier
+        // (larger value font, accent ring, bigger copy button) and the
+        // signing address with --secondary (smaller, muted, compact) so
+        // an operator's eye lands on the pubkey first by an order of
+        // magnitude.
         if (ks.exists && pubkey) {
-            var pubkeyPill = isRegistered
-                ? '<span class="enm-identity-row-pill">Registered</span>'
-                : '<span class="enm-identity-row-pill enm-identity-row-pill-action">Share with Essentials</span>';
-            var pubkeyHint = isRegistered
-                ? 'Save this if you need to migrate the node to a different server — '
+            // v0.5.229 — Council-mode pill + hint take precedence over BPoS
+            // copy when the operator is in a Council context. Council seats
+            // are higher-tier than BPoS slots on Elastos so we surface the
+            // Council-specific copy first.
+            var pubkeyPill;
+            var pubkeyHint;
+            if (isCouncilContext) {
+                if (isCouncilBound) {
+                    pubkeyPill = '<span class="enm-identity-row-pill">Bound to Council seat</span>';
+                    pubkeyHint = 'This pubkey is bound to your CR Council seat. Save it if you '
+                        + 'ever need to migrate the node — restoring keystore.dat preserves '
+                        + 'this identity, so the Council binding stays intact without a new '
+                        + 'CRCouncilMemberClaimNode TX.';
+                } else {
+                    pubkeyPill = '<span class="enm-identity-row-pill enm-identity-row-pill-action">Claim via Essentials</span>';
+                    pubkeyHint = 'Paste this into Essentials → CR Council → Claim node. The '
+                        + 'CRCouncilMemberClaimNode TX binds this public key to your CR seat; '
+                        + 'once confirmed, the chain enrolls you in the arbiter slate.';
+                }
+            } else if (isRegistered) {
+                pubkeyPill = '<span class="enm-identity-row-pill">Registered</span>';
+                pubkeyHint = 'Save this if you need to migrate the node to a different server — '
                   + 'restoring keystore.dat preserves this identity, so you keep the '
-                  + 'existing producer registration without re-registering.'
-                : 'Paste this into Essentials when registering your supernode. The Essentials wallet signing the registration becomes the producer owner.';
-            html += '<div class="enm-identity-row enm-identity-pubkey-row enm-identity-row-actionable">'
+                  + 'existing producer registration without re-registering.';
+            } else {
+                pubkeyPill = '<span class="enm-identity-row-pill enm-identity-row-pill-action">Share with Essentials</span>';
+                pubkeyHint = 'Paste this into Essentials when registering as a BPoS producer. '
+                  + 'The Essentials wallet signing the registration becomes the producer owner.';
+            }
+            html += '<div class="enm-identity-row enm-identity-pubkey-row enm-identity-row-actionable enm-identity-row--primary">'
                 + '<div class="enm-identity-row-head">'
                 +   '<span class="enm-identity-row-label">Node public key</span>'
                 +   pubkeyPill
@@ -294,7 +372,7 @@
         // told us this card "doesn't look nice and shows DPoS v1
         // rewards which is not needed" — simpler copy wins.
         if (ks.exists && addr) {
-            html += '<div class="enm-identity-row enm-identity-addr-row enm-identity-row-informational">'
+            html += '<div class="enm-identity-row enm-identity-addr-row enm-identity-row-informational enm-identity-row--secondary">'
                 + '<div class="enm-identity-row-head">'
                 +   '<span class="enm-identity-row-label">Node signing address</span>'
                 +   '<span class="enm-identity-row-pill">Internal · do not share</span>'
@@ -303,10 +381,6 @@
                 + '<div class="enm-identity-value-stack">'
                 +   '<code class="enm-identity-value enm-identity-addr" data-fill="addr"></code>'
                 +   '<span class="enm-identity-copy-slot" data-copy="addr" data-copy-value="' + esc(addr) + '"></span>'
-                + '</div>'
-                + '<div class="enm-identity-note">'
-                +   'Block rewards from this supernode are paid to the Essentials wallet '
-                +   'that registered it, not to this address.'
                 + '</div>'
                 + '</div>';
         }

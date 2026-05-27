@@ -113,3 +113,14 @@ src/particle-auth/assets
 # agent scratch folders). Never part of the shipped repo.
 test-samples/
 temp-3d-models/
+
+# Claude Code local launch config (per-developer)
+.claude/
+
+# Local audit working files (operator's own analysis docs); not part of
+# the shipped repo. Specific reports get manually promoted to docs/ if
+# they're worth keeping in version control.
+audit/
+
+# enm-server runtime data dir (created by the server itself; per-host).
+enm-server/data/

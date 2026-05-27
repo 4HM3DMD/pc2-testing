@@ -55,6 +55,42 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  *  than that, and an unbounded list is a footgun on the spawn arg line. */
 const MAX_BOOTNODES = 50;
 
+// v0.5.228d — per-chain cache for detectProducerRole results, used by
+// GET /chains/:id to attach the derived chainState to its response
+// (so the dashboard's EVM detail card stops reading the stale on-disk
+// miner.enabled value — audit F4). 30s TTL keeps the mainchain RPC
+// hit-rate bounded even if multiple dashboard cards poll concurrently.
+const PRODUCER_ROLE_CACHE_TTL_MS = 30_000;
+const _producerRoleCache = new Map();  // chainId → { ts, role }
+async function getCachedProducerRole(adapter, cfg) {
+    if (!adapter || adapter.chainClass !== 'B') { return null; }
+    const cid = adapter.chainId;
+    const now = Date.now();
+    const cached = _producerRoleCache.get(cid);
+    if (cached && (now - cached.ts) < PRODUCER_ROLE_CACHE_TTL_MS) {
+        return cached.role;
+    }
+    if (typeof adapter.detectProducerRole !== 'function') { return null; }
+    try {
+        const role = await adapter.detectProducerRole(cfg);
+        _producerRoleCache.set(cid, { ts: now, role });
+        return role;
+    } catch (_) {
+        return null;
+    }
+}
+/** Map detectProducerRole output → operator-facing chainState label.
+ *  Shared between GET /chains/:id and GET /system/council-status so
+ *  the dashboard card and the Validator-status badge in Settings
+ *  never disagree on what to call the same on-chain state. */
+function chainStateFromRole(role) {
+    if (!role) { return 'unknown'; }
+    if (role.inCurrent === true) { return 'on-duty'; }
+    if (role.inNext === true) { return 'standby'; }
+    if (role.isProducer === null) { return 'unknown'; }
+    return 'inactive';
+}
+
 /**
  * @param {object} extensionHandle
  * @returns {import('express').Router}
@@ -399,6 +435,59 @@ function build(extensionHandle) {
                 oracleInfo = await adapter.oracleStatus(chainCfg).catch(() => null);
             }
 
+            // v0.5.228d (audit F4/F5/F6) — for class B (EVM sidechains)
+            // attach the LIVE derived chainState from the on-chain arbiter
+            // slate so the dashboard card stops reading the stale
+            // cfg.miner.enabled disk value. Adapter.start overrides
+            // cfg.miner.enabled in-memory at every spawn but does NOT
+            // persist back; without this attachment, GET /chains/:id
+            // returned the disk value and the EVM detail card's "Mining
+            // on/off" tag could disagree with the live badge in Settings
+            // after a Council binding TX confirmed on-chain.
+            // Uses the 30s cache so concurrent dashboard polls (one per
+            // visible EVM card) don't multiply mainchain RPC hits.
+            let derivedRole = null;
+            let derivedChainState = null;
+            if (adapter.chainClass === 'B') {
+                try {
+                    const cfg = await ConfigStore.load();
+                    derivedRole = await getCachedProducerRole(adapter, cfg);
+                    derivedChainState = chainStateFromRole(derivedRole);
+                } catch (_) { /* leave derivedRole/derivedChainState null on any error */ }
+            }
+
+            // v0.5.229 (Phase D) — for the MAINCHAIN response, also attach
+            // CR Committee membership data so the dashboard chain-card's
+            // status chip can label a Council operator with their actual
+            // Council state ("Council · Elected" / "Council · Inactive")
+            // instead of falling through to the BPoS producer.state label
+            // (which is null for a pure Council operator). Uses
+            // CrMembershipService's 30s internal cache so attaching here is
+            // a cheap hashmap lookup once mainchain RPC is warm.
+            let crMemberSummary = null;
+            if (adapter.chainClass === 'A') {
+                try {
+                    const cfg = await ConfigStore.load();
+                    const CrMembershipService = require('../services/CrMembershipService');
+                    const cr = await CrMembershipService.detectCrMembership(cfg, {
+                        log: extensionHandle.log,
+                    });
+                    // Only attach a non-null block when the CR lookup
+                    // actually completed (matched OR not-in-committee).
+                    // 'error' state → leave null so the chip doesn't
+                    // flicker on transient RPC failures.
+                    if (cr && cr.source !== 'error') {
+                        crMemberSummary = {
+                            isCrMember: !!cr.isCrMember,
+                            state: cr.state || null,
+                            nickname: cr.nickname || null,
+                            inNextCommittee: !!cr.inNextCommittee,
+                            source: cr.source,
+                        };
+                    }
+                } catch (_) { /* leave crMemberSummary null */ }
+            }
+
             return res.json(successBody({
                 chainId: adapter.chainId,
                 displayName: adapter.displayName,
@@ -451,7 +540,24 @@ function build(extensionHandle) {
                     enabled: !!chainCfg.miner.enabled,
                     rewardAddress: chainCfg.miner.rewardAddress || null,
                     evmKeystoreAddr: chainCfg.miner.evmKeystoreAddr || null,
+                    // v0.5.228d — derived live state. chainState mirrors
+                    // /system/council-status's per-chain.chainState; one
+                    // source of truth for both the dashboard EVM card
+                    // (which polls /chains/:id) and the Settings badge
+                    // (which polls /system/council-status). Null when the
+                    // detect call couldn't complete (mainchain RPC down).
+                    chainState: derivedChainState,
+                    isOnDuty: derivedRole ? !!derivedRole.inCurrent : null,
+                    inNextRotation: derivedRole ? !!derivedRole.inNext : null,
                 } : null,
+                // v0.5.229 (Phase D) — CR Committee membership summary,
+                // only attached to the MAINCHAIN response so the chain-
+                // card chip can label Council operators correctly. Null
+                // for non-mainchain or when the lookup failed. Frontend
+                // reads .crMember and falls back to producerState when
+                // null (preserves pre-229 behavior for BPoS operators
+                // and for mid-warmup RPC failures).
+                crMember: crMemberSummary,
             }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} GET /chains/${req.params.chainId}: ${err.message}`);
@@ -505,20 +611,34 @@ function build(extensionHandle) {
             const nextStart = (typeof a.nextturnstartheight === 'number')
                 ? a.nextturnstartheight
                 : (typeof a.nextTurnStartHeight === 'number' ? a.nextTurnStartHeight : null);
-            const current = Array.isArray(a.currentarbiters)
-                ? a.currentarbiters
-                : (Array.isArray(a.currentArbiters) ? a.currentArbiters : []);
-            const next = Array.isArray(a.nextarbiters)
-                ? a.nextarbiters
-                : (Array.isArray(a.nextArbiters) ? a.nextArbiters : []);
-            const ourPubkey = chainCfg.dpos && chainCfg.dpos.nodePublicKey;
+            // v0.5.229 (audit 2026-05-27) — TWO bugs fixed here, same as
+            // EvmSidechainAdapter.detectProducerRole:
+            //   1. The current-slate field on ELA's getarbitersinfo response
+            //      is `arbiters`, NOT `currentarbiters`. The pre-229 reads
+            //      (with the camelCase `currentArbiters` defensive fallback)
+            //      both targeted fields that don't exist in the chain
+            //      response — confirmed against Elastos.ELA struct definition
+            //      at servers/interfaces.go:884-892. The rotation strip on
+            //      the mainchain card has been broken for every Council
+            //      operator since this endpoint shipped.
+            //   2. Empty-string entries in the slate (CRC arbiters with
+            //      IsNormal=false at servers/interfaces.go:906-912) must
+            //      be filtered before .findIndex so a MemberInactive
+            //      operator's empty-string slot doesn't match anything.
             const normalize = (s) => (typeof s === 'string' ? s.toLowerCase() : '');
+            const current = Array.isArray(a.arbiters)
+                ? a.arbiters.map(normalize).filter((s) => s.length > 0)
+                : [];
+            const next = Array.isArray(a.nextarbiters)
+                ? a.nextarbiters.map(normalize).filter((s) => s.length > 0)
+                : [];
+            const ourPubkey = chainCfg.dpos && chainCfg.dpos.nodePublicKey;
             const ourLower = normalize(ourPubkey);
             const ourIndex = ourLower
-                ? current.findIndex((k) => normalize(k) === ourLower)
+                ? current.findIndex((k) => k === ourLower)
                 : -1;
             const ourNextIndex = ourLower
-                ? next.findIndex((k) => normalize(k) === ourLower)
+                ? next.findIndex((k) => k === ourLower)
                 : -1;
             const isOnDuty = !!(ourLower && onDuty && normalize(onDuty) === ourLower);
             return res.json(successBody({
@@ -642,11 +762,61 @@ function build(extensionHandle) {
                     'Chain spawned but exited within 1.5s. Check logs (Settings → Show technical details → Logs).',
                 ));
             }
+
+            // v0.5.228 — oracle pairing on manual start. If the operator
+            // started an EVM sidechain (esc / eid / pg), also start its
+            // companion oracle so cross-chain SPV proofs can be relayed.
+            // Best-effort: failure to start the oracle does NOT fail the
+            // parent's start response — the chain is up, the operator
+            // can retry the oracle from the Oracle card. Operator
+            // directive 2026-05-27: "they should be started together".
+            // We skip the conflict scan for the cascade since the parent
+            // already passed it 1.5s ago and the oracle uses a disjoint
+            // port set (oracle is a node script, not a chain binary).
+            let oraclePaired = null;
+            const ChainAdapter = require('../services/ChainAdapter');
+            const pairedOracleId = ChainAdapter.oracleOf(adapter.chainId);
+            if (pairedOracleId && cfg.chains && cfg.chains[pairedOracleId]) {
+                const oracleAdapter = ChainRegistry.getAdapter(pairedOracleId);
+                if (oracleAdapter) {
+                    try {
+                        // Check first — if already running, no-op success.
+                        const oracleStatus = ChainRegistry.getProcessService()
+                            .statusSync(pairedOracleId);
+                        if (oracleStatus && oracleStatus.alive) {
+                            oraclePaired = { chainId: pairedOracleId, status: 'already-running' };
+                        } else {
+                            await oracleAdapter.start(cfg.chains[pairedOracleId]);
+                            oraclePaired = { chainId: pairedOracleId, status: 'started' };
+                            extensionHandle.log.info(
+                                `${ENM_LOG_PREFIX} POST /chains/${adapter.chainId}/start: `
+                                + `paired oracle ${pairedOracleId} also started`,
+                            );
+                        }
+                    } catch (oracleErr) {
+                        // Don't fail the parent response — surface the oracle
+                        // failure as a warning so the UI can prompt a retry.
+                        extensionHandle.log.warn(
+                            `${ENM_LOG_PREFIX} POST /chains/${adapter.chainId}/start: `
+                            + `paired oracle ${pairedOracleId} start failed: ${oracleErr.message}`,
+                        );
+                        oraclePaired = {
+                            chainId: pairedOracleId,
+                            status: 'start-failed',
+                            error: oracleErr.message,
+                        };
+                    }
+                }
+            }
+
             return res.json(successBody({
                 ...result,
                 // Surface non-blocking conflicts so the dashboard can show a
                 // banner ("legacy node.sh data nearby") without aborting.
                 warnings: conflicts.filter((c) => c.severity !== 'CRITICAL'),
+                // v0.5.228 — oracle pairing outcome (null when no oracle
+                // applies; { chainId, status } when a cascade was attempted).
+                oraclePaired,
             }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} POST /chains/${req.params.chainId}/start: ${err.message}`);
@@ -1777,11 +1947,29 @@ function build(extensionHandle) {
             // the 400 early-returns stay at the top level. The resulting closures
             // are then applied in place inside the atomic update() below (P0-7).
             const minerMutations = [];
+            // v0.5.228 — track when a legacy `miner.enabled` write came
+            // in. The field is derived from on-chain arbiter slate at
+            // every chain start (EvmSidechainAdapter.detectProducerRole
+            // overwrites it in-memory before spawn), so persisting an
+            // operator-supplied value is a no-op at next start. We accept
+            // it for backward compatibility with older frontends, log a
+            // warning, and surface a hint in the response so callers can
+            // migrate. New frontends (v0.5.228+) omit the field entirely
+            // and read derived state from GET /system/council-status.
+            let derivedHintEmitted = false;
             // Optional miner subdoc merge.
             if (body.miner && typeof body.miner === 'object') {
                 if (typeof body.miner.enabled === 'boolean') {
                     const enabled = body.miner.enabled;
                     minerMutations.push((miner) => { miner.enabled = enabled; });
+                    derivedHintEmitted = true;
+                    extensionHandle.log.warn(
+                        `${ENM_LOG_PREFIX} PUT /chains/${chainId}/class-b-config: `
+                        + `client sent miner.enabled=${enabled} but the field is derived `
+                        + `from on-chain arbiter slate at every spawn — value will be `
+                        + `overwritten by detectProducerRole. Caller should stop sending it; `
+                        + `read GET /system/council-status for the true state.`,
+                    );
                 }
                 if (body.miner.rewardAddress !== undefined) {
                     const addr = String(body.miner.rewardAddress || '');
@@ -1888,7 +2076,18 @@ function build(extensionHandle) {
             extensionHandle.log.info(
                 `${ENM_LOG_PREFIX} PUT /chains/${chainId}/class-b-config saved`,
             );
-            return res.json(successBody({ chainId, chain: chainCfg }));
+            // v0.5.228 — surface the derived-field hint in the response
+            // so a frontend developer who sends miner.enabled sees a
+            // signal in the network panel that the field is deprecated.
+            const responsePayload = { chainId, chain: chainCfg };
+            if (derivedHintEmitted) {
+                responsePayload.deprecations = [{
+                    field: 'miner.enabled',
+                    reason: 'derived from on-chain arbiter slate at every chain start',
+                    readFrom: 'GET /system/council-status',
+                }];
+            }
+            return res.json(successBody(responsePayload));
         } catch (err) {
             extensionHandle.log.error(
                 `${ENM_LOG_PREFIX} PUT /chains/${req.params.chainId}/class-b-config: ${err.message}`,

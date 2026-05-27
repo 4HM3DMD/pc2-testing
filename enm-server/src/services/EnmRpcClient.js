@@ -209,15 +209,94 @@ class EnmRpcClient {
 
     /**
      * 0.2.0-alpha.7 — current DPoS rotation snapshot.
+     *
+     * v0.5.229 (audit 2026-05-27) — field names corrected by verifying
+     * against the real ELA struct definition at
+     *   Elastos.ELA/servers/interfaces.go:884-892 (type arbitersInfo).
+     * Pre-229 this JSDoc said `currentarbiters` and `currentcandidates`;
+     * those fields DO NOT EXIST in the chain's response. The actual JSON
+     * struct tags are `arbiters` and `candidates` (no "current" prefix).
+     * The pre-229 typo propagated into EvmSidechainAdapter.detectProducerRole
+     * and routes/chains.js's /chains/:id/rotation endpoint — both read
+     * `info.currentarbiters` and got `undefined` → empty array → every
+     * Council operator was incorrectly reported as Inactive on the current
+     * slate. Smoking gun verified by live curl 2026-05-27:
+     *   getarbitersinfo response top-level keys =
+     *     [arbiters, candidates, nextarbiters, nextcandidates,
+     *      ondutyarbiter, currentturnstartheight, nextturnstartheight]
+     *
      *   ondutyarbiter:           hex of the producer signing the current round
      *   currentturnstartheight:  first height of the current rotation turn
      *   nextturnstartheight:     first height of the next rotation turn
-     *   currentarbiters:         hex[] of producers in the active slate
+     *   arbiters:                hex[] of producers in the active slate
      *   nextarbiters:            hex[] of producers queued for the next slate
-     *   currentcandidates / nextcandidates: backup pool
+     *   candidates / nextcandidates: backup pool (likewise NOT prefixed)
+     *
+     * Per-entry caveat (ELA chain-side bug — handle defensively in callers):
+     * Elastos.ELA/servers/interfaces.go:906-912 returns an empty string
+     * '' in the slot of any CRC arbiter whose IsNormal=false (i.e.
+     * MemberState != MemberElected). Callers MUST filter empty entries
+     * before .includes(me) lookups, otherwise a Council member in
+     * MemberInactive state appears absent from the slate.
+     *
      * No auth gate; same rate-limit bucket as getproducerinfo.
      */
     getarbitersinfo() { return this.call('getarbitersinfo', {}); }
+
+    /**
+     * v0.5.229 — list the CURRENT CR Council members (the ones who won the
+     * most recent CR election; lives in CRCommittee.GetCurrentMembers()).
+     * Used by ENM's CrMembershipService to detect whether the operator's
+     * node pubkey is bound to a Council seat (via CRCouncilMemberClaimNode).
+     *
+     * Verified against Elastos.ELA struct definitions at
+     *   servers/interfaces.go:2159-2179 (RPCCRMemberInfo + RPCCRMembersInfo)
+     *   servers/interfaces.go:2604-2649 (ListCurrentCRs handler)
+     *
+     * Response shape:
+     *   result.crmembersinfo:  array of member objects (one per current CR member)
+     *   result.totalcounts:    number of members
+     *
+     * Each member object has these fields (note "depositamout" typo is
+     * upstream — Elastos.ELA spells it without the second N):
+     *   code              hex of the member's program code
+     *   cid               Citizen ID (base58 address derived from CR pubkey)
+     *   did               Decentralized Identifier (base58)
+     *   dpospublickey     hex of the operator's NODE pubkey bound via
+     *                     CRCouncilMemberClaimNode. THIS is what ENM
+     *                     matches against the local keystore pubkey.
+     *   nickname          operator-chosen display name
+     *   url               optional URL
+     *   location          uint location code
+     *   impeachmentvotes  string number of impeachment votes
+     *   depositamout      string ELA amount (sic — upstream typo)
+     *   depositaddress    base58 deposit address
+     *   penalty           string penalty amount
+     *   state             MemberState as string: 'Elected', 'Inactive',
+     *                     'Impeached', 'Returned', 'Terminated', or
+     *                     'Illegal'
+     *   index             ordering index in the Committee
+     *
+     * Caveat: when the CR Committee is NOT in election period (between
+     * Council terms), the handler returns an EMPTY crmembersinfo array
+     * even if previous members exist. Callers must treat empty as
+     * "no current Council" rather than "operator not a member".
+     *
+     * No auth gate; same rate-limit bucket as getproducerinfo. node.sh
+     * matches this with `ela_jsonrpc listcurrentcrs state all`
+     * (node.sh:1117) — the `state` param is documented but not actually
+     * read by the handler (servers/interfaces.go:2604).
+     */
+    listcurrentcrs() { return this.call('listcurrentcrs', { state: 'all' }); }
+
+    /**
+     * v0.5.229 — list the NEXT CR Council members (the ones who will take
+     * over at the next Committee transition). Same response shape as
+     * listcurrentcrs. Useful to detect "Council member elected but the
+     * current term hasn't started yet". Handler at
+     *   Elastos.ELA/servers/interfaces.go:2651 ListNextCRs.
+     */
+    listnextcrs() { return this.call('listnextcrs', { state: 'all' }); }
 
     /**
      * beta.3.13 — producer's locked deposit balance. Verified registered

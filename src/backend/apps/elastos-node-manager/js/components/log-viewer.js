@@ -289,8 +289,12 @@
         this._capBanner = null;
 
         // Search state.
-        this._searchRaw = '';
-        this._searchSpec = parseSearchPattern('');
+        // v0.5.218 audit Phase 4 (AUDIT-FLOW-LV03, P2) — persist last search
+        // via enmPrefs so it survives chain switch / tab remount.
+        this._searchRaw = (root.enmPrefs && typeof root.enmPrefs.get === 'function')
+            ? root.enmPrefs.get('log-viewer:search', '')
+            : '';
+        this._searchSpec = parseSearchPattern(this._searchRaw);
         this._searchDebounce = null;
         this._matchCount = 0;
 
@@ -310,7 +314,14 @@
         // `data-lvl` and `hidden` per the current filter; toggling a
         // chip flips _lvlFilters[lvl] then sweeps. Counts live on each
         // chip's inline <span class="enm-log-lvl-count">.
-        this._lvlFilters = { error: true, warn: true, info: true, debug: false };
+        // v0.5.218 audit Phase 4 (AUDIT-FLOW-LV02, P2) — load from
+        // sessionStorage so the operator's "DEBG hidden" preference
+        // survives chain-switch / tab-remount. Pre-v0.5.218 every
+        // remount reset DEBG visible and the operator had to re-hide.
+        var DEFAULT_LVL_FILTERS = { error: true, warn: true, info: true, debug: false };
+        this._lvlFilters = (root.enmPrefs && typeof root.enmPrefs.get === 'function')
+            ? root.enmPrefs.get('log-viewer:lvl-filters', DEFAULT_LVL_FILTERS)
+            : DEFAULT_LVL_FILTERS;
         this._lvlChips = {};   // populated by _renderShell
         this._lvlCounts = { error: 0, warn: 0, info: 0, debug: 0 };
 
@@ -407,6 +418,10 @@
         searchInput.className = 'enm-log-search-input';
         searchInput.placeholder = 'Filter… (or /regex/)';
         searchInput.setAttribute('aria-label', 'Filter visible log lines');
+        // v0.5.218 audit Phase 4 — prefill persisted search.
+        if (this._searchRaw) {
+            searchInput.value = this._searchRaw;
+        }
         searchInput.addEventListener('input', function () {
             self._scheduleSearchUpdate(searchInput.value);
         });
@@ -701,6 +716,12 @@
     LogViewer.prototype._scheduleSearchUpdate = function (raw) {
         var self = this;
         this._searchRaw = raw;
+        // v0.5.218 audit Phase 4 — persist alongside the debounce so the
+        // operator's search survives remount.
+        if (root.enmPrefs && typeof root.enmPrefs.set === 'function') {
+            try { root.enmPrefs.set('log-viewer:search', raw); }
+            catch (_) { /* silent */ }
+        }
         if (this._searchDebounce) {
             clearTimeout(this._searchDebounce);
         }
@@ -763,6 +784,11 @@
     LogViewer.prototype._toggleLevel = function (lvl) {
         if (!Object.prototype.hasOwnProperty.call(this._lvlFilters, lvl)) { return; }
         this._lvlFilters[lvl] = !this._lvlFilters[lvl];
+        // v0.5.218 audit Phase 4 — persist so the choice survives remount.
+        if (root.enmPrefs && typeof root.enmPrefs.set === 'function') {
+            try { root.enmPrefs.set('log-viewer:lvl-filters', this._lvlFilters); }
+            catch (_) { /* private mode etc. — silent */ }
+        }
         var chip = this._lvlChips[lvl];
         if (chip) {
             chip.setAttribute('aria-pressed', String(this._lvlFilters[lvl]));

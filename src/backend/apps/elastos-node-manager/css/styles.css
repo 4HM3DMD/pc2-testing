@@ -2157,6 +2157,100 @@ body[data-app-size="compact"] .enm-sys-cell:last-child,
     min-width: 0;
 }
 .enm-detail-copy-slot { flex: 0 0 auto; }
+
+/* ----------------------------------------------------------------
+ * v0.5.228 — Inline edit affordance for the EVM block-reward
+ * address (evm-detail-card.js). The Edit button sits next to the
+ * copy button; clicking it swaps the value cell for an input +
+ * Save/Cancel + status. A post-save banner renders at the top of
+ * the card body when the chain is alive and a restart is needed
+ * to apply the new --pbft.miner.address on the running geth.
+ * ---------------------------------------------------------------- */
+.enm-detail-edit-btn {
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+.enm-detail-addr-row.is-editing .enm-detail-addr,
+.enm-detail-addr-row.is-editing .enm-detail-copy-slot,
+.enm-detail-addr-row.is-editing .enm-detail-edit-btn {
+    display: none;
+}
+.enm-detail-edit-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+        "input actions"
+        "msg   msg";
+    gap: var(--sp-2);
+    align-items: center;
+    width: 100%;
+}
+.enm-detail-edit-input {
+    grid-area: input;
+    font-family: var(--font-mono);
+    font-size: var(--fs-caption);
+    min-width: 0;
+}
+.enm-detail-edit-actions {
+    grid-area: actions;
+    display: flex;
+    gap: var(--sp-1);
+    flex: 0 0 auto;
+}
+.enm-detail-edit-msg {
+    grid-area: msg;
+    min-height: 1.2em;
+    font-size: var(--fs-caption);
+    color: var(--text-tertiary);
+    line-height: 1.4;
+}
+.enm-detail-edit-msg.is-ok   { color: var(--success); }
+.enm-detail-edit-msg.is-err  { color: var(--danger); }
+.enm-detail-edit-msg.is-warn { color: var(--warning, #c08a00); }
+.enm-app[data-app-size="compact"] .enm-detail-edit-row,
+.enm-app[data-app-size="narrow"]  .enm-detail-edit-row {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+        "input"
+        "actions"
+        "msg";
+}
+.enm-app[data-app-size="compact"] .enm-detail-edit-actions,
+.enm-app[data-app-size="narrow"]  .enm-detail-edit-actions {
+    justify-content: flex-end;
+}
+
+/* Post-save banner — sits at the top of the EVM card body. */
+.enm-evm-reward-banner {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    padding: var(--sp-2) var(--sp-3);
+    margin-bottom: var(--sp-3);
+    background: var(--info-bg, var(--bg-elevated));
+    border: 1px solid var(--info, var(--border-color));
+    border-radius: var(--r-sm);
+    font-size: var(--fs-caption);
+    color: var(--text-primary);
+    line-height: 1.4;
+}
+.enm-evm-reward-banner-msg {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.enm-evm-reward-banner-msg.is-err {
+    color: var(--danger);
+}
+.enm-evm-reward-banner .enm-btn {
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+.enm-app[data-app-size="compact"] .enm-evm-reward-banner,
+.enm-app[data-app-size="narrow"]  .enm-evm-reward-banner {
+    flex-direction: column;
+    align-items: stretch;
+}
+
 /* Compact: stack the horizontal stat rows (label over value) so long values
    aren't crushed against the label on a 320px screen. Address rows are already
    stacked. */
@@ -4567,6 +4661,60 @@ body[data-app-size="compact"] .enm-role-card-badge-short,
     line-height: 1.55;
     margin: 0;
 }
+
+/* ----------------------------------------------------------------
+ * v0.5.229 — Council member info grid.
+ *
+ * Used by validator-registration-card's _renderCouncil() variant to
+ * show the CR Committee member's metadata (nickname, state, index, CID,
+ * impeachment votes) under the head. Mirrors the existing BPoS info
+ * surfaces in tone (subtle background tiles in a 2-column grid) but
+ * uses Council vocabulary. Hidden when crMember is null (operator is
+ * Council install but not currently bound to a Committee seat — the
+ * "unclaimed" / "no-term" sub-states don't have member metadata to
+ * surface).
+ * ---------------------------------------------------------------- */
+.enm-council-info-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: var(--sp-2);
+    padding: var(--sp-3) 0;
+}
+.enm-council-info-cell {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-sm);
+    padding: var(--sp-2) var(--sp-3);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+.enm-council-info-cell-wide {
+    grid-column: 1 / -1;
+}
+.enm-council-info-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-tertiary);
+    font-weight: var(--fw-semibold);
+}
+.enm-council-info-value {
+    font-size: var(--fs-caption);
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.enm-council-info-value-mono {
+    font-family: var(--font-mono);
+    font-size: 11px;
+}
+.enm-app[data-app-size="narrow"]  .enm-council-info-grid,
+.enm-app[data-app-size="compact"] .enm-council-info-grid {
+    grid-template-columns: 1fr;
+}
 .enm-bpos-cta-row {
     display: flex;
     gap: var(--sp-2);
@@ -4790,6 +4938,152 @@ body[data-app-size="compact"] .enm-role-card-badge-short,
  * there first; informational row stays neutral. */
 .enm-identity-row-actionable {
     border-left: 3px solid var(--accent);
+}
+
+/* ----------------------------------------------------------------
+ * v0.5.228 — Public key vs signing address visual hierarchy.
+ *
+ * Operator directive 2026-05-26: "we need the public address more
+ * than the wallet address". The public key (NodePublicKey, 66 hex
+ * compressed pubkey) is what stakers vote on, what gets pasted into
+ * Essentials, what appears on every explorer. The signing address
+ * is operationally internal — useful for debugging but never share-
+ * worthy. These modifier classes drive a ~3:1 visual weight ratio
+ * in favor of the pubkey across BOTH surfaces (the dashboard
+ * NodeIdentityCard and Settings → Identity → Current identity).
+ * ---------------------------------------------------------------- */
+
+/* --- Dashboard NodeIdentityCard ---------------------------------- */
+.enm-identity-row--primary {
+    /* Stronger accent ring + slight tint so the eye lands here first. */
+    border-left-width: 4px;
+    background: linear-gradient(
+        to right,
+        var(--accent-soft, var(--bg-overlay)) 0%,
+        var(--bg-elevated) 60%
+    );
+    padding: var(--sp-4) var(--sp-4);
+}
+.enm-identity-row--primary .enm-identity-value {
+    /* Bigger, easier-to-read pubkey value. The 66-hex pubkey is the
+     * thing operators actually copy-paste; previously it rendered at
+     * the same 12px as the internal signing address. */
+    font-size: 15px;
+    line-height: 1.6;
+    padding: var(--sp-3) var(--sp-3);
+    color: var(--text-primary);
+    background: var(--bg-input);
+    border-color: var(--accent-soft, var(--border-color));
+}
+.enm-identity-row--primary .enm-identity-row-label {
+    /* Slightly bigger label too so the row reads as a unit. */
+    font-size: 11px;
+    color: var(--accent, var(--text-secondary));
+}
+.enm-identity-row--primary .enm-identity-copy-btn {
+    /* Make the primary copy button feel like a primary action. */
+    font-size: 13px;
+    padding: 8px 14px;
+    background: var(--accent);
+    color: var(--accent-on, white);
+    border-color: var(--accent);
+}
+.enm-identity-row--primary .enm-identity-copy-btn:hover {
+    filter: brightness(1.08);
+}
+
+.enm-identity-row--secondary {
+    /* Demote the signing address: compact, muted, smaller value font. */
+    padding: var(--sp-2) var(--sp-3);
+    opacity: 0.92;
+}
+.enm-identity-row--secondary .enm-identity-row-label {
+    font-size: 9px;
+}
+.enm-identity-row--secondary .enm-identity-row-hint {
+    font-size: 11px;
+}
+.enm-identity-row--secondary .enm-identity-value {
+    /* ~73% of the primary value's font size. Still readable on its own
+     * if the operator looks at it, but obviously secondary. */
+    font-size: 11px;
+    color: var(--text-secondary);
+    padding: 6px 10px;
+}
+.enm-identity-row--secondary .enm-identity-copy-btn {
+    font-size: 11px;
+    padding: 4px 10px;
+}
+
+/* --- Settings → Identity → Current identity grid ----------------- */
+.enm-identity-grid-row--primary {
+    /* Same accent treatment as the dashboard pubkey row. The grid
+     * still uses the existing 160px / 1fr / auto template but the
+     * primary row gets a tint band + bigger value cell. */
+    background: linear-gradient(
+        to right,
+        var(--accent-soft, var(--bg-overlay)) 0%,
+        transparent 50%
+    );
+    border-left: 3px solid var(--accent);
+    border-radius: var(--r-sm);
+    padding: var(--sp-3) var(--sp-3);
+    margin-left: calc(-1 * var(--sp-3));
+}
+.enm-identity-grid-row--primary .enm-identity-grid-label {
+    color: var(--accent, var(--text-secondary));
+    font-size: 11px;
+}
+.enm-identity-grid-row--primary .enm-identity-grid-value {
+    font-size: 14px;
+    font-weight: var(--fw-medium);
+    padding: var(--sp-3) var(--sp-3);
+    color: var(--text-primary);
+    border-color: var(--accent-soft, var(--border-color));
+}
+
+.enm-identity-grid-row--secondary {
+    /* Compact + muted; sit closer to the producer row below to read
+     * as "technical details". */
+    padding: var(--sp-1) 0;
+    opacity: 0.85;
+}
+.enm-identity-grid-row--secondary .enm-identity-grid-label {
+    font-size: 9px;
+}
+.enm-identity-grid-row--secondary .enm-identity-grid-value {
+    font-size: 11px;
+    color: var(--text-secondary);
+    padding: 6px 10px;
+}
+
+/* Pill marker for the grid label cell. The primary "Share with
+ * Essentials" pill picks up the accent; the neutral "Internal" pill
+ * stays muted. Drops below the label text on narrow viewports so the
+ * grid template doesn't fight for inline space. */
+.enm-identity-grid-label {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+}
+.enm-identity-grid-pill {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: var(--fw-semibold);
+    padding: 1px 6px;
+    border-radius: var(--r-pill, 999px);
+    background: var(--bg-overlay);
+    color: var(--text-tertiary);
+    border: 1px solid var(--border-subtle);
+    line-height: 1.4;
+    white-space: nowrap;
+}
+.enm-identity-grid-pill-action {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-color: var(--accent-soft);
 }
 .enm-identity-row-hint {
     font-size: var(--fs-caption);
@@ -5720,6 +6014,57 @@ body[data-app-size="compact"] .enm-bpos-head-chip,
 }
 .enm-app[data-app-size="narrow"] .enm-danger-card-foot .enm-btn,
 .enm-app[data-app-size="compact"] .enm-danger-card-foot .enm-btn {
+    flex: 1 1 100%;
+}
+
+/* ----------------------------------------------------------------
+ * v0.5.228 — Staged chain resume toggle inside Danger Zone.
+ * Native <input type="checkbox"> + label + subtitle, matching the
+ * spacing/typography of the existing typed-confirm rows so it sits
+ * naturally inside .enm-danger-card-body. Controls row below is
+ * hidden until the toggle is on; uses the same button gap as
+ * .enm-danger-card-foot.
+ * ---------------------------------------------------------------- */
+.enm-danger-toggle-row {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-1);
+    padding: var(--sp-2) 0;
+}
+.enm-danger-toggle-label {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-2);
+    font-size: var(--fs-body);
+    color: var(--text-primary);
+    cursor: pointer;
+}
+.enm-danger-toggle-input {
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    accent-color: var(--danger);
+    cursor: pointer;
+    flex: 0 0 auto;
+}
+.enm-danger-toggle-text {
+    font-weight: 500;
+    line-height: 1.3;
+}
+.enm-danger-toggle-sub {
+    font-size: var(--fs-caption);
+    color: var(--text-tertiary);
+    padding-left: calc(16px + var(--sp-2));
+    line-height: 1.4;
+}
+.enm-danger-stage-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--sp-2);
+    margin-top: var(--sp-2);
+}
+.enm-app[data-app-size="narrow"] .enm-danger-stage-controls .enm-btn,
+.enm-app[data-app-size="compact"] .enm-danger-stage-controls .enm-btn {
     flex: 1 1 100%;
 }
 
@@ -7314,49 +7659,121 @@ body[data-enm-overview="1"] .enm-app .enm-tabs {
 .enm-app .enm-overview-usage {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
-    gap: var(--sp-3, 12px);
-    margin: 0 0 var(--sp-4, 16px) 0;
+    gap: var(--sp-2, 8px);
+    margin: 0 0 var(--sp-3, 12px) 0;
 }
+/* v0.5.228 — usage cards were 22px values with 12px padding × 4 columns,
+ * which dominated the top of the overview and crowded out the chain
+ * cards below. Operator directive 2026-05-27 ("these cards need to be
+ * small or averaged for better view in smaller screens"): tighten the
+ * default density and stage responsive variants that compact further
+ * on each smaller breakpoint, culminating in a single horizontal pill
+ * bar on the narrowest viewports. */
 .enm-app .enm-usage-card {
     background: var(--bg-elevated);
     border: 1px solid var(--border-color, var(--border-subtle));
-    border-radius: var(--r-md, 8px);
-    padding: var(--sp-3, 12px) var(--sp-3, 12px);
+    border-radius: var(--r-sm, 6px);
+    padding: 8px 10px;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 1px;
     min-width: 0;
 }
 .enm-app .enm-usage-card-title {
-    font-size: 11px;
+    font-size: 10px;
     color: var(--text-tertiary);
     text-transform: uppercase;
     letter-spacing: 0.04em;
     font-weight: 600;
+    line-height: 1.3;
 }
 .enm-app .enm-usage-card-value {
-    font-size: 22px;
-    font-weight: 700;
+    font-size: 16px;
+    font-weight: 600;
     color: var(--text-primary);
-    line-height: 1.1;
+    line-height: 1.2;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 .enm-app .enm-usage-card-sub {
-    font-size: 11px;
+    font-size: 10px;
     color: var(--text-secondary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    line-height: 1.4;
 }
 /* Tone each card with a faint left-rule in its category color so they're
-   scannable without reading labels. */
-.enm-app .enm-usage-card-chains { border-left: 3px solid var(--success); }
-.enm-app .enm-usage-card-cpu    { border-left: 3px solid var(--accent, #4cb8ff); }
-.enm-app .enm-usage-card-mem    { border-left: 3px solid var(--warning); }
-.enm-app .enm-usage-card-disk   { border-left: 3px solid var(--text-tertiary); }
+   scannable without reading labels. 2px instead of 3px to match the
+   tighter padding. */
+.enm-app .enm-usage-card-chains { border-left: 2px solid var(--success); }
+.enm-app .enm-usage-card-cpu    { border-left: 2px solid var(--accent, #4cb8ff); }
+.enm-app .enm-usage-card-mem    { border-left: 2px solid var(--warning); }
+.enm-app .enm-usage-card-disk   { border-left: 2px solid var(--text-tertiary); }
+
+/* --- Responsive: medium viewport (700-999) ------------------------- */
+/* Stay at 4 columns but drop one font tier so the card holds long
+ * values like "154.7 / 386.43 GB" without ellipsing. */
+.enm-app[data-app-size="medium"] .enm-overview-usage {
+    gap: 6px;
+}
+.enm-app[data-app-size="medium"] .enm-usage-card {
+    padding: 6px 8px;
+}
+.enm-app[data-app-size="medium"] .enm-usage-card-value {
+    font-size: 14px;
+}
+
+/* --- Responsive: narrow viewport (<700) ---------------------------- */
+/* Drop to a 2x2 grid so each card has room for full subtitle on its
+ * own line, but the whole row is still 2 cards wide (scannable). */
+.enm-app[data-app-size="narrow"] .enm-overview-usage,
+body[data-app-size="narrow"] .enm-app .enm-overview-usage {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 6px;
+}
+.enm-app[data-app-size="narrow"] .enm-usage-card,
+body[data-app-size="narrow"] .enm-app .enm-usage-card {
+    padding: 6px 8px;
+}
+.enm-app[data-app-size="narrow"] .enm-usage-card-value,
+body[data-app-size="narrow"] .enm-app .enm-usage-card-value {
+    font-size: 14px;
+}
+
+/* --- Responsive: compact viewport (<480, the smallest tier) -------- */
+/* Single-row stats bar — hide subtitle, drop card chrome to a flat
+ * horizontal pill row. Operator gets the at-a-glance numbers without
+ * the 4-card real-estate cost. */
+.enm-app[data-app-size="compact"] .enm-overview-usage,
+body[data-app-size="compact"] .enm-app .enm-overview-usage {
+    grid-template-columns: repeat(4, 1fr);
+    gap: 4px;
+    margin-bottom: var(--sp-2, 8px);
+}
+.enm-app[data-app-size="compact"] .enm-usage-card,
+body[data-app-size="compact"] .enm-app .enm-usage-card {
+    padding: 4px 6px;
+    border-radius: 4px;
+    /* Drop the bottom subtitle row by reducing internal gap and
+     * hiding the sub element below. */
+    gap: 0;
+}
+.enm-app[data-app-size="compact"] .enm-usage-card-title,
+body[data-app-size="compact"] .enm-app .enm-usage-card-title {
+    font-size: 9px;
+}
+.enm-app[data-app-size="compact"] .enm-usage-card-value,
+body[data-app-size="compact"] .enm-app .enm-usage-card-value {
+    font-size: 12px;
+    font-weight: 600;
+}
+.enm-app[data-app-size="compact"] .enm-usage-card-sub,
+body[data-app-size="compact"] .enm-app .enm-usage-card-sub {
+    display: none;  /* hide the subtitle entirely at this size */
+}
 
 /* Per-row metrics line (3rd row under each chain). Inline chips, wrap on
    narrow. The chip background is intentionally subtle — the state pill is
@@ -7662,6 +8079,356 @@ body[data-app-size="compact"] .enm-app .enm-usage-card-value,
     line-height: 1.5;
 }
 .enm-app .enm-overview-empty p:last-child { margin-bottom: 0; }
+
+/* ====================================================================
+ * v0.5.228 — Validator status badge (per-chain Class B settings).
+ *
+ * Replaces the pre-228 writable "Mining on/off" toggle in the per-chain
+ * EVM settings form (_renderClassBForm). The backend already derives
+ * mining state from on-chain arbiter slate at every chain start
+ * (EvmSidechainAdapter.detectProducerRole + start, since v0.5.188); the
+ * old toggle was visible-but-ineffectual. This badge surfaces the
+ * derived state honestly with a state-keyed color, mirroring the chain-
+ * card state-dot palette so the operator's mental model carries over.
+ * ==================================================================== */
+.enm-classb-validator-row {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-md);
+    padding: var(--sp-3) var(--sp-4);
+    margin-bottom: var(--sp-3);
+}
+.enm-classb-validator-head {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: var(--sp-2);
+}
+.enm-classb-validator-label {
+    font-size: 11px;
+    font-weight: var(--fw-semibold);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-tertiary);
+}
+.enm-classb-validator-help {
+    font-size: var(--fs-caption);
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+.enm-classb-validator-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-1);
+}
+.enm-classb-validator-badge {
+    align-self: flex-start;
+    font-size: 12px;
+    font-weight: var(--fw-semibold);
+    line-height: 1;
+    padding: 6px 12px;
+    border-radius: var(--r-pill, 999px);
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-overlay);
+    color: var(--text-tertiary);
+    text-transform: none;
+    letter-spacing: 0;
+}
+.enm-classb-validator-badge[data-state="on-duty"] {
+    background: rgba(76, 175, 80, 0.15);
+    color: var(--success);
+    border-color: rgba(76, 175, 80, 0.35);
+}
+.enm-classb-validator-badge[data-state="standby"] {
+    background: rgba(255, 167, 38, 0.15);
+    color: var(--warning, #c08a00);
+    border-color: rgba(255, 167, 38, 0.35);
+}
+.enm-classb-validator-badge[data-state="inactive"],
+.enm-classb-validator-badge[data-state="follower"],
+.enm-classb-validator-badge[data-state="unknown"],
+.enm-classb-validator-badge[data-state="loading"] {
+    /* Default neutral palette set on the base rule covers these. */
+}
+.enm-classb-validator-sub {
+    font-size: var(--fs-caption);
+    color: var(--text-secondary);
+    line-height: 1.5;
+    margin-top: 4px;
+}
+
+/* ====================================================================
+ * v0.5.228 — Settings → EVM chains (shared) section.
+ * Operator directive 2026-05-27 ("the multi EVM shared settings for
+ * all services isn't there either"). Mirrors the existing Danger Zone
+ * card layout so the rows look at home next to it. Mining-state grid
+ * is bespoke (per-chain pill triplet); reward + sync rows are the
+ * usual input + Apply + status pattern.
+ * ==================================================================== */
+.enm-evm-shared-input-row {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    width: 100%;
+}
+.enm-evm-shared-input {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.enm-evm-shared-select {
+    flex: 0 0 auto;
+    min-width: 140px;
+}
+.enm-evm-shared-status {
+    min-height: 1.2em;
+    font-size: var(--fs-caption);
+    color: var(--text-tertiary);
+    line-height: 1.5;
+    margin-top: var(--sp-2);
+}
+.enm-evm-shared-status.is-ok   { color: var(--success); }
+.enm-evm-shared-status.is-warn { color: var(--warning, #c08a00); }
+.enm-evm-shared-status.is-err  { color: var(--danger); }
+
+.enm-evm-shared-mining-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--sp-2);
+}
+.enm-evm-shared-mining-cell {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    padding: var(--sp-2) var(--sp-3);
+    background: var(--bg-input);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-sm);
+}
+.enm-evm-shared-mining-name {
+    font-family: var(--font-mono);
+    font-size: var(--fs-caption);
+    color: var(--text-secondary);
+}
+.enm-evm-shared-mining-pill {
+    font-size: 11px;
+    font-weight: var(--fw-semibold);
+    padding: 2px 8px;
+    border-radius: var(--r-pill, 999px);
+    background: var(--bg-overlay);
+    color: var(--text-tertiary);
+    border: 1px solid var(--border-subtle);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+/* v0.5.228d (audit follow-up) — extend pill palette to the 5-state
+ * validator taxonomy. Old [data-mining="on"|"off"] selectors stay so
+ * pre-228d on-disk renders don't lose color. New states:
+ *   on-duty  → success green (matches the [data-state="on-duty"] badge
+ *              in the per-chain Validator-status row)
+ *   standby  → warning amber (in next rotation; not currently producing)
+ *   ?        → neutral muted (detecting / chain unreachable)
+ * "off" stays as the inactive/follower neutral color. */
+.enm-evm-shared-mining-pill[data-mining="on"],
+.enm-evm-shared-mining-pill[data-mining="on-duty"] {
+    background: rgba(76, 175, 80, 0.15);
+    color: var(--success);
+    border-color: rgba(76, 175, 80, 0.35);
+}
+.enm-evm-shared-mining-pill[data-mining="standby"] {
+    background: rgba(255, 167, 38, 0.15);
+    color: var(--warning, #c08a00);
+    border-color: rgba(255, 167, 38, 0.35);
+}
+.enm-evm-shared-mining-pill[data-mining="off"],
+.enm-evm-shared-mining-pill[data-mining="?"] {
+    background: var(--bg-overlay);
+    color: var(--text-tertiary);
+}
+.enm-evm-shared-footer-note {
+    margin-top: var(--sp-2);
+    font-size: var(--fs-caption);
+    color: var(--text-tertiary);
+    line-height: 1.5;
+}
+.enm-app[data-app-size="compact"] .enm-evm-shared-mining-grid,
+.enm-app[data-app-size="narrow"]  .enm-evm-shared-mining-grid,
+body[data-app-size="compact"] .enm-app .enm-evm-shared-mining-grid,
+body[data-app-size="narrow"]  .enm-app .enm-evm-shared-mining-grid {
+    grid-template-columns: 1fr;
+}
+.enm-app[data-app-size="compact"] .enm-evm-shared-input-row,
+.enm-app[data-app-size="narrow"]  .enm-evm-shared-input-row {
+    flex-direction: column;
+    align-items: stretch;
+}
+
+/* ====================================================================
+ * v0.5.228 — Multi-chain overview visual hierarchy.
+ *
+ * Operator directive 2026-05-27 ("multi chain looks very ugly honestly").
+ * Pre-228 every chain rendered as an identical flat row inside one of
+ * four class sections — mainchain looked the same as an oracle, and
+ * there was no visual link between an EVM and its companion oracle.
+ *
+ * Layers added below:
+ *   1. .enm-overview-section            wrapper for each visual group
+ *   2. .enm-overview-section-heading    smaller, calmer section label
+ *   3. .enm-overview-row--hero          mainchain at the top, prominent
+ *   4. .enm-overview-evm-grid /
+ *      .enm-overview-evm-card           EVM card that contains its oracle
+ *   5. .enm-overview-row--evm           EVM chain row inside its card
+ *   6. .enm-overview-row--oracle-nested oracle row indented inside parent
+ *   7. .enm-overview-row--arbiter       arbiter footer card (compact)
+ * ==================================================================== */
+
+.enm-app .enm-overview-section {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color, var(--border-subtle));
+    border-radius: 10px;
+    padding: var(--sp-3, 12px) var(--sp-4, 16px);
+}
+.enm-app .enm-overview-section-heading {
+    margin: 0 0 var(--sp-2, 8px) 0;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+/* --- 1. Main chain hero -------------------------------------------- */
+.enm-app .enm-overview-section-hero {
+    /* Subtle accent ring + tint so the eye lands on the node's heartbeat
+       before drilling into satellite services. */
+    border-color: var(--accent-soft, var(--border-color));
+    background: linear-gradient(
+        to right,
+        var(--accent-soft, var(--bg-overlay)) 0%,
+        var(--bg-elevated) 50%
+    );
+    padding: var(--sp-4, 16px);
+}
+.enm-app .enm-overview-row--hero {
+    padding: var(--sp-3, 12px) var(--sp-3, 12px);
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+}
+.enm-app .enm-overview-row--hero .enm-overview-name {
+    font-size: 18px;
+    font-weight: 600;
+}
+.enm-app .enm-overview-row--hero .enm-overview-dot {
+    width: 14px;
+    height: 14px;
+}
+.enm-app .enm-overview-row--hero .enm-overview-meta {
+    font-size: 13px;
+}
+
+/* --- 2. EVM sidechains — paired cards ------------------------------ */
+.enm-app .enm-overview-section-evm {
+    /* The grid renders three EVM cards. On wide viewports they sit
+       side-by-side; on narrower viewports they stack via auto-fit. */
+}
+.enm-app .enm-overview-evm-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+    gap: var(--sp-3, 12px);
+}
+.enm-app .enm-overview-evm-card {
+    background: var(--bg-overlay, var(--bg-elevated));
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    padding: var(--sp-2, 8px);
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-1, 4px);
+}
+.enm-app .enm-overview-row--evm {
+    /* The EVM row drops the open-arrow column (`auto` last) by collapsing
+       the trailing columns; sparkline shrinks because the card is narrower. */
+    grid-template-columns: 14px minmax(120px, 1fr) auto auto 14px;
+    gap: var(--sp-2, 8px);
+    padding: var(--sp-2, 8px);
+}
+.enm-app .enm-overview-row--evm .enm-overview-name {
+    font-size: 14px;
+    font-weight: 600;
+}
+.enm-app .enm-overview-row--evm .enm-overview-spark {
+    width: 72px;
+}
+
+/* --- 3. Oracle nested inside its parent's EVM card ----------------- */
+.enm-app .enm-overview-row--oracle-nested {
+    /* Indented + smaller dot + caption-sized name so it reads as a child
+       of the EVM above. Removes spark + uptime (compact variant in JS). */
+    grid-template-columns: 10px 1fr auto 14px;
+    padding: 4px var(--sp-2, 8px) 4px calc(var(--sp-2, 8px) + 14px);
+    background: transparent;
+    border-left: 2px solid var(--border-subtle);
+    margin-left: var(--sp-3, 12px);
+    border-radius: 0 6px 6px 0;
+}
+.enm-app .enm-overview-row--oracle-nested .enm-overview-name {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+.enm-app .enm-overview-row--oracle-nested .enm-overview-state {
+    font-size: 9px;
+    padding: 2px 5px;
+}
+.enm-app .enm-overview-row--oracle-nested .enm-overview-meta {
+    font-size: 11px;
+}
+.enm-app .enm-overview-row--oracle-nested .enm-overview-dot {
+    width: 7px;
+    height: 7px;
+}
+
+/* --- 4. Arbiter compact footer card -------------------------------- */
+.enm-app .enm-overview-section-arbiter {
+    padding: var(--sp-2, 8px) var(--sp-3, 12px);
+}
+.enm-app .enm-overview-row--arbiter {
+    grid-template-columns: 12px 1fr auto 14px;
+    padding: var(--sp-2, 8px);
+    gap: var(--sp-2, 8px);
+}
+.enm-app .enm-overview-row--arbiter .enm-overview-name {
+    font-size: 13px;
+    font-weight: 600;
+}
+
+/* --- Compact viewport overrides ------------------------------------ */
+.enm-app[data-app-size="compact"] .enm-overview-evm-grid,
+body[data-app-size="compact"] .enm-app .enm-overview-evm-grid,
+.enm-app[data-app-size="narrow"]  .enm-overview-evm-grid,
+body[data-app-size="narrow"]  .enm-app .enm-overview-evm-grid {
+    grid-template-columns: 1fr;
+}
+.enm-app[data-app-size="compact"] .enm-overview-row--hero,
+body[data-app-size="compact"] .enm-app .enm-overview-row--hero {
+    grid-template-columns: 14px 1fr auto 14px;
+}
+.enm-app[data-app-size="compact"] .enm-overview-row--hero .enm-overview-name,
+body[data-app-size="compact"] .enm-app .enm-overview-row--hero .enm-overview-name {
+    font-size: 16px;
+}
+.enm-app[data-app-size="compact"] .enm-overview-row--evm,
+body[data-app-size="compact"] .enm-app .enm-overview-row--evm,
+.enm-app[data-app-size="compact"] .enm-overview-row--arbiter,
+body[data-app-size="compact"] .enm-app .enm-overview-row--arbiter {
+    grid-template-columns: 12px 1fr auto 14px;
+}
+.enm-app[data-app-size="compact"] .enm-overview-row--evm .enm-overview-spark,
+body[data-app-size="compact"] .enm-app .enm-overview-row--evm .enm-overview-spark,
+.enm-app[data-app-size="compact"] .enm-overview-row--evm .enm-overview-uptime,
+body[data-app-size="compact"] .enm-app .enm-overview-row--evm .enm-overview-uptime {
+    display: none;
+}
 
 /* Compact viewport: hide uptime + sparkline columns so the control-center
    main column (name + state + live meta line) keeps full width. Quick actions

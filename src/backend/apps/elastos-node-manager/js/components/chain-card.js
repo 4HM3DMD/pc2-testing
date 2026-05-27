@@ -31,19 +31,17 @@
 (function (root) {
     'use strict';
 
-    // Coarse backend state → PowerCircle visual state. Same table as
-    // alpha.18; one-shot lookup so the mapping stays reviewable.
-    var COARSE_TO_VISUAL = {
-        unconfigured: 'off',
-        stopped:      'off',
-        recovering:   'booting',
-        starting:     'booting',
-        syncing:      'syncing',
-        healthy:      'healthy',
-        stalled:      'warning',
-        error:        'error',
-        disabled:     'off',
-    };
+    // v0.5.219 audit Phase 5 (AUDIT-FLOW-S01, P3) — the dead
+    // COARSE_TO_VISUAL constant that used to live here was DELETED.
+    // It was never referenced anywhere in this file (the 5 inline
+    // `'healthy' || 'synced'` checks did NOT use it), and the table
+    // itself was missing 'synced' / 'loading' (the v0.5.203 vocab
+    // update never reached the dead constant). A future "let's clean
+    // up by using the constant" refactor would have silently re-
+    // introduced the v0.5.203 regression. Source of truth now lives
+    // in js/utils-state-vocab.js (root.enmStateVocab). The 5 inline
+    // checks below are migrated to enmStateVocab.isAlive() etc. in
+    // the v0.5.219 batch.
 
     // beta.3.92 (Wave M2.4) — operator-facing display-name fallback
     // for every known chainId. Used when the per-chain API response
@@ -271,11 +269,18 @@
             // 10-minute backend outage doesn't stack 120 identical
             // toasts. show() dedupes by id, updating the existing
             // toast in place instead of mounting a fresh one.
+            // v0.5.227 audit Phase 16 (XFLOW-18) — friendly error mapping
+            // replaces raw err.message which leaked stack-trace-flavored
+            // text like "TypeError: Failed to fetch" to operator UI.
+            var friendlyBody = (typeof root.enmFriendlyError === 'function')
+                ? root.enmFriendlyError(err)
+                : (err && err.message ? err.message : String(err));
+            if (friendlyBody == null) { return; }  // 401 silenced upstream
             self.notifications.show({
                 id: 'chain-refresh-fail-' + self.chainId,
                 severity: 'warning',
                 title: 'Failed to refresh ' + displayName,
-                body: err && err.message ? err.message : String(err),
+                body: friendlyBody,
             });
         }).then(function () {
             self._refreshInFlight = null;
@@ -769,13 +774,26 @@
             // Map coarse → hero-power data-state. Mock defines: running /
             // stopped / stalled / error. Unconfigured / disabled visually
             // are 'stopped' (gray, no glow).
-            // v0.5.205 — 'synced' joins 'healthy' as the alive-and-synced
-            // hero state after v0.5.203 vocab unification.
-            var heroState = (coarse === 'healthy' || coarse === 'synced') ? 'running'
-                : (coarse === 'stalled') ? 'stalled'
-                : (coarse === 'error')   ? 'error'
+            // v0.5.219 audit Phase 5 — route through enmStateVocab
+            // (XFLOW-04 / XFLOW-16). The shared utility handles the
+            // v1 'healthy' / 'running' aliases, future state additions,
+            // and the visual mapping. Replaces the inline ternary that
+            // had to be updated at every state-vocab change.
+            var heroState = (root.enmStateVocab && root.enmStateVocab.stateVisual)
+                ? root.enmStateVocab.stateVisual(coarse)
+                : (coarse === 'healthy' || coarse === 'synced') ? 'running'
+                  : (coarse === 'stalled') ? 'stalled'
+                  : (coarse === 'error')   ? 'error'
+                  : 'stopped';
+            // Map enmStateVocab's wider visual vocab to the hero-power
+            // component's narrower set (it supports running/stalled/
+            // error/off — 'syncing'/'booting' don't apply here since
+            // those states render the sync-ring hero instead).
+            var heroPowerState = (heroState === 'running') ? 'running'
+                : (heroState === 'stalled') ? 'stalled'
+                : (heroState === 'error')   ? 'error'
                 : 'stopped';
-            this._renderHeroPower(heroState);
+            this._renderHeroPower(heroPowerState);
         }
 
         // State-chip — text + modifier class. Mock variants: .accent
@@ -818,19 +836,50 @@
         // producerState on a non-A chain's response.
         var producerState = (this.chainClass === 'A' && state && state.producerState)
             ? state.producerState : null;
+        // v0.5.229 (Phase D) — Council membership chip overrides BPoS
+        // producer state when the operator is bound to a CR Committee
+        // seat. CR seats are higher-tier than BPoS slots in Elastos's
+        // DPoS rotation, so a "Council · Elected" chip is more
+        // informative than "Active" for a CR operator who happens to
+        // ALSO be a BPoS producer. Falls through to BPoS when crMember
+        // is null (pure BPoS operator or mainchain RPC down).
+        // v0.5.229d (P4 audit fix) — also stash on the instance so the
+        // rotation strip's _applyRotation can read it for the
+        // "unclaim pending; slate freeze" qualifier without doing its
+        // own /system/identity fetch.
+        var crMember = (this.chainClass === 'A' && state && state.crMember)
+            ? state.crMember : null;
+        this._lastCrMember = crMember;
+        var crChipLabel = null;
+        if (crMember && crMember.isCrMember && crMember.state) {
+            crChipLabel = 'Council · ' + crMember.state;
+        } else if (crMember && crMember.inNextCommittee && crMember.state) {
+            crChipLabel = 'Council · Next term';
+        }
         var version = (state && state.binaryVersion) ? state.binaryVersion : '';
         var versionSuffix = version ? ' · ' + version : '';
         var chipText;
-        // v0.5.205 — accept 'synced' alongside 'healthy' in all three branches
-        // (post-v0.5.203 vocab unification).
-        if (producerState && (coarse === 'healthy' || coarse === 'synced' || coarse === 'syncing' || coarse === 'stalled')) {
+        // v0.5.219 audit Phase 5 — route through enmStateVocab.isAlive
+        // (handles 'healthy'/'synced'/'syncing'/'stalled'/'recovering' uniformly,
+        // including v1 'healthy'/'running' aliases). Closes 2 of the 3
+        // remaining inline `'healthy' || 'synced'` sites in this file.
+        var aliveForChip = (root.enmStateVocab && root.enmStateVocab.isAlive)
+            ? (root.enmStateVocab.isAlive(coarse) || coarse === 'syncing')
+            : (coarse === 'healthy' || coarse === 'synced' || coarse === 'syncing' || coarse === 'stalled');
+        if (crChipLabel && aliveForChip) {
+            // v0.5.229 — Council chip wins when applicable. Versionsuffix
+            // appended same as the BPoS chip below; dataset.state encodes
+            // the Council state for CSS theming (.state="...-council-elected" etc.).
+            chipText = crChipLabel + versionSuffix;
+            this._stateChip.dataset.state = coarse + '-council-' + String(crMember.state || 'unknown').toLowerCase();
+        } else if (producerState && aliveForChip) {
             // 0.2.0-beta.3.6 — include the version suffix on producer-state
             // chips too. Pre-beta.3.6 dropped it when producerState was set,
             // leaving "Active" alone on the chip. Mock keeps the version
             // for layout consistency: "Active · v0.9.7" / "Rank #42 · v0.9.7".
             chipText = producerState + versionSuffix;
             this._stateChip.dataset.state = coarse + '-producer-' + String(producerState).toLowerCase();
-        } else if (coarse === 'healthy' || coarse === 'synced') {
+        } else if (root.enmStateVocab && root.enmStateVocab.normalize(coarse) === 'synced') {
             chipText = chainNameLabel + versionSuffix;
             this._stateChip.dataset.state = coarse;
         } else if (coarse === 'syncing' || coarse === 'recovering' || coarse === 'starting') {
@@ -952,13 +1001,17 @@
         }
 
         // Action row enable/disable.
-        // v0.5.205 — accept 'synced' as alive too. Backend started returning
-        // 'synced' (replacing 'healthy') in v0.5.203 when state vocabulary
-        // was unified; without this card thought every alive-and-synced chain
-        // was stopped → showed "TAP TO START" and hid Stop/Restart.
-        var alive = (coarse === 'healthy' || coarse === 'synced'
-                  || coarse === 'syncing' || coarse === 'stalled'
-                  || coarse === 'recovering' || coarse === 'starting');
+        // v0.5.219 audit Phase 5 — single source-of-truth for the
+        // alive predicate. Pre-v0.5.219 this inline OR-chain at 5
+        // sites in this file caused the v0.5.203 vocab regression
+        // (chain showed "TAP TO START" + hid Stop/Restart when state
+        // was 'synced'). Now: enmStateVocab.isAlive() handles every
+        // v1/v2 alias + future additions.
+        var alive = (root.enmStateVocab && root.enmStateVocab.isAlive)
+            ? (root.enmStateVocab.isAlive(coarse) || coarse === 'syncing' || coarse === 'starting')
+            : (coarse === 'healthy' || coarse === 'synced'
+                || coarse === 'syncing' || coarse === 'stalled'
+                || coarse === 'recovering' || coarse === 'starting');
         var unconfigured = (coarse === 'unconfigured');
         // v0.5.207 — 'loading' is the pre-API placeholder. Hide every action
         // button while we don't know what the chain's true state is —
@@ -1072,10 +1125,73 @@
         if (typeof this.onReconfigure === 'function') this.onReconfigure(this.chainId);
     };
 
-    /** @private */
-    ChainCard.prototype._handleStart   = function () { this._do('start',   '/chains/' + this.chainId + '/start'); };
-    ChainCard.prototype._handleStop    = function () { this._do('stop',    '/chains/' + this.chainId + '/stop'); };
-    ChainCard.prototype._handleRestart = function () { this._do('restart', '/chains/' + this.chainId + '/restart'); };
+    /** @private — Start is non-destructive, no confirm needed. */
+    ChainCard.prototype._handleStart = function () {
+        this._do('start', '/chains/' + this.chainId + '/start');
+    };
+    /** @private — v0.5.217 audit Phase 3 (AUDIT-FLOW-S02, P2) — Stop now
+     * gates through enmDestructiveModal. Pre-v0.5.217 the danger-red
+     * Stop button had NO confirmation; one misclick stopped a producing
+     * chain mid-block. The alpha.28.1 batch 46 rationale ("click-and-busy
+     * pattern is enough") only protected against DOUBLE-fire, not against
+     * intentional-but-accidental clicks. enmDestructiveModal adds a 2s
+     * cooldown + ack checkbox before delegating to _do(). */
+    ChainCard.prototype._handleStop = function () {
+        var self = this;
+        var displayName = this._resolveDisplayName();
+        if (typeof root.enmDestructiveModal !== 'function') {
+            // Defensive fallback if the modal primitive failed to load.
+            return this._do('stop', '/chains/' + this.chainId + '/stop');
+        }
+        root.enmDestructiveModal({
+            title:        'Stop ' + displayName + '?',
+            body:         'The chain process will stop and the node will no longer produce blocks or respond to RPC. Start it again from this card when ready. No chain data is lost.',
+            ackLabel:     'I understand this stops ' + displayName,
+            cooldownSec:  2,
+            confirmLabel: 'Stop ' + displayName,
+            confirmKind:  'danger',
+            notifications: self.notifications,
+            onConfirm: function () {
+                // _do handles toast + refresh; we just delegate.
+                self._do('stop', '/chains/' + self.chainId + '/stop');
+                return Promise.resolve();
+            },
+        });
+    };
+    /** @private — v0.5.217 audit Phase 3 (AUDIT-FLOW-B04, P2) — Restart
+     * now confirms too. Restart interrupts sync work and chain is
+     * unavailable for 20-60s; matches multi-chain-overview's existing
+     * confirm UX so operator habits formed on one entry transfer. */
+    ChainCard.prototype._handleRestart = function () {
+        var self = this;
+        var displayName = this._resolveDisplayName();
+        if (typeof root.enmDestructiveModal !== 'function') {
+            return this._do('restart', '/chains/' + this.chainId + '/restart');
+        }
+        root.enmDestructiveModal({
+            title:        'Restart ' + displayName + '?',
+            body:         'The chain will stop, then start again automatically (typical pause: 20-60 seconds). Sync resumes from the current block — no data is lost. In-progress block-signing work is interrupted.',
+            ackLabel:     null,  // restart is less destructive than stop; cooldown alone is sufficient gate
+            cooldownSec:  1,
+            confirmLabel: 'Restart ' + displayName,
+            confirmKind:  'primary',
+            notifications: self.notifications,
+            onConfirm: function () {
+                self._do('restart', '/chains/' + self.chainId + '/restart');
+                return Promise.resolve();
+            },
+        });
+    };
+    /** @private — Helper for the display-name resolution used by Stop/Restart
+     * confirm modals (parallel of the _do() displayName fallback). */
+    ChainCard.prototype._resolveDisplayName = function () {
+        var t = root.enmTOrFallback;
+        var displayName = t('chain_name.' + this.chainId);
+        if (!displayName || displayName === 'chain_name.' + this.chainId) {
+            displayName = this.chainId;
+        }
+        return displayName;
+    };
 
     /** @private */
     ChainCard.prototype._do = function (kind, path) {
@@ -1098,9 +1214,41 @@
         if (!displayName || displayName === 'chain_name.' + this.chainId) {
             displayName = this.chainId;
         }
-        var pastVerb = ({ start: 'started', stop: 'stopped', restart: 'restarted' })[kind] || kind;
+        // v0.5.220 audit Phase 6 (XFLOW-01, AUDIT-FLOW-S04) — present-
+        // progressive verbs replace past-tense. Pre-v0.5.220 the toast
+        // said "Mainchain started" the instant the POST resolved, but
+        // the chain was actually in 'starting' state for 20-60s before
+        // becoming RPC-bound. Operator-perception mismatch closed.
+        var progressiveVerb = ({ start: 'is starting…', stop: 'is stopping…', restart: 'is restarting…' })[kind] || kind;
         this.api.post(path).then(function () {
-            self.notifications.info(displayName + ' ' + pastVerb, '');
+            self.notifications.info(displayName + ' ' + progressiveVerb, '');
+            // v0.5.220 audit Phase 6 (XFLOW-02, AUDIT-FLOW-S05) — arm a
+            // 90s watchdog after Start/Restart. If the chain hasn't
+            // reached alive by then, fire a warning so the operator
+            // doesn't have to actively notice the silent stuck state.
+            // Stop has no watchdog — there's no "alive" target.
+            if ((kind === 'start' || kind === 'restart')
+                && typeof root.enmWatchAction === 'function'
+                && root.enmStateVocab) {
+                root.enmWatchAction({
+                    timeoutMs: 90000,
+                    pollMs: 5000,
+                    predicate: function () {
+                        if (self._destroyed) { return true; } // teardown — cancel
+                        return root.enmStateVocab.isAlive(self._lastCoarseState);
+                    },
+                    onTimeout: function () {
+                        if (self._destroyed) { return; }
+                        if (root.enmStateVocab.isAlive(self._lastCoarseState)) { return; }
+                        self.notifications.warning(
+                            displayName + ' didn\'t reach a running state',
+                            'The ' + kind + ' completed but the chain is still in '
+                              + (self._lastCoarseState || 'unknown')
+                              + '. Check logs and consider another restart.',
+                        );
+                    },
+                });
+            }
             return self.refresh();
         }).catch(function (err) {
             // alpha.28.1 batch 52 — 401 suppressed; boot path owns
@@ -1262,8 +1410,12 @@
         this._syncBar.hidden = true;
         this._syncBar.innerHTML = '';
 
-        // v0.5.205 — accept 'synced' (post-v0.5.203 vocab unification) too.
-        if (coarse === 'healthy' || coarse === 'synced') {
+        // v0.5.219 audit Phase 5 — route through enmStateVocab.normalize
+        // for the alive-and-synced subline. Last of the 5 inline state
+        // checks this file had pre-v0.5.219; all 5 now closed.
+        var normalizedCoarse = (root.enmStateVocab && root.enmStateVocab.normalize)
+            ? root.enmStateVocab.normalize(coarse) : coarse;
+        if (normalizedCoarse === 'synced' || coarse === 'healthy') {
             var atTip = document.createElement('span');
             atTip.className = 'enm-at-tip';
             atTip.textContent = 'Fully synced';
@@ -1519,9 +1671,28 @@
         text.className = 'enm-chain-rotation-text';
         strip.appendChild(text);
 
+        // v0.5.229d (P4 audit fix) — slate-freeze qualifier. The chain's
+        // next-rotation arbiter slate is COMPUTED IN ADVANCE (at a
+        // height before nextTurnStartHeight) and then FROZEN until that
+        // rotation actually starts. If an operator unclaims via Essentials
+        // AFTER the slate was frozen, their pubkey stays in nextarbiters[]
+        // until the rotation AFTER next. Pre-229d the rotation strip just
+        // said "Queued for next round · 16 of 36" with no context for
+        // why an unclaimed operator was still queued. Now we cross-
+        // reference miner.chainState... wait, we don't have crMember
+        // directly here. /chains/mainchain DOES include crMember (Phase
+        // D); the chain-card stashed _lastCrMember from the previous
+        // render of the chip. Use that.
+        var unclaimPending = !!(this._lastCrMember
+            && this._lastCrMember.isCrMember === false
+            && (data.ourIndex >= 0 || data.ourNextIndex >= 0));
+        var unclaimNote = unclaimPending
+            ? ' (unclaim pending; slate freeze in effect until next compute)'
+            : '';
+
         if (data.isOnDuty) {
             strip.dataset.state = 'onduty';
-            text.textContent = 'On duty now · signing the current block';
+            text.textContent = 'On duty now · signing the current block' + unclaimNote;
         } else if (inSlate) {
             strip.dataset.state = 'inslate';
             // alpha.28.1 batch 68 (Round-19B audit) — guard
@@ -1534,7 +1705,7 @@
             // nextArbiters in the next-slate branch below.
             var rl = (data.rotationLength != null) ? data.rotationLength : '—';
             text.textContent = 'Your slot · '
-                + (data.ourIndex + 1) + ' of ' + rl;
+                + (data.ourIndex + 1) + ' of ' + rl + unclaimNote;
         } else {
             strip.dataset.state = 'nextslate';
             // 0.5.125 audit Session 125 — defensive '—' fallback for
@@ -1550,7 +1721,7 @@
             var nl = (data.nextArbiters && data.nextArbiters.length > 0)
                 ? data.nextArbiters.length : '—';
             text.textContent = 'Queued for next round · '
-                + (data.ourNextIndex + 1) + ' of ' + nl;
+                + (data.ourNextIndex + 1) + ' of ' + nl + unclaimNote;
         }
     };
 

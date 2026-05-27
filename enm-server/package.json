@@ -1,7 +1,7 @@
 {
   "name": "@elacity/enm-server",
-  "version": "0.5.214",
-  "description": "Elastos Node Manager — standalone sidecar server for PC2 that runs and self-heals an Elastos mainchain node for BPoS supernode operators.",
+  "version": "0.5.229",
+  "description": "Elastos Node Manager — standalone sidecar server for PC2 that runs and self-heals an Elastos mainchain node for BPoS supernode AND CR Council operators.",
   "main": "src/server.js",
   "author": "Elacity",
   "license": "AGPL-3.0",
@@ -9,7 +9,8 @@
     "node": ">=20.18.0"
   },
   "scripts": {
-    "start": "node src/server.js"
+    "start": "node src/server.js",
+    "verify-rpc-shapes": "node scripts/verify-rpc-shapes.js"
   },
   "dependencies": {
     "better-sqlite3": "^11.9.0",

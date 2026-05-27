@@ -73,6 +73,20 @@
     var STATE_ACTIVE             = 'active';
     var STATE_HIDE               = 'hide';
 
+    // v0.5.229 (audit 2026-05-27) — Council branch states. CR Council
+    // operators have a different on-chain registration path (via the CR
+    // Committee, not via producer-register TX) and their states are NOT
+    // a subset of BPoS states. Each STATE_COUNCIL_* maps to a distinct
+    // render method below. Decision tree in _reconcile branches on
+    // setupRole === 'council' / crMember.isCrMember first, then falls
+    // back to BPoS states only when neither signal is present.
+    var STATE_COUNCIL_ELECTED   = 'council_elected';   // on Committee, MemberState=Elected → producing
+    var STATE_COUNCIL_INACTIVE  = 'council_inactive';  // on Committee, MemberState=Inactive
+    var STATE_COUNCIL_IMPEACHED = 'council_impeached'; // on Committee, MemberState=Impeached / Returned / Terminated / Illegal
+    var STATE_COUNCIL_NEXT_TERM = 'council_next_term'; // in next-term Committee (waiting for term boundary)
+    var STATE_COUNCIL_UNCLAIMED = 'council_unclaimed'; // Council install, no current Committee match (e.g. operator unclaimed)
+    var STATE_COUNCIL_NO_TERM   = 'council_no_term';   // Council install, Committee not in election period (between terms)
+
     function BposCard(opts) {
         if (!opts || !opts.api) {
             throw new TypeError('EnmBposCard: { api } required');
@@ -199,6 +213,15 @@
         var producerFailed = false;
         var chainPath = '/chains/' + encodeURIComponent(this.chainId);
         var producerPath = chainPath + '/producer';
+        // v0.5.229 — also fetch /system/identity so the card knows whether
+        // this operator went through the Council install path (setupRole)
+        // and whether they're a current CR Committee member (crMember).
+        // Phase B added these fields; the card branches on them in
+        // _reconcile to render the Council vs BPoS variant. /system/identity
+        // is a hot path already polled by the dashboard's node-identity-card;
+        // adding a duplicate fetch here is cheap (backend's
+        // CrMembershipService caches 30s).
+        var identityFailed = false;
         Promise.all([
             this.api.get(chainPath, { skipCache: true })
                 .catch(function (err) {
@@ -214,18 +237,24 @@
                     if (!err || err.status !== 401) { producerFailed = true; }
                     return null;
                 }),
+            this.api.get('/system/identity', { skipCache: true })
+                .catch(function (err) {
+                    if (!err || err.status !== 401) { identityFailed = true; }
+                    return null;
+                }),
         ]).then(function (results) {
             if (self._destroyed) { return; }
             var chain    = results[0];
             var producer = results[1];
-            if (chainFailed && producerFailed && !self.root.hidden) {
-                // Both fetches failed — leave the last-known-good
+            var identity = results[2];
+            if (chainFailed && producerFailed && identityFailed && !self.root.hidden) {
+                // All three fetches failed — leave the last-known-good
                 // render in place rather than misleading the operator
                 // by hiding. The chain-card next to us already
                 // surfaces the outage.
                 return;
             }
-            self._reconcile(chain, producer);
+            self._reconcile(chain, producer, identity);
         });
     };
 
@@ -242,7 +271,7 @@
      *
      * @private
      */
-    BposCard.prototype._reconcile = function (chain, producer) {
+    BposCard.prototype._reconcile = function (chain, producer, identity) {
         // v0.5.210 — accept 'synced' as alive too (v0.5.203 unified the
         // backend state vocab; 'healthy' became 'synced'). Without this,
         // the BPoS card thought every alive chain was dead → producer-
@@ -252,15 +281,86 @@
         var pState   = producer && producer.state;
         var enabled  = !!(producer && producer.enabled);
 
-        // BPoS card only makes sense for arbiter-enabled nodes. The
-        // operator may flip enableArbiter off via Settings; when that
-        // happens the card disappears and the steady-state plain-node
-        // chain-card carries the dashboard alone.
+        // v0.5.229 (audit 2026-05-27) — role gating. Council operators
+        // arrive here with `setupRole === 'council'` AND/OR a non-null
+        // crMember object from /system/identity. The card was originally
+        // BPoS-only ("BPoS supernode: not yet registered"). Now it
+        // branches: Council operators render Council-specific copy
+        // (member state, nickname, on-duty hint); BPoS operators keep
+        // the existing branches. Both can be true for the rare operator
+        // who is BOTH a CR member and a BPoS producer — Council wins as
+        // the primary identity since CRC arbiter slots are higher-tier
+        // than BPoS slots in Elastos's DPoS rotation.
+        var crMember = identity && identity.crMember;
+        var setupRole = identity && identity.setupRole;
+        var isCouncilContext = (setupRole === 'council')
+            || !!(crMember && crMember.isCrMember);
+
+        // Visibility gate. The card hides only when (a) chain isn't
+        // alive (cards above this one already surface the outage), or
+        // (b) the operator has neither a Council install nor a BPoS
+        // operator role (a plain follower).
         var bposOperator = enabled || !!pubkey;
-        if (!alive || !bposOperator) {
-            this._hideAndRest();
+        if (!alive) { this._hideAndRest(); return; }
+        if (!isCouncilContext && !bposOperator) { this._hideAndRest(); return; }
+
+        // ----- COUNCIL BRANCH ------------------------------------------
+        // Decision sub-tree for Council operators:
+        //   crMember.isCrMember + state='Elected'        → COUNCIL_ELECTED
+        //   crMember.isCrMember + state='Inactive'       → COUNCIL_INACTIVE
+        //   crMember.isCrMember + state in {Impeached,
+        //                Returned, Terminated, Illegal}  → COUNCIL_IMPEACHED
+        //   crMember.isCrMember + inNextCommittee=true   → COUNCIL_NEXT_TERM
+        //   setupRole='council' + no crMember matched +
+        //     source='not-in-committee'                  → COUNCIL_UNCLAIMED
+        //   setupRole='council' + source='no-active-
+        //     committee'                                 → COUNCIL_NO_TERM
+        //   setupRole='council' + source='error'         → render last-known
+        //                                                  good (don't flicker)
+        if (isCouncilContext) {
+            this._lastCrMember = crMember || null;
+            this._lastIdentity = identity;
+            // v0.5.229d (P9 audit fix) — operator may be BOTH a CR Council
+            // member AND a BPoS producer. Stash producer too so the
+            // Council card can render the dual-role secondary line.
+            this._lastProducer = producer || null;
+            if (crMember && crMember.isCrMember) {
+                var s = String(crMember.state || '').toLowerCase();
+                if (crMember.inNextCommittee) {
+                    this._show(STATE_COUNCIL_NEXT_TERM, pubkey);
+                    return;
+                }
+                if (s === 'elected') {
+                    this._show(STATE_COUNCIL_ELECTED, pubkey);
+                    return;
+                }
+                if (s === 'inactive') {
+                    this._show(STATE_COUNCIL_INACTIVE, pubkey);
+                    return;
+                }
+                // Impeached / Returned / Terminated / Illegal → red banner.
+                this._show(STATE_COUNCIL_IMPEACHED, pubkey);
+                return;
+            }
+            // Council install, no current crMember match.
+            if (crMember && crMember.source === 'no-active-committee') {
+                this._show(STATE_COUNCIL_NO_TERM, pubkey);
+                return;
+            }
+            if (crMember && crMember.source === 'error') {
+                // Don't reshape on transient RPC failures. Keep the last
+                // good render; the chain-card already shows the outage.
+                return;
+            }
+            // Default Council fallback: install path but not bound to a
+            // current Committee seat (most common when the operator has
+            // unclaimed via Essentials, or hasn't claimed their node
+            // pubkey yet via CRCouncilMemberClaimNode).
+            this._show(STATE_COUNCIL_UNCLAIMED, pubkey);
             return;
         }
+
+        // ----- BPoS BRANCH (existing behavior preserved) ---------------
 
         // 0.2.0-beta.3.4 — Active producer keeps the card visible with
         // a steady-state success-header render (per phase-03 mock).
@@ -314,9 +414,31 @@
         // for the registration / activation confirmation right now.
         this._setPollInterval(SHORT_POLL_MS);
         this.root.hidden = false;
+        // v0.5.229d (P5 audit fix) — also force a re-render when the
+        // underlying Council member data (impeachmentVotes, nickname
+        // refresh, state flip) has changed between polls, even if the
+        // bucket-level state hasn't. Pre-229d only the state-transition
+        // path triggered _render; static-within-bucket changes were
+        // silently dropped until something else flipped the bucket.
+        // The signature compares the few fields a real-time operator
+        // would care about; cheap and deterministic.
+        var crMember = this._lastCrMember || null;
+        var crSig = crMember
+            ? (crMember.isCrMember + '|' + (crMember.state || '') + '|'
+                + (crMember.impeachmentVotes || '') + '|'
+                + (crMember.nickname || ''))
+            : '';
+        var crChanged = (crSig !== this._lastCrSig);
         if (this._renderedState !== state) {
             this._render(state);
             this._renderedState = state;
+            this._lastCrSig = crSig;
+        } else if (crChanged && this._renderedState
+                   && String(this._renderedState).indexOf('council_') === 0) {
+            // Same bucket but Council data changed — re-render to
+            // reflect new nickname/state/impeachmentVotes.
+            this._render(state);
+            this._lastCrSig = crSig;
         } else if (state === STATE_ACTIVE) {
             // 0.2.0-beta.3.7 — when state stays ACTIVE across polls,
             // re-fill the stats grid in place. Rank/votes shift round
@@ -352,6 +474,15 @@
         // is written so the AT tree sees the relation immediately.
         this.root.setAttribute('aria-labelledby', this._titleId);
 
+        // v0.5.229 — Council branches first (CRC arbiter slots are
+        // higher-tier than BPoS slots in the DPoS rotation).
+        if (state === STATE_COUNCIL_ELECTED)   { this._renderCouncil('elected');   return; }
+        if (state === STATE_COUNCIL_INACTIVE)  { this._renderCouncil('inactive');  return; }
+        if (state === STATE_COUNCIL_IMPEACHED) { this._renderCouncil('impeached'); return; }
+        if (state === STATE_COUNCIL_NEXT_TERM) { this._renderCouncil('next-term'); return; }
+        if (state === STATE_COUNCIL_UNCLAIMED) { this._renderCouncil('unclaimed'); return; }
+        if (state === STATE_COUNCIL_NO_TERM)   { this._renderCouncil('no-term');   return; }
+
         if (state === STATE_ACTIVE) {
             this._renderActive();
             return;
@@ -362,6 +493,131 @@
         }
         // Default (and the most common dashboard surface): not-registered.
         this._renderRegistration();
+    };
+
+    /**
+     * v0.5.229 — render a Council-mode card for the 6 sub-states. Mirrors
+     * the _renderActive / _renderActivation / _renderRegistration
+     * structure (head + cta-card + note + sr-only pubkey span) but uses
+     * Council vocabulary ("CR Council member", "CRC arbiter slot",
+     * "claim node binding") instead of BPoS vocabulary ("supernode",
+     * "register your supernode").
+     *
+     * Sub-state copy decisions:
+     *   elected      — green success header, "On-duty when slot rotates in"
+     *   inactive     — amber header, "Recoverable by activate-via-Essentials"
+     *   impeached    — red header, terminal-ish (recovery is term-specific)
+     *   next-term    — amber, "Elected, waiting for next Committee term"
+     *   unclaimed    — amber, "Council install detected but pubkey not bound
+     *                  on-chain — claim via Essentials"
+     *   no-term      — gray, "Committee not currently in election period"
+     */
+    BposCard.prototype._renderCouncil = function (subState) {
+        var t = root.enmTOrFallback;
+        var titleId = this._titleId;
+        var chipId  = this._chipId;
+        var self = this;
+        var cr = this._lastCrMember || null;
+
+        // sub-state → copy + chip styling. Reused across the 6 branches
+        // so the markup stays a single innerHTML template.
+        var subMeta = {
+            'elected':   { chipCls: 'success',    chipLabel: 'On-duty',  headBg: 'success' },
+            'inactive':  { chipCls: 'warn',       chipLabel: 'Inactive', headBg: 'warn'    },
+            'impeached': { chipCls: 'danger',     chipLabel: cr && cr.state ? cr.state : 'Impeached', headBg: 'danger' },
+            'next-term': { chipCls: 'warn',       chipLabel: 'Next term', headBg: 'warn'   },
+            'unclaimed': { chipCls: 'warn',       chipLabel: 'Unclaimed', headBg: 'warn'   },
+            'no-term':   { chipCls: 'muted',      chipLabel: 'Between terms', headBg: 'muted' },
+        }[subState] || { chipCls: 'muted', chipLabel: '—', headBg: 'muted' };
+
+        // v0.5.229 patch — t() is enmTOrFallback which takes (key, vars),
+        // NOT (key, fallback). A second-arg string is misread as vars
+        // and missing keys render as the literal "[key]" placeholder
+        // in the UI. Strings live in strings.js under council_card.*
+        // (added in the same patch). Defensive fallback table below
+        // catches the case where strings.js is older than this code.
+        var titleKey = 'council_card.head_title_' + subState.replace('-', '_');
+        var subKey   = 'council_card.head_sub_'   + subState.replace('-', '_');
+        var FALLBACK_TITLES = {
+            'elected':   'CR Council member — On-duty',
+            'inactive':  'CR Council member — Inactive',
+            'impeached': 'CR Council member — ' + (cr && cr.state ? cr.state : 'Impeached'),
+            'next-term': 'CR Council member — Next term',
+            'unclaimed': 'Council install — Not currently bound',
+            'no-term':   'Council install — Committee between terms',
+        };
+        var FALLBACK_SUBS = {
+            'elected':   'Your node is in the on-chain CR Committee arbiter slate. EVM sidechain mining + mainchain BPoS signing activate automatically when your slot rotates in.',
+            'inactive':  'You are a CR Committee member but on-chain MemberState is Inactive (the chain skipped your slot for too many consecutive rounds). Recover via Essentials → Activate.',
+            'impeached': 'Your CR Committee membership has been impeached, terminated, returned, or flagged illegal on-chain. The current term seat is lost; check Essentials for the specific reason and recovery options.',
+            'next-term': 'You won the next CR Committee election. Your node will enter the arbiter slate when the next term begins.',
+            'unclaimed': 'ENM detects a Council install but your node\'s public key is not currently bound to any CR Committee seat on-chain. If you intend to be a Council member, claim your node via Elastos Essentials (CRCouncilMemberClaimNode TX).',
+            'no-term':   'The CR Council is not currently in an election period. No active Committee means no arbiter slots to fill — your node will be added when the next term begins.',
+        };
+        var rawTitle = t(titleKey);
+        var rawSub   = t(subKey);
+        // enmT returns "[key]" verbatim when the key is missing. Detect
+        // that and fall through to the in-JS English instead.
+        var headTitle = (rawTitle && rawTitle.indexOf('[') !== 0)
+            ? rawTitle : (FALLBACK_TITLES[subState] || 'CR Council member');
+        var headSub = (rawSub && rawSub.indexOf('[') !== 0)
+            ? rawSub : (FALLBACK_SUBS[subState] || '');
+
+        // Build the head + cta-card + optional info-grid markup.
+        var infoRows = '';
+        if (cr && (cr.nickname || cr.state || cr.cid)) {
+            infoRows = ''
+                + '<div class="enm-council-info-grid">'
+                + (cr.nickname  ? '<div class="enm-council-info-cell"><div class="enm-council-info-label">Nickname</div><div class="enm-council-info-value">' + escapeHtml(cr.nickname) + '</div></div>' : '')
+                + (cr.state     ? '<div class="enm-council-info-cell"><div class="enm-council-info-label">State</div><div class="enm-council-info-value">' + escapeHtml(cr.state) + '</div></div>' : '')
+                + (typeof cr.index === 'number'
+                    ? '<div class="enm-council-info-cell"><div class="enm-council-info-label">Index</div><div class="enm-council-info-value">' + cr.index + '</div></div>'
+                    : '')
+                + (cr.cid       ? '<div class="enm-council-info-cell enm-council-info-cell-wide"><div class="enm-council-info-label">CID</div><div class="enm-council-info-value enm-council-info-value-mono">' + escapeHtml(cr.cid) + '</div></div>' : '')
+                + (cr.impeachmentVotes && cr.impeachmentVotes !== '0' ? '<div class="enm-council-info-cell"><div class="enm-council-info-label">Impeach votes</div><div class="enm-council-info-value">' + escapeHtml(cr.impeachmentVotes) + '</div></div>' : '')
+                + '</div>';
+        }
+
+        // v0.5.229d (P9 audit fix) — dual-role secondary line. If this
+        // operator is BOTH a CR Council member AND a BPoS producer
+        // (the rare-but-legal case), surface the BPoS producer state
+        // as a secondary line under the Council head. Council primacy
+        // is preserved (Council outranks BPoS in DPoS rotation); BPoS
+        // is informational.
+        var dualRoleLine = '';
+        if (this._lastProducer && this._lastProducer.state) {
+            dualRoleLine = ''
+                + '<div class="enm-bpos-head-dual-role" style="margin-top:4px;font-size:11px;color:var(--text-tertiary);">'
+                +   'Also a BPoS producer · ' + escapeHtml(this._lastProducer.state)
+                +   (this._lastProducer.rank != null ? (' · Rank #' + this._lastProducer.rank) : '')
+                + '</div>';
+        }
+
+        this.root.innerHTML = ''
+            + '<div class="enm-bpos-head enm-bpos-head-' + subMeta.headBg + '">'
+            +   '<div class="enm-bpos-head-icon" aria-hidden="true">'
+            +     '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" '
+            +       'stroke="currentColor" stroke-width="1.4" stroke-linejoin="round">'
+            +       '<polygon points="12 3 21 12 12 21 3 12"></polygon>'
+            +     '</svg>'
+            +   '</div>'
+            +   '<div class="enm-bpos-head-body">'
+            +     '<div class="enm-bpos-head-title" id="' + escapeAttr(titleId) + '">'
+            +       escapeHtml(headTitle)
+            +     '</div>'
+            +     '<div class="enm-bpos-head-sub">'
+            +       escapeHtml(headSub)
+            +     '</div>'
+            +     dualRoleLine
+            +   '</div>'
+            +   '<span class="enm-section-card-tag ' + subMeta.chipCls + '" id="' + escapeAttr(chipId) + '">'
+            +     escapeHtml(subMeta.chipLabel)
+            +   '</span>'
+            + '</div>'
+            + infoRows
+            + '<span id="enm-bpos-pubkey" class="enm-sr-only" aria-hidden="true">'
+            +   escapeHtml(t('common.loading'))
+            + '</span>';
     };
 
     /**
@@ -620,17 +876,19 @@
                 + '</div>'
             + '</div>'
 
-            + '<div class="enm-bpos-note enm-bpos-note-pubkey">'
-                + '<div class="enm-bpos-note-label">'
-                    + escapeHtml(t('bpos_card.signing_key_label'))
-                + '</div>'
-                + '<pre class="enm-bpos-signing-key-value" id="enm-bpos-pubkey">'
-                    + escapeHtml(t('common.loading'))
-                + '</pre>'
-                + '<div class="enm-bpos-note-body">'
-                    + escapeHtml(t('bpos_card.note_after_confirm'))
-                + '</div>'
-            + '</div>';
+            // v0.5.228 — the pubkey display block (label + <pre> + note)
+            // duplicates the Node Identity card above (which now renders
+            // the pubkey at primary visual weight). One source of truth
+            // wins; the Copy button still works (the value resolver below
+            // pulls from self._lastPubkey, no DOM dependency). A hidden
+            // <span id="enm-bpos-pubkey"> stays so _fillPubkey is a true
+            // no-op and getDisplayEl has something to fall back to if the
+            // clipboard API ever fails (the copy button auto-selects it
+            // off-screen — same UX outcome as before, no duplicated
+            // pubkey on screen).
+            + '<span id="enm-bpos-pubkey" class="enm-sr-only" aria-hidden="true">'
+                + escapeHtml(t('common.loading'))
+            + '</span>';
 
         // Replace the copy slot with the enmCopyButton factory. The
         // factory hands back a fully-wired <button> with aria-hidden

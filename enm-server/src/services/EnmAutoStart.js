@@ -230,6 +230,83 @@ async function runAutoStart(deps) {
         return { scheduled: false, reason: 'no-enabled-chains' };
     }
 
+    // v0.5.228 — oracle pairing. An EVM sidechain without its oracle is
+    // half-broken: the chain produces / follows blocks fine, but cross-
+    // chain transfers (SPV proofs the oracle relays from mainchain to
+    // the sidechain) won't process. Operator directive 2026-05-27: "they
+    // should be started together... on reboots and stuff both should
+    // run." So whenever an EVM parent is in the enabled list, append
+    // its oracle to the boot start list too — even if oracle.enabled is
+    // currently false in cfg.json. Op can still stop an oracle manually
+    // after boot if they want it off for a specific run. Dedupe in case
+    // the operator already had the oracle in the enabled list.
+    //
+    // pairedOraclesSet is threaded into startAllChains so the "enabled"
+    // recheck inside the loop has an exemption — without that exemption
+    // the loop re-filters by cfg.enabled===true and the added oracles
+    // get dropped right back out.
+    const ChainAdapter = require('./ChainAdapter');
+    const beforePair = enabledChainIds.slice();
+    const paired = [];
+    // Exemption set: any chainId added here bypasses the "skip if cfg.enabled
+    // !== true" guard inside startAllChains. Holds both oracles (paired to
+    // their EVM parent) and the arbiter (paired to the full 4-chain set).
+    const pairedServicesSet = new Set();
+    for (const cid of beforePair) {
+        const oracleId = ChainAdapter.oracleOf(cid);
+        if (oracleId
+            && !enabledChainIds.includes(oracleId)
+            && cfg.chains
+            && cfg.chains[oracleId]) {  // oracle must be registered in cfg
+            enabledChainIds.push(oracleId);
+            pairedServicesSet.add(oracleId);
+            paired.push(`${oracleId} (parent: ${cid})`);
+        }
+    }
+    if (paired.length > 0) {
+        log.info(
+            `${ENM_LOG_PREFIX} autoStart: oracle-pairing added `
+            + `${paired.length} oracle(s) to the boot list — ${paired.join(', ')}`,
+        );
+    }
+
+    // v0.5.228 — arbiter pairing. The arbiter is the cross-chain bridge: it
+    // SPV-syncs from mainchain to confirm transfers to/from esc/eid/pg, so
+    // it functionally depends on ALL four chains being live (the adapter
+    // declares SIDECHAINS_REQUIRED = ['mainchain','esc','eid','pg']). Same
+    // operator directive as oracles ("on reboots and stuff both should
+    // run") — when the full Council quartet is enabled, also boot the
+    // arbiter even if its own cfg.enabled is false. Skipping is safe when
+    // the quartet is incomplete: arbiter spawn would fail its pre-flight
+    // anyway, so paired-start would just produce confusing errors.
+    const ARBITER_REQUIRED = ['mainchain', 'esc', 'eid', 'pg'];
+    const quartetEnabled = ARBITER_REQUIRED.every(
+        (cid) => cfg.chains && cfg.chains[cid] && cfg.chains[cid].enabled === true,
+    );
+    if (quartetEnabled
+        && cfg.chains
+        && cfg.chains.arbiter
+        && !enabledChainIds.includes('arbiter')) {
+        enabledChainIds.push('arbiter');
+        pairedServicesSet.add('arbiter');
+        log.info(
+            `${ENM_LOG_PREFIX} autoStart: arbiter-pairing — mainchain + 3 EVM chains all `
+            + 'enabled, adding arbiter to the boot list (cfg.enabled='
+            + `${cfg.chains.arbiter.enabled})`,
+        );
+    } else if (!quartetEnabled && cfg.chains && cfg.chains.arbiter
+        && cfg.chains.arbiter.enabled !== true) {
+        // Log why we're NOT pairing — helps operators understand why
+        // arbiter stayed down after a partial-quartet boot.
+        const missing = ARBITER_REQUIRED.filter(
+            (cid) => !(cfg.chains[cid] && cfg.chains[cid].enabled === true),
+        );
+        log.info(
+            `${ENM_LOG_PREFIX} autoStart: arbiter-pairing skipped — `
+            + `quartet incomplete (missing: ${missing.join(', ')})`,
+        );
+    }
+
     // beta.3.88 — Wave M1.4 — dependency-DAG ordering. Pre-3.88 we
     // started chains in arbitrary Object.entries() order. For Council
     // nodes this races: an oracle starting before its parent EVM chain
@@ -246,7 +323,7 @@ async function runAutoStart(deps) {
     // ChainAdapter.classOf returns null for unknown chainIds — those
     // sort last (treated as lowest priority). startAllChains is still
     // SEQUENTIAL within the sorted order to avoid port-bind races.
-    const ChainAdapter = require('./ChainAdapter');
+    // (ChainAdapter already required above for oracle-pairing.)
     const CLASS_ORDER = { A: 0, B: 1, C: 2, D: 3, E: 4 };
     const orderedChainIds = enabledChainIds.slice().sort((a, b) => {
         const ca = ChainAdapter.classOf(a);
@@ -266,7 +343,15 @@ async function runAutoStart(deps) {
     setTimeout(() => {
         // Re-read config inside the timer so operator changes during the grace
         // window (e.g. they disabled a chain right after boot) take effect.
-        startAllChains({ extensionHandle, registry, chainIds: orderedChainIds })
+        startAllChains({
+            extensionHandle,
+            registry,
+            chainIds: orderedChainIds,
+            // v0.5.228 — paired services (oracles + arbiter) bypass the
+            // "enabled === true" guard inside the loop; see the pairing
+            // blocks above for the why.
+            pairedServices: pairedServicesSet,
+        })
             .catch((err) => {
                 log.error(`${ENM_LOG_PREFIX} autoStart loop crashed: ${err.message}`);
             });
@@ -287,8 +372,17 @@ async function runAutoStart(deps) {
  * @param {string[]} args.chainIds
  */
 async function startAllChains(args) {
+    // v0.5.228 — pairedServices is the Set<chainId> of companion services
+    // (oracles + arbiter) included in chainIds because their parent /
+    // prerequisite chain(s) are enabled. They get an exemption from the
+    // "skip if enabled !== true" guard below so the parent enabled-flag
+    // implies the companion should boot too. Backward-compat accepts the
+    // legacy `pairedOracles` name in case any external caller (tests)
+    // still passes it.
     const { extensionHandle, registry, chainIds } = args;
+    const pairedSetSource = args.pairedServices || args.pairedOracles;
     const log = extensionHandle.log || console;
+    const pairedSet = pairedSetSource instanceof Set ? pairedSetSource : new Set();
 
     let cfg;
     try {
@@ -311,9 +405,26 @@ async function startAllChains(args) {
         const chainCfg = cfg.chains && cfg.chains[chainId];
 
         // Re-check enabled: operator may have flipped it during the grace window.
-        if (!chainCfg || chainCfg.enabled !== true) {
+        // v0.5.228 — paired oracles (added by oracle-pairing because their EVM
+        // parent is enabled) get an exemption. Their own enabled flag is
+        // informational only when the parent is up — config.enabled=false on
+        // an oracle whose parent is enabled means "the operator opted into
+        // having an EVM chain, the oracle is implied". This matches the
+        // operator's expectation ("on reboots and stuff both should run").
+        if (!chainCfg) {
+            log.info(`${ENM_LOG_PREFIX} autoStart: ${chainId} no longer in cfg — skipping`);
+            continue;
+        }
+        if (chainCfg.enabled !== true && !pairedSet.has(chainId)) {
             log.info(`${ENM_LOG_PREFIX} autoStart: ${chainId} no longer enabled — skipping`);
             continue;
+        }
+        if (chainCfg.enabled !== true && pairedSet.has(chainId)) {
+            log.info(
+                `${ENM_LOG_PREFIX} autoStart: ${chainId} cfg.enabled=false but its `
+                + 'parent / prerequisite chains are enabled — starting as a paired '
+                + 'service',
+            );
         }
 
         // Skip if already alive — reattach() during boot has already bound us

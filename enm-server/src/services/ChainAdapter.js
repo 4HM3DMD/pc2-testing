@@ -99,6 +99,28 @@ class ChainAdapter {
         return CHAIN_ID_TO_PARENT[chainId] || null;
     }
 
+    /**
+     * v0.5.228 — reverse of parentOf: for an EVM parent chain (esc / eid /
+     * pg), which oracle chainId rides alongside it? Returns the oracle's
+     * chainId or null for chains with no companion oracle (mainchain,
+     * arbiter, the oracles themselves).
+     *
+     * Used by autoStart + the POST /chains/:id/start route to keep an
+     * EVM chain and its oracle paired across pc2-node restarts, system
+     * reboots, and explicit operator starts. Operator directive
+     * 2026-05-27: "they should be started together... on reboots and
+     * stuff both should run."
+     *
+     * @param {string} parentChainId
+     * @returns {string|null}
+     */
+    static oracleOf(parentChainId) {
+        for (const [oracleId, parentId] of Object.entries(CHAIN_ID_TO_PARENT)) {
+            if (parentId === parentChainId) { return oracleId; }
+        }
+        return null;
+    }
+
     /** Override in subclass. */
     get chainId() {
         throw new Error('ChainAdapter: subclass must override chainId');

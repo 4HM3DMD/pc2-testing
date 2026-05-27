@@ -3001,6 +3001,18 @@ async function runCouncilInstall(args) {
                 cfgFinal.setup.completed = true;
                 cfgFinal.setup.completedAt = Date.now();
                 cfgFinal.setup.completedStep = 'council-install';
+                // v0.5.229 (audit 2026-05-27) — durable "this is a Council
+                // install" flag. The dashboard reads this via /system/identity
+                // and /system/council-status to render Council-mode UI from
+                // the first paint, before the live listcurrentcrs RPC has a
+                // chance to respond. Pre-229 the wizard only saved
+                // localStorage.enm:setup-intent which the dashboard never
+                // read — so every Council operator saw the BPoS default
+                // labelling instead.
+                cfgFinal.global = cfgFinal.global || {};
+                cfgFinal.global.council = cfgFinal.global.council || {};
+                cfgFinal.global.council.installed = true;
+                cfgFinal.global.council.installedAt = Date.now();
             });
 
             // 0.5.145 audit Session 145 — mirror BPoS /setup/complete (line

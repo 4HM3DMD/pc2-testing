@@ -762,7 +762,7 @@
         // localStorage stash survives refresh — operator never loses the
         // password between Card 3 reveal and Card 5 submission.
         var stashed = null;
-        try { stashed = window.localStorage.getItem('enm:master-pw'); } catch (_) {}
+        try { stashed = window.sessionStorage.getItem('enm:master-pw'); } catch (_) {}
         if (stashed) {
             this._masterPassword = stashed;
             this._renderCard3Reveal(body, seq, stashed);
@@ -858,7 +858,7 @@
             self._continueBtn.removeEventListener('click', onGenerate);
             var pw = generateMasterPassword();
             self._masterPassword = pw;
-            try { window.localStorage.setItem('enm:master-pw', pw); } catch (_) {}
+            try { window.sessionStorage.setItem('enm:master-pw', pw); } catch (_) {}
             self._renderCard3Reveal(body, seq, pw);
         });
         var pasteLink = body.querySelector('[data-action="paste-saved"]');
@@ -951,7 +951,7 @@
             }
             self._continueBtn.removeEventListener('click', onUseSaved);
             self._masterPassword = pw;
-            try { window.localStorage.setItem('enm:master-pw', pw); } catch (_) {}
+            try { window.sessionStorage.setItem('enm:master-pw', pw); } catch (_) {}
             self._renderCard3Reveal(body, seq, pw);
         });
         var backLink = body.querySelector('[data-action="back-to-generate"]');
@@ -1038,7 +1038,7 @@
             }
             self._continueBtn.removeEventListener('click', onUseExisting);
             self._masterPassword = pw;
-            try { window.localStorage.setItem('enm:master-pw', pw); } catch (_) {}
+            try { window.sessionStorage.setItem('enm:master-pw', pw); } catch (_) {}
             self._renderCard3Reveal(body, seq, pw);
         });
     };
@@ -1272,66 +1272,65 @@
                 '.enm-council-form-warn[data-for="' + field + '"]');
             if (el) { el.textContent = msg; el.hidden = !msg; }
         }
-        // hasMixedCase — true when the address has any uppercase
-        // A-F hex char. EIP-55 encodes a checksum in mixed-case;
-        // wallet copies from Essentials / MetaMask produce
-        // mixed-case strings. Lowercase or all-uppercase addresses
-        // have no checksum to verify and don't need the warning.
-        function hasMixedCase(s) {
-            if (typeof s !== 'string') { return false; }
-            var hasUpper = /[A-F]/.test(s);
-            var hasLower = /[a-f]/.test(s);
-            return hasUpper && hasLower;
-        }
-        // 0.5.23 audit Session 23 — handle the two most common paste
-        // mishaps that pre-0.5.23 fell through to a generic format error:
-        //   (a) internal whitespace (newlines from PDF copy, spaces from
-        //       screenshots / wallet-app exports);
-        //   (b) capital-X prefix (some explorers / editors capitalize
-        //       the leading "0X").
-        // s.trim() only handles leading/trailing whitespace; internal
-        // whitespace inside a hex string is by definition not part of
-        // the address, so silent strip is safe.
-        function normalizeEthInput(s) {
-            if (typeof s !== 'string') { return ''; }
-            var stripped = s.replace(/\s+/g, '');
-            if (/^0X/.test(stripped)) {
-                stripped = '0x' + stripped.slice(2);
+        // v0.5.216 audit Phase 2 (AUDIT-FLOW-C401/B01, P1) — the previous
+        // `validateEth` + `hasMixedCase` + `normalizeEthInput` inline
+        // helpers are gone; same logic now lives in js/utils-eth.js
+        // (root.enmEthAddress) so settings-tab.js Class B + this Card
+        // share ONE source of truth (closes XFLOW-04 + XFLOW-16
+        // duplication). The shared helper also adds a HARD-block on
+        // wrong EIP-55 checksum (via vendored js-sha3 keccak-256), so
+        // a mixed-case address with one char's case flipped — which
+        // would silently send rewards to a different account — is now
+        // rejected at save time rather than passing through the soft
+        // warning that the operator could ignore.
+        var ethApi = root.enmEthAddress;
+        // Defensive: if utils-eth.js failed to load (script order bug
+        // / network blip), fall back to the pre-v0.5.216 soft warning
+        // behavior so the wizard stays usable. This preserves operator
+        // flow at the cost of dropping the EIP-55 hard-block until
+        // utils-eth comes back.
+        function checkAddr(raw) {
+            if (ethApi && typeof ethApi.check === 'function') {
+                return ethApi.check(raw);
             }
-            return stripped;
-        }
-        function validateEth(s) {
-            if (typeof s !== 'string') {
-                return t('friendly.setup.card_4.err_format');
+            // Stub matching enmEthAddress.check shape for the fallback.
+            var stripped = String(raw == null ? '' : raw).replace(/\s+/g, '');
+            if (/^0X/.test(stripped)) { stripped = '0x' + stripped.slice(2); }
+            if (/^0x[0-9a-fA-F]{40}$/.test(stripped)) {
+                return { ok: true, normalized: stripped, warn: 'no_keccak' };
             }
-            // 0.5.4 audit Session 4 — detect missing 0x prefix specifically.
-            // Operators paste from Essentials / MetaMask / etc. sometimes
-            // grab 40 hex chars without the 0x; pre-0.5.4 the generic
-            // "format" error confused them. Now we suggest the fix.
-            if (/^[0-9a-fA-F]{40}$/.test(s)) {
+            if (/^[0-9a-fA-F]{40}$/.test(stripped)) {
+                return { ok: false, error: 'missing_0x', suggested: '0x' + stripped };
+            }
+            return { ok: false, error: 'format' };
+        }
+        // Map enmEthAddress.check error codes → operator-facing copy.
+        function errMessage(r) {
+            if (!r || r.ok) { return ''; }
+            if (r.error === 'missing_0x') {
                 return t('friendly.setup.card_4.err_missing_0x',
-                    { suggested: '0x' + s });
+                    { suggested: r.suggested });
             }
-            if (!/^0x[0-9a-fA-F]{40}$/.test(s)) {
-                return t('friendly.setup.card_4.err_format');
+            if (r.error === 'eip55_checksum') {
+                // New copy: HARD-block message + suggested canonical form.
+                // strings.js still ships warn_mixed_case for the soft path.
+                return 'Wrong checksum — looks like a typo. Did you mean: '
+                    + (r.suggested || '?')
+                    + ' (paste fresh from your wallet to be safe).';
             }
-            return null;
+            return t('friendly.setup.card_4.err_format');
         }
 
         rewardEl.addEventListener('input', function () {
             showError('reward', '');
             showError('last4', '');
-            // 0.5.23 audit Session 23 — normalize before validating so
-            // a paste with stray whitespace shows the last-4 gate as
-            // soon as the underlying address is otherwise valid.
-            var norm = normalizeEthInput(rewardEl.value);
-            if (validateEth(norm) === null) {
+            var r = checkAddr(rewardEl.value);
+            if (r.ok) {
                 last4Row.hidden = false;
-                // 0.5.102 audit Session 102 — EIP-55 mixed-case
-                // soft warning. Doesn't block submission; the
-                // last-4 gate + operator inspection are the
-                // primary defenses. This just raises awareness.
-                if (hasMixedCase(norm)) {
+                if (r.warn === 'no_keccak' && ethApi && ethApi.hasMixedCase(r.normalized)) {
+                    // utils-eth degraded mode (keccak unavailable) —
+                    // preserve the pre-v0.5.216 soft warning so the
+                    // operator at least sees the EIP-55 awareness hint.
                     showWarn('reward', t('friendly.setup.card_4.warn_mixed_case'));
                 } else {
                     showWarn('reward', '');
@@ -1356,16 +1355,22 @@
             if (self._destroyed || !self._stillRendering(seq)) { return; }
             showError('reward', '');
             showError('last4', '');
-            // 0.5.23 audit Session 23 — normalize on click. If the
-            // normalization changed the value, write it back to the
-            // input so the operator can see exactly what was accepted
-            // and so the last-4 gate compares against the cleaned-up
-            // form.
+            // v0.5.216 audit Phase 2 — single shared validation through
+            // root.enmEthAddress (formerly 3 inline helpers). If r.error
+            // === 'eip55_checksum' the HARD-block fires: a mixed-case
+            // address with one char's case flipped used to pass through
+            // the soft warning and silently send rewards to a different
+            // account (AUDIT-FLOW-C401, P1). Now blocked at save time.
             var raw = rewardEl.value;
-            var reward = normalizeEthInput(raw);
-            if (reward !== raw) { rewardEl.value = reward; }
-            var err = validateEth(reward);
-            if (err) { showError('reward', err); return; }
+            var r = checkAddr(raw);
+            if (r.ok && r.normalized && r.normalized !== raw) {
+                rewardEl.value = r.normalized;
+            }
+            if (!r.ok) {
+                showError('reward', errMessage(r));
+                return;
+            }
+            var reward = r.normalized;
             var last4 = (last4El.value || '').trim().toLowerCase();
             var expected = reward.slice(-4).toLowerCase();
             if (last4.length === 0) {
@@ -2263,6 +2268,11 @@
             // future XSS / compromised extension / debug session reading
             // localStorage from this origin would otherwise extract it.
             try { window.localStorage.removeItem('enm:setup-intent'); } catch (_) {}
+            try { window.sessionStorage.removeItem('enm:master-pw'); } catch (_) {}
+            // v0.5.227 audit Phase 17 follow-up (AUDIT-FLOW-C301, P2) — also
+            // clean the legacy localStorage entry from operators upgrading
+            // from a pre-v0.5.227 build (we moved to sessionStorage above).
+            // One-shot best-effort migration; safe to keep indefinitely.
             try { window.localStorage.removeItem('enm:master-pw'); } catch (_) {}
             self.onComplete();
         });
