@@ -1532,14 +1532,12 @@
             identity_import_running:        'Validating and swapping keystore…',
             identity_import_ok:             '✓ Keystore restored from backup.',
 
-            identity_reset_title:           'Reset keystore (new identity)',
-            identity_reset_help:            'Generate a fresh keystore with a new password. The current one is auto-archived. The new public key will NOT match any existing on-chain producer registration.',
-            identity_reset_confirm_label:   'Type "reset keystore" to confirm:',
-            identity_reset_btn:             'Reset keystore',
-            identity_reset_confirm_dialog:  'This generates a new keystore and shows a new password ONCE. Continue?',
-            identity_reset_running:         'Stopping chain, generating new keystore, restarting…',
-            identity_reset_ok:              '✓ New keystore generated.',
-            identity_reset_password_warning:'Save this password somewhere safe — it’s shown only once and unlocks the new keystore.',
+            // v0.5.232 — identity_reset_* keys dropped along with the
+            // standalone "Reset keystore" card. The unified Settings →
+            // Reset ENM flow handles full reset (keystore + chain data
+            // atomically). Keys lived here originally for the dedicated
+            // card's title / help / confirm-label / btn / running /
+            // ok / password_warning copy — preserved in git history.
 
             identity_password_required:     'Password is required.',
 

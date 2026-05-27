@@ -67,7 +67,9 @@ const LOCKED_IN_PRODUCER_STATES = new Set([
 ]);
 
 const CHAIN_ID = 'mainchain';
-const RESET_CONFIRM_PHRASE = 'reset keystore';
+// v0.5.232 — RESET_CONFIRM_PHRASE removed along with POST /identity/reset.
+// The unified Settings → Reset ENM flow lives in routes/maintenance.js
+// (POST /maintenance/reset-everything, confirm: "RESET EVERYTHING").
 const IMPORT_CONFIRM_PHRASE = 'import';
 const MAX_IMPORT_BYTES = 10 * 1024;
 
@@ -413,24 +415,11 @@ async function _producerStateIndeterminate(producer) {
     }
 }
 
-/**
- * scrypt verify against `scrypt$<saltHex>$<derivedHex>` shape produced
- * by beta.3.10's anti-snipe setter route.
- */
-function _verifyAntiSnipe(stored, attempt) {
-    const crypto = require('node:crypto');
-    return new Promise((resolve) => {
-        const m = /^scrypt\$([a-fA-F0-9]+)\$([a-fA-F0-9]+)$/.exec(stored);
-        if (!m) { return resolve(false); }
-        const salt = Buffer.from(m[1], 'hex');
-        const want = Buffer.from(m[2], 'hex');
-        crypto.scrypt(attempt, salt, want.length, (err, derived) => {
-            if (err) { return resolve(false); }
-            try { resolve(crypto.timingSafeEqual(derived, want)); }
-            catch (_) { resolve(false); }
-        });
-    });
-}
+// v0.5.232 — _verifyAntiSnipe() removed. Its only caller was the retired
+// POST /identity/reset handler. The canonical anti-snipe verifier is
+// SelfHealingEngine._verifyAntiSnipePassword (same scrypt$<salt>$<hash>
+// shape, see services/SelfHealingEngine.js:1125) — use that if any
+// future code needs to gate destructive actions on anti-snipe.
 
 /**
  * Best-effort audit write. Never blocks the action — operator already

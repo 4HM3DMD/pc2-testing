@@ -1328,11 +1328,18 @@
         'POST /config/rollback':            'Rolled back config',
         'POST /maintenance/update':         'Started ENM update',
         'POST /maintenance/chain-resync':   'Started chain resync',
-        'POST /maintenance/uninstall':      'Started app uninstall',
-        'POST /maintenance/nuke':           'Started nuclear wipe',
+        'POST /maintenance/reset-everything': 'Started full ENM reset',
+        // v0.5.232 — these three endpoints were retired and now return
+        // 410 Gone, but the friendly-name mappings stay so historical
+        // audit rows from before v0.5.232 (and any 410 rejection rows
+        // written by the retired-endpoint handlers themselves) still
+        // render with operator-meaningful copy. Remove after the audit
+        // retention window has rolled over (~12 months).
+        'POST /maintenance/uninstall':      'Started app uninstall (retired)',
+        'POST /maintenance/nuke':           'Started nuclear wipe (retired)',
         'POST /identity/unlock':            'Unlocked keystore',
         'POST /identity/import':            'Imported keystore',
-        'POST /identity/reset':             'Reset keystore',
+        'POST /identity/reset':             'Reset keystore (retired)',
         'POST /identity/integrity/rebaseline': 'Re-baselined integrity',
         // Setup-wizard transitions (alpha era — kept for older rows).
         'POST /setup/install/:chainId':     'Installed binary',
