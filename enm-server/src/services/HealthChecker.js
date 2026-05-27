@@ -393,6 +393,13 @@ class HealthChecker {
                 } else {
                     s.firstHeightStallAt = null;
                     s.lastHeight = rpcSummary.height;
+                    // v0.5.231 — F26 multi-tick consecutive gate: any forward
+                    // height progress means the chain is NOT actually wedged,
+                    // so reset the consecutive-fork-signature counter. Without
+                    // this, an intermittent fork signature seen across stalls
+                    // separated by brief advances could still accumulate to
+                    // the threshold and propose a wipe.
+                    s.evmForkDetectedConsecutive = 0;
                 }
                 // Feed the SyncTracker so /chains/:id/sync has live velocity
                 // data. Doing this here (medium tick, every 30s) gives the
@@ -530,6 +537,22 @@ class HealthChecker {
                 if (s.firstHeightStallAt) {
                     evmForkDetected = await this._probeEvmForkSignal(chainId);
                     evmRecoveryStall = await this._probeEvmRecoveryStall(chainId);
+                    // v0.5.231 — multi-tick gate for F26. Counter persists in
+                    // the per-chain ruleState (`s`); detectF26 requires it to
+                    // reach F26_CONSECUTIVE_TICKS_MIN before proposing a
+                    // destructive wipe. Resets to 0 on any negative probe OR
+                    // any height advance (handled above where s.lastHeight
+                    // updates) — so a transient burst of fork-like errors
+                    // that resolves within a tick cannot accumulate.
+                    if (evmForkDetected) {
+                        s.evmForkDetectedConsecutive = (s.evmForkDetectedConsecutive || 0) + 1;
+                    } else {
+                        s.evmForkDetectedConsecutive = 0;
+                    }
+                } else {
+                    // Not stalled → probe didn't run → counter must be 0 so a
+                    // future stall starts the consecutive count from scratch.
+                    s.evmForkDetectedConsecutive = 0;
                 }
             }
 
@@ -1449,21 +1472,35 @@ class HealthChecker {
      * @returns {Promise<boolean>}
      */
     async _probeEvmForkSignal(chainId) {
-        const PROBE_MAX_BYTES = 64 * 1024;
+        // v0.5.231 — bumped from 64 KB to 256 KB so the recent-window filter
+        // below has enough log surface to find hits even in a verbose chain;
+        // the per-line timestamp check then narrows the count to the last 10
+        // minutes regardless of how much we read.
+        const PROBE_MAX_BYTES = 256 * 1024;
         // Two fork-class signatures, different confidence:
         //  - DOWNLOADER_FORK: geth's block downloader rejecting a peer's header
-        //    chain. Emitted transiently by a single bad peer too, so require
-        //    ≥3 hits to confirm a genuine local minority-fork wedge.
+        //    chain. Emitted transiently by a single bad peer too. v0.5.231
+        //    requires ≥10 hits (up from 3) AND all within the last 10 min to
+        //    confirm a genuine local minority-fork wedge; a transient peer
+        //    blip can no longer trip the wipe.
         //  - STATE_CORRUPT (v0.5.185 P0-C): a state/receipt-root mismatch or
-        //    BAD BLOCK on the PBFT live-insert path. When no higher-TD peer
-        //    exists this halts import with NO downloader string (the silent
-        //    halt F26 used to miss → only F4 restart fired, which re-poisons).
-        //    It's definitive local-state corruption, so ≥1 suffices — F26's
-        //    other gates (20-min stall + peers>0 + SPV-ready) prevent a fluke
-        //    from triggering the destructive wipe.
-        const DOWNLOADER_FORK = /retrieved hash chain is invalid/gi;
-        const STATE_CORRUPT = /invalid merkle root|invalid receipt root hash|BAD BLOCK/gi;
-        const DOWNLOADER_MIN_HITS = 3;
+        //    BAD BLOCK on the PBFT live-insert path. Definitive local-state
+        //    corruption, so ≥1 hit still suffices — but it ALSO has to be
+        //    inside the recent-window so a months-old BAD BLOCK in the same
+        //    log file can't trigger a fresh wipe.
+        const DOWNLOADER_FORK_RE = /retrieved hash chain is invalid/i;
+        const STATE_CORRUPT_RE = /invalid merkle root|invalid receipt root hash|BAD BLOCK/i;
+        const DOWNLOADER_MIN_HITS = 10;
+        // Geth-flavoured log line prefix: [MM-DD|HH:MM:SS.mmm] LEVEL ...
+        // We assume UTC and the current year; lines with a parsed timestamp
+        // that lies in the future (year-rollover artefact at Dec/Jan) are
+        // skipped. Lines we cannot parse a timestamp from are also skipped —
+        // safer than counting an undated line that may be ancient.
+        const TS_RE = /^\[(\d{2})-(\d{2})\|(\d{2}):(\d{2}):(\d{2})\.(\d{3})\]/;
+        const RECENT_WINDOW_MS = 10 * 60_000;
+        const nowMs = Date.now();
+        const cutoffMs = nowMs - RECENT_WINDOW_MS;
+        const currentYear = new Date(nowMs).getUTCFullYear();
         try {
             const logDir = path.join(chainDir(chainId), 'logs');
             const entries = await fsp.readdir(logDir).catch(() => []);
@@ -1480,15 +1517,32 @@ class HealthChecker {
                 const buf = Buffer.alloc(stat.size - startOffset);
                 await fd.read(buf, 0, buf.length, startOffset);
                 const text = buf.toString('utf8');
-                const stateHits = (text.match(STATE_CORRUPT) || []).length;
-                if (stateHits >= 1) {
+                let recentStateHits = 0;
+                let recentDownloaderHits = 0;
+                const lines = text.split('\n');
+                for (const line of lines) {
+                    const m = line.match(TS_RE);
+                    if (!m) continue;
+                    const [, mo, day, hh, mm, ss, ms] = m;
+                    const ts = Date.UTC(currentYear, (+mo) - 1, +day, +hh, +mm, +ss, +ms);
+                    if (ts > nowMs) continue;       // year-rollover artefact
+                    if (ts < cutoffMs) continue;    // outside the 10-min window
+                    if (STATE_CORRUPT_RE.test(line)) recentStateHits += 1;
+                    if (DOWNLOADER_FORK_RE.test(line)) recentDownloaderHits += 1;
+                }
+                if (recentStateHits >= 1) {
                     this.extensionHandle.log.debug(
-                        `${ENM_LOG_PREFIX} _probeEvmForkSignal(${chainId}): state-corruption signature ×${stateHits} (silent-halt fork)`,
+                        `${ENM_LOG_PREFIX} _probeEvmForkSignal(${chainId}): state-corruption signature ×${recentStateHits} (silent-halt fork) within last 10min`,
                     );
                     return true;
                 }
-                const dlHits = (text.match(DOWNLOADER_FORK) || []).length;
-                return dlHits >= DOWNLOADER_MIN_HITS;
+                if (recentDownloaderHits >= DOWNLOADER_MIN_HITS) {
+                    this.extensionHandle.log.debug(
+                        `${ENM_LOG_PREFIX} _probeEvmForkSignal(${chainId}): downloader-fork signature ×${recentDownloaderHits} within last 10min (threshold ${DOWNLOADER_MIN_HITS})`,
+                    );
+                    return true;
+                }
+                return false;
             } finally {
                 await fd.close().catch(() => {});
             }

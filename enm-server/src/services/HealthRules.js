@@ -137,9 +137,28 @@ const PRODUCER_INACTIVE_CRITICAL = 1300;              // F12 — close to forced
 // height-stall grace: F26's action is a destructive resync (wipe + re-sync from
 // genesis), so we want extra certainty the chain is genuinely wedged — not just
 // in a slow snap-sync batch or a brief peer churn — before triggering it. The
-// fork log-signature (≥3 "retrieved hash chain is invalid" in HealthChecker's
-// probe) is the definitive marker; this grace ensures the wedge has persisted.
+// fork log-signature (≥10 "retrieved hash chain is invalid" in HealthChecker's
+// probe, all timestamped within the last 10 min) is the definitive marker; this
+// grace ensures the wedge has persisted.
 const EVM_FORK_STALL_GRACE_MS    = 20 * 60_000;
+
+// v0.5.231 — F26 near-tip safety gate. A chain whose local head is within this
+// many blocks of the peer-reported network tip is NOT considered forked, no
+// matter what log signatures appear — it's just slow-syncing. Sized for ~5.8d
+// of 5s EVM blocks: enough headroom for a chain genuinely behind to still get
+// help, but tight enough that a 12k-block lag (~16h) gets a hard veto and a
+// destructive wipe is never proposed on a near-fully-synced chain. (Anchor:
+// F26 wiped EID at 27,835,801 vs tip 27,847,941 on 2026-05-27 — only 12k
+// blocks behind, classified as "stuck" → 16h of sync work destroyed.)
+const F26_NEAR_TIP_BLOCKS_GUARD  = 100_000;
+
+// v0.5.231 — F26 multi-tick consecutive-signature gate. The 64KB log probe is
+// stateless and a single tick can catch a transient burst of fork-like errors
+// that resolve within seconds; require the signature to PERSIST across this
+// many consecutive medium ticks (~30s each, so ~90s of unbroken evidence)
+// before proposing a wipe. Counter is owned by HealthChecker, resets to 0 on
+// any negative probe or any height advance.
+const F26_CONSECUTIVE_TICKS_MIN  = 3;
 
 // v0.5.185 (P0-B) — max per-medium-tick (30s) SPV-height advance still counted
 // as "tracking the mainchain tip" rather than an initial bulk header download.
@@ -945,29 +964,41 @@ function detectF25(snap) {
 }
 
 /**
- * F26 — wedged EVM sidechain fork (Class B, v0.5.184).
+ * F26 — wedged EVM sidechain fork (Class B, v0.5.184; HARDENED v0.5.231).
  *
- * Fires when ALL of:
+ * v0.5.231 — this rule's tier was DEMOTED from AUTOMATED_SAFE to OWNER_CONFIRMS
+ * after a false positive on 2026-05-27 wiped EID's chaindata while the chain
+ * was 99.96% synced (12k blocks from network tip). F26 now NEVER auto-executes
+ * a destructive resync — the operator MUST confirm. Three additional safety
+ * gates layer on top of the original detection:
+ *
+ *   1. Near-tip guard (F26_NEAR_TIP_BLOCKS_GUARD): if we know the peer tip and
+ *      our local head is within ~100k blocks of it, do NOT propose a wipe —
+ *      slow sync ≠ fork. If peer tip is unobservable, also refuse (fail safe).
+ *   2. Multi-tick consecutive gate (F26_CONSECUTIVE_TICKS_MIN): the fork log
+ *      signature must persist across ≥3 consecutive medium ticks (~90s of
+ *      unbroken evidence). HealthChecker maintains the counter and resets it
+ *      on any negative probe OR any height advance.
+ *   3. Pre-execution sanity recheck (SelfHealingEngine._executeChainResync):
+ *      after the operator confirms, the engine re-polls RPC and refuses to
+ *      wipe if the chain has advanced past stuckHeight by ≥50 blocks.
+ *
+ * Original detection (still required, on top of the above):
  *   - process alive
  *   - RPC reachable + peers > 0          (so it's NOT a connectivity / peer-zero
  *                                          problem — F3/F16 own that)
  *   - height stalled past EVM_FORK_STALL_GRACE_MS (20 min)
- *   - HealthChecker's medium-tick log probe set snap.evmForkDetected (≥3
- *     "retrieved hash chain is invalid" lines in the recent EVM node-log tail)
+ *   - HealthChecker's medium-tick log probe set snap.evmForkDetected (≥10
+ *     "retrieved hash chain is invalid" lines timestamped within last 10 min
+ *     in the recent EVM node-log tail — strengthened in v0.5.231)
+ *   - snap.evmSpvReady === true (SPV catching up ≠ data fork)
  *
- * What it means: the local chaindata has diverged onto a minority fork, so geth
- * rejects every canonical peer's header chain ("retrieved hash chain is
- * invalid") and can never advance. A restart does NOT help — geth comes back on
- * the same forked head (and a mining node re-mines the fork). The only recovery
- * is to wipe the EVM chaindata (mining keystore preserved) and re-sync clean
- * from peers.
- *
- * Tier AUTOMATED_SAFE: the engine auto-resyncs, but gated by a dedicated
- * once-per-EVM_RESYNC_MIN_INTERVAL_MS budget (SelfHealingEngine) — a chain that
- * re-forks inside that window escalates to OWNER_CONFIRMS instead of wiping in a
- * loop. Destructive but recoverable (the chain re-syncs; keystore is always
- * preserved), and the alternative is an indefinite silent outage. Honours the
- * master autoExecuteSafe toggle like every AUTOMATED_SAFE rule.
+ * What it means when ALL gates pass: the local chaindata has diverged onto a
+ * minority fork, so geth rejects every canonical peer's header chain
+ * ("retrieved hash chain is invalid") and can never advance. A restart does
+ * NOT help — geth comes back on the same forked head. The only recovery is to
+ * wipe the EVM chaindata (mining keystore + nodekey preserved as of v0.5.231)
+ * and re-sync clean from peers — but the operator confirms first, every time.
  *
  * Runs BEFORE F4 in the detector queue; detectF4 also yields on
  * snap.evmForkDetected so only F26 owns the fork case (no duplicate restart
@@ -1000,18 +1031,52 @@ function detectF26(snap) {
     if (!firstStall) return null;
     if (Date.now() - firstStall < EVM_FORK_STALL_GRACE_MS) return null;
 
+    // v0.5.231 — multi-tick consecutive gate. A single-tick fork signature can
+    // be a transient burst; require ≥3 consecutive medium ticks before we even
+    // PROPOSE (let alone execute) a destructive wipe. HealthChecker owns the
+    // counter — resets to 0 on any negative probe OR any height advance.
+    const consec = (snap.ruleState && snap.ruleState.evmForkDetectedConsecutive) || 0;
+    if (consec < F26_CONSECUTIVE_TICKS_MIN) return null;
+
+    // v0.5.231 — near-tip safety guard. F26 fired on EID at 27,835,801 vs tip
+    // 27,847,941 on 2026-05-27 — only 12k blocks (~16h) behind, but ruled
+    // "forked" and wiped. A chain that's nearly caught up is almost certainly
+    // slow-syncing, not on a minority fork. Refuse to propose a wipe if we
+    // can see the peer tip and we're within F26_NEAR_TIP_BLOCKS_GUARD of it.
+    // Fail safe: if we can't see the peer tip at all, also refuse — better to
+    // stall the rule than risk another false-positive 16h-loss wipe.
+    const localHeight = snap.rpcSummary.height || 0;
+    const peerTip = snap.rpcSummary.peerMaxHeight
+        || snap.rpcSummary.networkHeight
+        || 0;
+    if (peerTip <= 0) return null;
+    if ((peerTip - localHeight) < F26_NEAR_TIP_BLOCKS_GUARD) return null;
+
     return {
         ruleId: 'F26',
-        tier: HEALING_TIERS.AUTOMATED_SAFE,
-        summaryAction: `Auto-resync ${snap.chainId} (forked off the network)`,
+        // v0.5.231 — NEVER auto-execute. Operator confirms every destructive
+        // wipe; the rate-limit/escalation logic in SelfHealingEngine stays in
+        // place to add context (e.g. "this chain was wiped in the last 24h").
+        tier: HEALING_TIERS.OWNER_CONFIRMS,
+        summaryAction: `Confirm resync of ${snap.chainId} (suspected fork wedge)`,
         summaryReason:
-            `${snap.chainId} has been stuck at block ${snap.rpcSummary.height} for >20 min and its `
-            + 'node log shows it rejecting every peer with "retrieved hash chain is invalid" — its '
-            + 'local chain data forked off the network and cannot recover by restarting. Auto-resync '
-            + 'wipes the chain data (mining keystore preserved) and re-syncs from peers.',
+            `${snap.chainId} has been stuck at block ${snap.rpcSummary.height} for >20 min, the network `
+            + `tip is at block ${peerTip} (${peerTip - localHeight} blocks ahead), and its node log has `
+            + 'shown "retrieved hash chain is invalid" persistently for the last several health checks — '
+            + 'the local chain data appears to have forked off the network and cannot recover by '
+            + 'restarting. Confirm to wipe the chain data (mining keystore AND network identity '
+            + 'preserved) and re-sync clean from peers. If you suspect the chain is just slow-syncing '
+            + 'or a peer-connectivity blip, dismiss this and check peers/bootnodes first.',
         // stuckHeight lets the engine's auto-resolve sweep tell "still forked"
-        // from "recovered" (height climbed past it), mirroring F4's payload.
-        payload: { action: 'evm-fork-resync', chainId: snap.chainId, stuckHeight: snap.rpcSummary.height },
+        // from "recovered" (height climbed past it), AND drives the v0.5.231
+        // pre-execution sanity recheck in _executeChainResync.
+        payload: {
+            action: 'evm-fork-resync',
+            chainId: snap.chainId,
+            stuckHeight: snap.rpcSummary.height,
+            peerTipAtDetection: peerTip,
+            consecutiveTicks: consec,
+        },
     };
 }
 
@@ -1237,8 +1302,13 @@ const RULE_METADATA = Object.freeze({
     F23: { tier: 'CRITICAL_NOTIFY', title: 'Arbiter cross-chain unreachable',
            description: 'The Arbiter signs multisig payloads across all 4 chains. If any cross-chain RPC becomes unreachable, the Arbiter cannot validate or produce cross-chain signatures for that chain. Operator must investigate the affected chain; alert auto-clears when all 4 RPCs respond.' },
     // v0.5.184 — Class B-only. EVM sidechain wedged on a minority fork.
-    F26: { tier: 'AUTOMATED_SAFE', title: 'Auto-resync wedged EVM fork',
-           description: 'On an EVM sidechain (ESC/EID/PG) that has been stuck for >20 min while its node log rejects every peer with "retrieved hash chain is invalid", the local chain data has forked off the network and a restart cannot recover it. Auto-resync wipes the chain data (mining keystore preserved) and re-syncs from peers. Rate-limited to once per chain per 24h; a chain that re-forks inside that window escalates to operator confirmation instead of wiping again.' },
+    // v0.5.231 — DEMOTED to OWNER_CONFIRMS after a false-positive wiped EID at
+    // 99.96% synced. Operator now confirms every destructive resync; three
+    // additional safety gates (near-tip / multi-tick / pre-exec recheck) make
+    // it close to impossible to propose a wipe on a chain that isn't actually
+    // forked. See detectF26 docstring + audit log 2026-05-27 17:32:45.
+    F26: { tier: 'OWNER_CONFIRMS', title: 'Confirm resync of wedged EVM fork',
+           description: 'On an EVM sidechain (ESC/EID/PG) that has been stuck for >20 min, is FAR from the network tip (>100k blocks behind), and whose node log persistently shows "retrieved hash chain is invalid" across multiple consecutive health checks, the local chain data appears to have forked off the network and a restart cannot recover it. Proposes a destructive resync that wipes the chain data (mining keystore AND network identity/nodekey preserved) and re-syncs from peers. ALWAYS requires operator confirmation — never auto-executes. Just before the wipe runs, conditions are re-verified and the action aborts if the chain has advanced since the proposal was raised. (v0.5.231 hardened after a 2026-05-27 false positive wiped a 99.96%-synced chain.)' },
     // v0.5.185 (P1-A) — Class B-only, alert-only. PBFT consensus-recovery stall.
     F27: { tier: 'CRITICAL_NOTIFY', title: 'EVM consensus-recovery stall',
            description: 'On an EVM sidechain (ESC/EID/PG) that is stuck for >20 min with peers but a PBFT recovery-stall log signature ("wait for recoved states" / "can not find active peer"), surface a critical alert. This is a quorum / peer problem, not a data fork — an auto-resync cannot fix it, so F26 yields to this alert and the operator restores peers/bootnodes instead.' },

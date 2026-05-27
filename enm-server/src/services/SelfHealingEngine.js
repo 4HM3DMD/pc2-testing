@@ -750,6 +750,83 @@ class SelfHealingEngine {
     }
 
     /**
+     * v0.5.231 — Final sanity check before an operator-confirmed evm-fork-resync
+     * actually destroys chaindata. The OWNER_CONFIRMS path can leave a proposal
+     * sitting in the dashboard for minutes-to-hours; by the time the operator
+     * clicks confirm, peers may have re-converged or a slow sync may have caught
+     * up. We re-poll the chain's RPC and abort the wipe if:
+     *
+     *   - the local height has advanced ≥ ABORT_PROGRESS_BLOCKS past the
+     *     stuckHeight recorded in the proposal payload (chain is recovering), OR
+     *   - the RPC is unreachable (we cannot confirm the condition still exists,
+     *     so we refuse to wipe; fail safe).
+     *
+     * On abort we write an AuditLog row so the dashboard shows why nothing
+     * happened. Returns `{abort:true, outcome:string}` to abort, or null to
+     * proceed with the wipe.
+     *
+     * @param {object} proposal
+     * @param {object} payload   decoded proposal.payload
+     * @returns {Promise<{abort:boolean, outcome:string}|null>}
+     * @private
+     */
+    async _preWipeRecheck(proposal, payload) {
+        const ABORT_PROGRESS_BLOCKS = 50;
+        const chainId = proposal.chain_id;
+        const stuckHeight = (payload && typeof payload.stuckHeight === 'number')
+            ? payload.stuckHeight : null;
+        if (stuckHeight === null) {
+            return null; // legacy proposal with no stuckHeight — proceed as before
+        }
+        let currentHeight = null;
+        try {
+            const cfg = await this._loadChainConfig(chainId);
+            const port = cfg && cfg.ports && cfg.ports.rpc;
+            if (!port) {
+                throw new Error('no RPC port configured');
+            }
+            const { EthRpcClient } = require('./EthRpcClient');
+            const client = new EthRpcClient({ host: '127.0.0.1', port, timeoutMs: 3000 });
+            // getBlockNumber returns a parsed Number; throws on RPC error.
+            currentHeight = await client.getBlockNumber();
+            if (!Number.isFinite(currentHeight)) {
+                throw new Error(`eth_blockNumber returned non-finite: ${currentHeight}`);
+            }
+        } catch (err) {
+            const outcome = `Aborted pre-wipe: RPC unreachable (${err.message}) — refusing to destroy chaindata without confirming the chain is still stuck`;
+            await this._appendPreWipeAbortAudit(proposal, payload, outcome);
+            return { abort: true, outcome };
+        }
+        if (currentHeight > stuckHeight + ABORT_PROGRESS_BLOCKS) {
+            const outcome = `Aborted pre-wipe: chain advanced from stuck height ${stuckHeight} to ${currentHeight} (${currentHeight - stuckHeight} blocks) since the proposal was raised — chain is recovering, no wipe needed`;
+            await this._appendPreWipeAbortAudit(proposal, payload, outcome);
+            return { abort: true, outcome };
+        }
+        return null;
+    }
+
+    /** @private */
+    async _appendPreWipeAbortAudit(proposal, payload, outcome) {
+        try {
+            const db = this.getDb();
+            await AuditLog.append(db, {
+                walletAddress: proposal.wallet_address || this.ownerWallet,
+                chainId: proposal.chain_id,
+                ruleId: proposal.rule_id || 'F26',
+                tier: HEALING_TIERS.OWNER_CONFIRMS,
+                decision: AUDIT_DECISION.EXECUTED, // operator did confirm; we declined
+                executor: 'system',
+                outcome,
+                payload: payload || null,
+            });
+        } catch (err) {
+            this.extensionHandle.log.warn(
+                `${ENM_LOG_PREFIX} pre-wipe-abort audit append failed (${err.message}) — abort itself succeeded`,
+            );
+        }
+    }
+
+    /**
      * v0.5.184 — F26 executor. Wipe the forked EVM chaindata (mining keystore
      * preserved) and re-sync clean from peers, via EnmMaintenanceManager's
      * autoRestart path. That manager acquires its OWN maintenance lock and
@@ -1135,6 +1212,20 @@ class SelfHealingEngine {
                 // v0.5.184 — F26 escalated to OWNER_CONFIRMS (the chain
                 // re-forked inside the 24h auto-resync budget) and the
                 // operator confirmed. Perform the wipe + resync now.
+                // v0.5.231 — pre-execution sanity recheck. The proposal may
+                // have sat in the dashboard for minutes-to-hours before the
+                // operator confirmed; the underlying condition can have
+                // resolved itself in that gap (slow sync caught up, peers
+                // re-converged, etc.). Before destroying chaindata, re-poll
+                // the chain's RPC: if the height has advanced past the
+                // stuckHeight captured at detection time, abort. Better to
+                // stall an old proposal than wipe a recovered chain.
+                {
+                    const recheck = await this._preWipeRecheck(proposal, payload);
+                    if (recheck && recheck.abort) {
+                        return { success: false, outcome: recheck.outcome };
+                    }
+                }
                 try {
                     await this._executeChainResync(proposal.chain_id);
                     return { success: true, outcome: 'chain-resync (operator-confirmed) complete — re-syncing from peers' };

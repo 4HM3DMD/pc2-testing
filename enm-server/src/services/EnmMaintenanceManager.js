@@ -335,6 +335,41 @@ async function chainResync(opts) {
         // top of EnmBootstrapDownloader._run.
         const cdir = DataDir.chainDir(chainId);
         const removed = [];
+        // v0.5.231 — Preserve network identity (nodekey) across the wipe. The
+        // chain state we're wiping has NO causal relationship with the nodekey:
+        // nodekey is just the libp2p discovery key that lets peers find us, and
+        // throwing it away every wipe means every peer in our address book has
+        // to re-add us by IP — which slows peer reconvergence from seconds to
+        // ~10 min. The on-chain identity (the mining keystore) is preserved
+        // separately by _backupKeystoreNow above. We read the nodekey into a
+        // dotfile OUTSIDE the geth/pgp dir so it survives the rm sweep below,
+        // then restore it before adapter.start runs.
+        // (Anchor: the 2026-05-27 EID wipe regenerated nodekey at 17:32:45,
+        // causing peer churn during the resync; v0.5.231 keeps the same key.)
+        let nodekeyBackup = null;
+        if (adapter.chainClass === 'B') {
+            const gethInstance = (chainId === 'pg') ? 'pgp' : 'geth';
+            const srcNodekey = path.join(cdir, 'data', gethInstance, 'nodekey');
+            try {
+                const buf = await fsp.readFile(srcNodekey);
+                const backupPath = path.join(cdir, 'data', '.nodekey.preserved');
+                await fsp.writeFile(backupPath, buf, { mode: 0o600 });
+                nodekeyBackup = { instance: gethInstance, restorePath: srcNodekey, backupPath };
+                log.info(
+                    `${ENM_LOG_PREFIX} maintenance.chainResync(${chainId}) — nodekey backed up `
+                    + `(${buf.length} bytes) for restore after wipe`,
+                );
+            } catch (err) {
+                // ENOENT here just means the chain has never started, or it
+                // was already wiped — nothing to preserve, not an error.
+                if (err.code !== 'ENOENT') {
+                    log.warn(
+                        `${ENM_LOG_PREFIX} maintenance.chainResync(${chainId}) — nodekey backup `
+                        + `failed: ${err.message} — geth will generate a fresh identity post-wipe`,
+                    );
+                }
+            }
+        }
         // P1-7 (v0.5.180) — class-aware resync targets. The wipe list used to be
         // ELA-only (elastos/*), so for EVM sidechains (esc/eid/pg) it silently
         // NO-OP'd — the UI "Chain Resync" couldn't repair a forked/corrupt EVM
@@ -419,6 +454,32 @@ async function chainResync(opts) {
                 log.info(`${ENM_LOG_PREFIX} maintenance.chainResync removed: ${p}`);
             } catch (err) {
                 log.warn(`${ENM_LOG_PREFIX} maintenance.chainResync rm ${p} failed: ${err.message}`);
+            }
+        }
+
+        // v0.5.231 — Restore the preserved nodekey so geth boots with our
+        // existing libp2p discovery key instead of generating a new one. We
+        // unconditionally restore here (not only on autoRestart) because the
+        // operator may also start the chain manually later — same reasoning
+        // either way: a fresh peerset reconverges much faster when we keep
+        // our identity. mkdir the geth/pgp dir if missing (rm above deleted
+        // it); writeFile with 0o600 mirrors geth's own permissions.
+        if (nodekeyBackup) {
+            try {
+                const dir = path.dirname(nodekeyBackup.restorePath);
+                await fsp.mkdir(dir, { recursive: true, mode: 0o700 });
+                const buf = await fsp.readFile(nodekeyBackup.backupPath);
+                await fsp.writeFile(nodekeyBackup.restorePath, buf, { mode: 0o600 });
+                await fsp.unlink(nodekeyBackup.backupPath).catch(() => {});
+                log.info(
+                    `${ENM_LOG_PREFIX} maintenance.chainResync(${chainId}) — nodekey restored to `
+                    + `${nodekeyBackup.restorePath}; network identity preserved across wipe`,
+                );
+            } catch (err) {
+                log.warn(
+                    `${ENM_LOG_PREFIX} maintenance.chainResync(${chainId}) — nodekey restore `
+                    + `failed: ${err.message} — geth will generate a fresh identity`,
+                );
             }
         }
 
