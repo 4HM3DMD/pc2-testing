@@ -1052,15 +1052,24 @@ function detectF26(snap) {
     if (peerTip <= 0) return null;
     if ((peerTip - localHeight) < F26_NEAR_TIP_BLOCKS_GUARD) return null;
 
+    // v0.5.234 — branding pass: use the canonical display name in the
+    // operator-facing proposal copy instead of the raw lowercase chainId.
+    // Convention is "Main chain" for mainchain and all-caps for the EVM
+    // sidechains (ESC/EID/PG), per strings.js (~line 444) + session 28's
+    // wizard sub copy. PG is a PUBLIC EVM PBFT sidechain — never
+    // parenthesise it as "(Privacy)".
+    const chainDisplay = snap.chainId === 'mainchain'
+        ? 'Main chain'
+        : (snap.chainId || '').toUpperCase();
     return {
         ruleId: 'F26',
         // v0.5.231 — NEVER auto-execute. Operator confirms every destructive
         // wipe; the rate-limit/escalation logic in SelfHealingEngine stays in
         // place to add context (e.g. "this chain was wiped in the last 24h").
         tier: HEALING_TIERS.OWNER_CONFIRMS,
-        summaryAction: `Confirm resync of ${snap.chainId} (suspected fork wedge)`,
+        summaryAction: `Confirm resync of ${chainDisplay} (suspected fork wedge)`,
         summaryReason:
-            `${snap.chainId} has been stuck at block ${snap.rpcSummary.height} for >20 min, the network `
+            `${chainDisplay} has been stuck at block ${snap.rpcSummary.height} for >20 min, the network `
             + `tip is at block ${peerTip} (${peerTip - localHeight} blocks ahead), and its node log has `
             + 'shown "retrieved hash chain is invalid" persistently for the last several health checks — '
             + 'the local chain data appears to have forked off the network and cannot recover by '

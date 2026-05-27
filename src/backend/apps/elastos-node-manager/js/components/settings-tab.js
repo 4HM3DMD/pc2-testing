@@ -988,7 +988,7 @@
         });
         var wlist = document.createElement('div');
         wlist.className = 'enm-detail-list';
-        wlist.appendChild(kv('Mining address (ELA mainchain)', addr, true));
+        wlist.appendChild(kv('Mining address (Main chain)', addr, true));
         wlist.appendChild(kv('SideChainPow fee (ELA)', String(fee), false));
         wallet.body.appendChild(wlist);
         parent.appendChild(wallet.card);
@@ -2633,7 +2633,7 @@
     /**
      * v0.5.232 — Paint the Resync sub-card based on the operator's
      * setupRole. Called on Danger Zone section activation, idempotent.
-     * BPoS gets a single "Resync mainchain" button; Council gets a
+     * BPoS gets a single "Resync Main chain" button; Council gets a
      * checkbox list of {mainchain, esc, eid, pg} with "Resync selected"
      * + a static "RESYNC" typed-confirm gate.
      */
@@ -2705,11 +2705,17 @@
         pane.modeContainer.appendChild(help);
         var list = document.createElement('div');
         list.className = 'enm-danger-resync-checklist';
+        // v0.5.234 — canonical UI display names. Verified against the rest
+        // of the app: "Main chain" (space, capital M only) for ELA; "ESC
+        // (Smart Chain)" / "EID (Identity Chain)" for those two EVMs; just
+        // "PG" with NO parenthetical for PG — PG is a PUBLIC EVM PBFT
+        // sidechain, not a privacy chain (see strings.js line ~438 / Session
+        // 28 comment fixing the previously wrong "PG (private chain)" label).
         var COUNCIL_CHAINS = [
-            { id: 'mainchain', label: 'ELA mainchain' },
-            { id: 'esc',       label: 'ESC (Smart Contract)' },
-            { id: 'eid',       label: 'EID (Identity)' },
-            { id: 'pg',        label: 'PG (Privacy)' },
+            { id: 'mainchain', label: 'Main chain' },
+            { id: 'esc',       label: 'ESC (Smart Chain)' },
+            { id: 'eid',       label: 'EID (Identity Chain)' },
+            { id: 'pg',        label: 'PG' },
         ];
         COUNCIL_CHAINS.forEach(function (c) {
             var row = document.createElement('label');

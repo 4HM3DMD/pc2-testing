@@ -494,7 +494,7 @@
                     sub_bpos:        'A quick pre-flight then we kick the mainchain install off.',
                     rerun:           'Re-run pre-flight',
                     snapshot_label:  'Use official mainchain snapshot (recommended)',
-                    snapshot_hint:   'Default ON. Downloads ~10 GB so the ELA mainchain skips its '
+                    snapshot_hint:   'Default ON. Downloads ~10 GB so the Main chain skips its '
                                    + '1–3 day genesis sync. Needs ~220 GB free disk for the full '
                                    + 'Council install (chaindata growth dominates, not the snapshot).',
                     // v0.5.199 — explicit EVM-cold-sync disclosure. The Card 5
@@ -1410,9 +1410,14 @@
             danger_resync_no_selection:     'Pick at least one chain to resync.',
 
             // v0.5.232 — BPoS variant (single mainchain).
-            danger_resync_bpos_help:        'BPoS supernodes only run the ELA mainchain — confirm to wipe its data and resync from peers.',
+            // v0.5.234 — branding pass: "ELA mainchain" → "Main chain" +
+            // "Resync mainchain" → "Resync Main chain" for parity with the
+            // rest of the app. Typed-confirm value stays the literal
+            // chainId "mainchain" because the backend gate matches that
+            // exact lowercase token.
+            danger_resync_bpos_help:        'BPoS supernodes only run the Main chain — confirm to wipe its data and resync from peers.',
             danger_resync_bpos_confirm_label: 'Type "mainchain" to confirm:',
-            danger_resync_bpos_btn:         'Resync mainchain',
+            danger_resync_bpos_btn:         'Resync Main chain',
 
             // v0.5.232 — Council variant (multi-chain).
             danger_resync_council_help:     'Council nodes run four chains with on-disk data. Tick the ones you want to wipe (default all), then type RESYNC to confirm. Each chain wipes serially — total time scales linearly with selection.',
