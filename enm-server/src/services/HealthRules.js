@@ -1049,6 +1049,113 @@ function detectF27(snap) {
 }
 
 /**
+ * F28 — CR Council MemberState degraded (Class A / mainchain only).
+ *
+ * v0.5.230 — parallel to F12 for the Council operator audience. F12 fires
+ * when the BPoS producer-registry record reads state='Inactive'; F28
+ * fires when this node's CR Committee record (in `listcurrentcrs`'s
+ * `crmembersinfo[]`) reads MemberState != 'Elected'. Both rules surface
+ * the same kind of operator-facing risk (missed rotation rounds → lost
+ * rewards) for the two distinct roles a node can play in Elastos DPoS.
+ *
+ * Snap shape consumed: `snap.cr` populated by HealthChecker._fetchCrState
+ * (mirrors _fetchBposState), itself a thin wrapper over CrMembership
+ * Service.detectCrMembership. Null when:
+ *   - chain is not class A (rule self-gates below)
+ *   - operator has no node pubkey configured
+ *   - mainchain RPC unreachable (CrMembershipService returns source='error')
+ *   - the operator is not a CR Committee member (source='not-in-committee')
+ * In all those cases F28 stays quiet (returns null), same defensive
+ * pattern as F12's null-guard on snap.bpos.producer.
+ *
+ * State decision table (mirrors Elastos.ELA/cr/state/keyframe.go:24-42):
+ *   Elected     → no fire (steady state, healthy)
+ *   Inactive    → WARN if impeachmentVotes==0, CRITICAL if > 0 (close to
+ *                 impeachment threshold). Recoverable via Essentials →
+ *                 Activate CR member.
+ *   Impeached   → CRITICAL (impeachment threshold reached; seat lost for
+ *                 the rest of this term)
+ *   Returned    → CRITICAL (operator voluntarily withdrew; deposit
+ *                 returnable but seat gone)
+ *   Terminated  → CRITICAL (term ended without re-election; informational
+ *                 only post-term)
+ *   Illegal     → CRITICAL (caught misbehaving — deposit forfeited)
+ *
+ * Tier: NEVER_AUTOMATIC. ENM cannot recover any of these states for the
+ * operator: Activate / RecoverFromInactive require the operator's owner
+ * key (which ENM intentionally never holds, Rev-6 RNG findings). The
+ * summary points the operator at Essentials.
+ *
+ * Hard-gated to mainchain (snap.chainId === 'mainchain') because CR
+ * Committee membership is a Class-A-only concept; the rule runner would
+ * still skip non-A chains via _fetchCrState returning null, but the
+ * explicit chainId gate makes the intent clear in code-review.
+ */
+function detectF28(snap) {
+    if (!snap || snap.chainId !== 'mainchain') return null;
+    if (!snap.cr) return null;
+    const cr = snap.cr;
+    if (!cr.isCrMember) return null;
+    const state = String(cr.state || '').toLowerCase();
+    if (state === 'elected') return null;  // healthy steady state
+
+    // Pre-fire severity decision. Inactive with no impeachment votes is
+    // WARN (still recoverable cheaply); Inactive with votes climbing,
+    // or any terminal state, is CRITICAL.
+    const impeachmentVotes = parseFloat(cr.impeachmentVotes || '0');
+    const isCritical = (state !== 'inactive') || (impeachmentVotes > 0);
+    const severity = isCritical ? 'CRITICAL' : 'WARNING';
+
+    // Recovery copy is state-specific so the operator gets the right hint.
+    let summaryAction;
+    let summaryReason;
+    if (state === 'inactive') {
+        summaryAction = 'CR Council member Inactive — Activate via Essentials';
+        summaryReason = 'Your CR Committee member record reads MemberState=Inactive '
+            + '(the chain skipped your DPoS slot for too many consecutive rounds). '
+            + 'You can recover by signing an Activate transaction from the wallet '
+            + 'that holds your CR registration deposit, via Elastos Essentials. '
+            + 'ENM cannot do this for you.'
+            + (impeachmentVotes > 0 ? ` Impeachment votes: ${cr.impeachmentVotes} — `
+                + 'address this before votes pass the impeachment threshold.' : '');
+    } else if (state === 'impeached') {
+        summaryAction = 'CR Council member Impeached — seat lost for this term';
+        summaryReason = 'Your CR Committee member record reads MemberState=Impeached. '
+            + 'The impeachment vote threshold was reached on-chain; your seat is gone '
+            + 'for the rest of this Committee term. Your registration deposit is still '
+            + 'yours but Activate is no longer an option. Re-register via Essentials '
+            + 'in the next CR election cycle.';
+    } else if (state === 'returned') {
+        summaryAction = 'CR Council member Returned — deposit refundable';
+        summaryReason = 'Your CR Committee member record reads MemberState=Returned, '
+            + 'which means you voluntarily withdrew from the seat (or the chain '
+            + 'returned you after impeachment). Deposit is refundable via Essentials; '
+            + 'your DPoS slot is no longer in the arbiter slate.';
+    } else {
+        // Terminated / Illegal / any future MemberState value.
+        summaryAction = `CR Council member ${cr.state} — investigate via Essentials`;
+        summaryReason = `Your CR Committee member record reads MemberState=${cr.state}. `
+            + 'This is a terminal state for the current term; check Elastos Essentials '
+            + 'for the specific cause and next steps.';
+    }
+
+    return {
+        ruleId: 'F28',
+        tier: HEALING_TIERS.NEVER_AUTOMATIC,
+        severity,
+        summaryAction,
+        summaryReason,
+        payload: {
+            action: 'cr-council-investigate',
+            chainId: snap.chainId,
+            crState: cr.state,
+            impeachmentVotes: cr.impeachmentVotes || null,
+            nickname: cr.nickname || null,
+        },
+    };
+}
+
+/**
  * Per-rule enable defaults. Per Architectural Invariant #7, healing ships
  * with F1 (auto-restart on unexpected exit) only. F2-F19 are off until
  * the operator opts in via /api/enm/healing/rules/:ruleId/enable.
@@ -1135,6 +1242,9 @@ const RULE_METADATA = Object.freeze({
     // v0.5.185 (P1-A) — Class B-only, alert-only. PBFT consensus-recovery stall.
     F27: { tier: 'CRITICAL_NOTIFY', title: 'EVM consensus-recovery stall',
            description: 'On an EVM sidechain (ESC/EID/PG) that is stuck for >20 min with peers but a PBFT recovery-stall log signature ("wait for recoved states" / "can not find active peer"), surface a critical alert. This is a quorum / peer problem, not a data fork — an auto-resync cannot fix it, so F26 yields to this alert and the operator restores peers/bootnodes instead.' },
+    // v0.5.230 — Class A (mainchain) — alert-only. CR Council MemberState drift.
+    F28: { tier: 'NEVER_AUTOMATIC', title: 'CR Council member state degraded',
+           description: 'Parallel to F12 for BPoS producers. Fires when this node\'s CR Committee MemberState is anything other than \'Elected\' — typically Inactive (skipped slots for too many consecutive rounds), Impeached, Returned, Terminated, or Illegal. Recovery for Inactive is the Activate flow in Elastos Essentials; other states are terminal-for-the-term and need the operator to investigate via Essentials. ENM cannot recover this for the operator (no owner key).' },
 });
 
 // beta.3.22 — every rule is enabled by default. The operator-facing
@@ -1171,6 +1281,7 @@ const DEFAULT_ENABLED = Object.freeze({
     F23: true,  // beta.0.3.14 — Class D arbiter cross-chain unreachable
     F26: true,  // v0.5.184 — Class B wedged-fork auto-resync (rate-limited)
     F27: true,  // v0.5.185 — Class B PBFT recovery-stall alert (alert-only)
+    F28: true,  // v0.5.230 — Class A CR Council MemberState degraded (alert-only)
 });
 
 // Global rule overrides (apply to all chains). Pre-3.87 this was the only
@@ -1303,6 +1414,8 @@ function runAll(snap) {
         ['F24', detectF24],
         // beta.0.3.14 (Wave M6.5) — Class D arbiter cross-chain.
         ['F23', detectF23],
+        // v0.5.230 — Class A CR Council MemberState degraded (F12 sibling).
+        ['F28', detectF28],
     ];
 
     // beta.3.87 — Wave M1.3 — DPoS-only rules. F11 (rotation stuck),
@@ -1399,6 +1512,7 @@ module.exports = {
     detectF23,  // beta.0.3.14 (Wave M6.5)
     detectF26,  // v0.5.184 — Class B wedged-fork auto-resync
     detectF27,  // v0.5.185 (P1-A) — Class B PBFT recovery-stall alert
+    detectF28,  // v0.5.230 — Class A CR Council MemberState degraded
     EVM_FORK_STALL_GRACE_MS,
     SPV_CAUGHTUP_MAX_DELTA,  // v0.5.185 (P0-B)
     PEER_ZERO_GRACE_MS,

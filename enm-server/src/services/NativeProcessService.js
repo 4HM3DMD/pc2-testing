@@ -558,13 +558,39 @@ class NativeProcessService extends EventEmitter {
         // stdin, so the post-spawn keystore-password pipe (ela/arbiter) still
         // reaches the chain. argv is forwarded verbatim ($0=binary, "$@"=args).
         const NOFILE_SOFT_TARGET = 40960;
+        // v0.5.230 — stdio: keep stdin as a pipe (ela reads its keystore
+        // password from stdin per node.sh:878 + the BPoS arbiter mode
+        // password feed below), but route stdout/stderr to /dev/null
+        // ('ignore') instead of through ENM's runtime pipes.
+        //
+        // Why: every chain binary already writes its own logs via its
+        // own --log/--logdir flags (ela → chains/mainchain/elastos/logs/
+        // node/*.log; geth forks → their own logdir; oracle scripts →
+        // their stdout was unread anyway). The pre-230 ['pipe', 'pipe',
+        // 'pipe'] only existed for the stdin password feed; the stdout/
+        // stderr pipes back to ENM were never read, but they DID hold an
+        // FD attached to ENM's process lifecycle.
+        //
+        // The consequence pre-230: when ENM exited (deploy SIGTERM,
+        // crash, OOM, anything), Node closed those pipe FDs. The
+        // chain's NEXT write to stdout/stderr would deliver SIGPIPE →
+        // the chain process terminates by default. Net effect: every
+        // ENM restart killed all 8 child chains, even with detached:
+        // true. autoStart then respawned them ~60s later. Operator-
+        // visible as "all chains briefly down on every deploy."
+        //
+        // 'ignore' makes the kernel-level fd be /dev/null inside the
+        // child. The child can write to stdout/stderr forever without
+        // anyone closing on them — ENM exiting is invisible to the
+        // child's stdio. Combined with detached:true + child.unref(),
+        // children are now truly long-lived across ENM lifecycle events.
         const child = spawn(
             '/bin/sh',
             ['-c', `ulimit -n ${NOFILE_SOFT_TARGET} 2>/dev/null; exec "$0" "$@"`, binaryPath, ...spawnArgs],
             {
                 cwd,
                 env: childEnv,
-                stdio: ['pipe', 'pipe', 'pipe'],
+                stdio: ['pipe', 'ignore', 'ignore'],
                 detached: true,
             },
         );

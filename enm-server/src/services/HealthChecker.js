@@ -605,6 +605,14 @@ class HealthChecker {
                 ? await this._fetchBposState(chainId, chainCfg, s)
                 : null;
 
+            // v0.5.230 — CR Council membership snapshot for F28. Only the
+            // mainchain has CR Committee state; non-Class-A chains pass null
+            // and F28 self-gates on the chainId === 'mainchain' check. Best
+            // effort; failure leaves cr=null and F28 stays quiet.
+            const cr = (chainId === 'mainchain')
+                ? await this._fetchCrState(chainCfg).catch(() => null)
+                : null;
+
             const snap = {
                 chainId,
                 processStatus: this.processService.statusSync(chainId),
@@ -616,6 +624,7 @@ class HealthChecker {
                 chainConfig: chainCfg,
                 ruleState: s,
                 bpos,
+                cr,
                 clockSkew,
                 hostConflicts,
             };
@@ -625,7 +634,8 @@ class HealthChecker {
             const dets = HealthRules.runAll(snap).filter((d) =>
                 d.ruleId === 'F5'  || d.ruleId === 'F6'  || d.ruleId === 'F8'
                 || d.ruleId === 'F11' || d.ruleId === 'F12' || d.ruleId === 'F13'
-                || d.ruleId === 'F19' || d.ruleId === 'F25');
+                || d.ruleId === 'F19' || d.ruleId === 'F25'
+                || d.ruleId === 'F28');  // v0.5.230 — CR Council MemberState degraded
             if (dets.length > 0) {
                 await this.engine.apply(chainId, dets, chainCfg);
             }
@@ -929,6 +939,39 @@ class HealthChecker {
             }
         }
         snap.crossChainReach = reach;
+    }
+
+    /**
+     * v0.5.230 — fetch CR Council membership state for F28.
+     *
+     * Thin wrapper over CrMembershipService.detectCrMembership, sharing
+     * its 30s in-process cache so the slow-tick re-poll doesn't hammer
+     * mainchain RPC. Returns the same shape the service returns:
+     *   { isCrMember, state, nickname, impeachmentVotes, source, ... }
+     * F28 reads .isCrMember + .state + .impeachmentVotes; everything else
+     * is informational. Failure modes (no pubkey / RPC unreachable /
+     * not-in-Committee) all surface via source !== 'matched'; F28
+     * self-gates on isCrMember=true so non-Council operators don't
+     * trigger it.
+     *
+     * @private
+     * @param {object} chainCfg  mainchain cfg block (read pubkey + RPC from)
+     * @returns {Promise<object|null>}
+     */
+    async _fetchCrState(chainCfg) {
+        if (!chainCfg || !chainCfg.dpos || !chainCfg.dpos.nodePublicKey) {
+            return null;
+        }
+        try {
+            const CrMembershipService = require('./CrMembershipService');
+            const ConfigStore = require('./ConfigStore');
+            const cfg = await ConfigStore.load();
+            return await CrMembershipService.detectCrMembership(cfg, {
+                log: this.extensionHandle && this.extensionHandle.log,
+            });
+        } catch (_) {
+            return null;
+        }
     }
 
     /**
