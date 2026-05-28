@@ -227,18 +227,11 @@ const identityUnlockBody = Joi.object({
         .messages({ 'any.required': 'Password is required.' }),
 }).unknown(false).label('POST /identity/unlock body');
 
-// POST /identity/reset — typed confirm + optional anti-snipe password.
-// Frontend gates "reset keystore" exactly (case-sensitive); we re-
-// check server-side as defence in depth.
-const identityResetBody = Joi.object({
-    confirm: Joi.string().required(),
-    // Optional — required only if cfg.global.antiSnipePasswordHash is
-    // set. The route does the conditional check.
-    antiSnipePassword: Joi.string().min(1).max(256).optional(),
-    // force=true allows reset even when the producer state is Active —
-    // operator must opt in explicitly via the slashing-risk modal.
-    force: Joi.boolean().optional(),
-}).unknown(false).label('POST /identity/reset body');
+// v0.5.236 — identityResetBody schema removed (dead code). POST /identity/reset
+// was retired to a 410 stub in v0.5.232 (folded into /maintenance/reset-everything);
+// this Joi body was no longer exported or referenced anywhere (4-way verified:
+// no src refs, no tests, no dynamic access). The shape lives in git history if a
+// narrower keystore-rotation path is ever revived.
 
 // POST /identity/import — typed confirm + password. The file itself
 // arrives as raw bytes in the request body (Content-Type: application/
