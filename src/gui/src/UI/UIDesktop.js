@@ -1821,8 +1821,14 @@ async function UIDesktop(options) {
             }, 50);
         });
 
-        // Show welcome window if user hasn't already seen it and hasn't directly navigated to an app 
-        if (!window.url_paths[0]?.toLocaleLowerCase() === 'app' || !window.url_paths[1]) {
+        // PC2: the consumer "Welcome to your Personal Internet Computer" onboarding
+        // modal is DISABLED. PC2 is a node-management appliance, not a consumer Puter
+        // desktop — that welcome ("store files, play games…") is wrong for it. Upstream
+        // Puter shows it once per account when the has_seen_welcome_window KV is null;
+        // we gate it off entirely. Flip PC2_SHOW_WELCOME to restore upstream behavior.
+        const PC2_SHOW_WELCOME = false;
+        // Show welcome window if user hasn't already seen it and hasn't directly navigated to an app
+        if (PC2_SHOW_WELCOME && (!window.url_paths[0]?.toLocaleLowerCase() === 'app' || !window.url_paths[1])) {
             if (!isMobile.phone && !isMobile.tablet) {
                 setTimeout(() => {
                     puter.kv.get('has_seen_welcome_window').then(async (val) => {
