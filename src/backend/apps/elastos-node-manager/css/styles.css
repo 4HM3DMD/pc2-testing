@@ -8348,6 +8348,122 @@ body[data-app-size="narrow"]  .enm-app .enm-evm-shared-mining-grid {
     font-weight: 600;
 }
 
+/* ====================================================================
+ * v0.5.239 — overview redesign (.enm-ovx-*). Vertical chain cards,
+ * health headline + bulk actions, labelled action footers, collapsed
+ * oracle line. Supersedes the old flat horizontal-row look + sparklines.
+ * ==================================================================== */
+/* section heading → quiet uppercase label */
+.enm-app .enm-overview-section-heading {
+    font-size: 12px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase;
+    color: var(--text-tertiary); margin: 0 2px 12px;
+}
+/* health headline + bulk actions */
+.enm-app .enm-ovx-health {
+    display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap;
+    background: var(--bg-surface); border: 1px solid var(--border); border-left: 3px solid var(--success);
+    border-radius: 12px; padding: 13px 18px; margin-bottom: 18px;
+}
+.enm-app .enm-ovx-health.warn { border-left-color: var(--warning); }
+.enm-app .enm-ovx-health-l { display: flex; align-items: center; gap: 11px; min-width: 0; flex-wrap: wrap; }
+.enm-app .enm-ovx-dot-lg { width: 11px; height: 11px; border-radius: 50%; flex: 0 0 auto; background: var(--text-tertiary); }
+.enm-app .enm-ovx-dot-lg.ok { background: var(--success); box-shadow: 0 0 0 4px var(--success-bg); }
+.enm-app .enm-ovx-dot-lg.warn { background: var(--warning); box-shadow: 0 0 0 4px var(--warning-bg); }
+.enm-app .enm-ovx-health-verdict { font-size: 15px; font-weight: 600; color: var(--text-primary); }
+.enm-app .enm-ovx-health-detail { font-size: 13px; color: var(--text-tertiary); }
+.enm-app .enm-ovx-health-r { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* labelled action buttons */
+.enm-app .enm-ovx-act {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 13px;
+    border-radius: 8px; border: 1px solid var(--border); background: var(--bg-elevated); color: var(--text-secondary);
+    font-size: 12px; font-weight: 600; font-family: inherit; cursor: pointer; line-height: 1; white-space: nowrap;
+    transition: color .12s, border-color .12s, background-color .12s, opacity .12s;
+}
+.enm-app .enm-ovx-act .enm-ovx-ico { font-size: 12px; line-height: 1; }
+.enm-app .enm-ovx-act:hover { border-color: var(--border-strong); color: var(--text-primary); }
+.enm-app .enm-ovx-act.is-start { color: var(--success); border-color: var(--success-soft); }
+.enm-app .enm-ovx-act.is-start:hover { background: var(--success-bg); }
+.enm-app .enm-ovx-act.is-stop:hover { color: var(--error); border-color: var(--error); background: var(--error-bg); }
+.enm-app .enm-ovx-act.is-restart:hover { color: var(--accent); border-color: var(--accent); }
+.enm-app .enm-ovx-act.is-update { color: var(--accent); border-color: var(--accent-soft); }
+.enm-app .enm-ovx-act.is-update:hover { background: var(--accent-soft); }
+.enm-app .enm-ovx-act.is-busy, .enm-app .enm-ovx-act[disabled] { opacity: .5; cursor: default; }
+/* card action footer */
+.enm-app .enm-ovx-foot {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 14px; padding-top: 13px;
+    border-top: 1px solid var(--border-subtle);
+}
+.enm-app .enm-ovx-spacer { flex: 1 1 auto; }
+.enm-app .enm-ovx-manage {
+    display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-tertiary);
+    background: transparent; border: none; font-family: inherit; cursor: pointer; white-space: nowrap;
+}
+.enm-app .enm-ovx-manage:hover { color: var(--accent); }
+/* vertical chain card (overrides the v0.5.238 flat-row flex) */
+.enm-app .enm-overview-row.enm-ovx-card {
+    display: flex; flex-direction: column; align-items: stretch; gap: 0;
+    background: var(--bg-surface); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px;
+    cursor: pointer;
+}
+.enm-app .enm-overview-row.enm-ovx-card:hover { border-color: var(--border-strong); }
+.enm-app .enm-overview-row.enm-ovx-card.enm-ovx-attention {
+    border-color: rgba(251,191,36,.45); box-shadow: inset 3px 0 0 var(--warning);
+}
+.enm-app .enm-ovx-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.enm-app .enm-ovx-meta { margin-top: 10px; font-size: 14px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.enm-app .enm-ovx-metrics { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.enm-app .enm-ovx-metrics .enm-overview-metric {
+    font-size: 11px; color: var(--text-secondary); background: var(--bg-overlay); border-radius: 6px;
+    padding: 3px 8px; font-variant-numeric: tabular-nums;
+}
+.enm-app .enm-ovx-metrics .enm-overview-metric.is-warn { color: var(--warning); }
+.enm-app .enm-ovx-update-badge {
+    display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600;
+    color: var(--accent); background: var(--accent-soft); border-radius: 999px; padding: 2px 9px; white-space: nowrap;
+}
+/* mainchain hero */
+.enm-app .enm-overview-row.enm-ovx-card.enm-ovx-hero {
+    background: linear-gradient(120deg, var(--accent-soft), var(--bg-surface) 62%); padding: 20px 22px;
+}
+.enm-app .enm-ovx-hero .enm-overview-name { font-size: 19px; font-weight: 650; }
+/* collapsed oracle line folded into its EVM card */
+.enm-app .enm-ovx-oracle {
+    display: flex; align-items: center; gap: 8px; margin-top: 14px; padding-top: 12px;
+    border-top: 1px solid var(--border-subtle); flex-wrap: wrap; cursor: pointer;
+}
+.enm-app .enm-ovx-oracle-name { font-size: 12px; color: var(--text-secondary); font-weight: 500; }
+.enm-app .enm-ovx-oracle-rel { font-size: 11px; color: var(--text-tertiary); }
+.enm-app .enm-ovx-oracle.collapsed .enm-ovx-oracle-rel { display: none; }
+.enm-app .enm-ovx-caret { margin-left: auto; color: var(--text-tertiary); font-size: 12px; transition: transform .12s; }
+.enm-app .enm-ovx-oracle:not(.collapsed) .enm-ovx-caret { transform: rotate(90deg); }
+/* EVM card is the visible card → the inner li goes "naked" (no card-in-card) */
+.enm-app .enm-overview-evm-card {
+    background: var(--bg-surface); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px;
+}
+.enm-app .enm-overview-evm-card .enm-overview-rows { list-style: none; margin: 0; padding: 0; gap: 0; }
+.enm-app .enm-overview-evm-card .enm-overview-row.enm-ovx-card {
+    background: transparent; border: none; border-radius: 0; padding: 0;
+}
+.enm-app .enm-overview-evm-card .enm-overview-row.enm-ovx-card:hover { background: transparent; }
+/* phone: footer + bulk buttons grow to share rows */
+@media (max-width: 430px) {
+    .enm-app .enm-ovx-health { flex-direction: column; align-items: stretch; }
+    .enm-app .enm-ovx-health-r { width: 100%; }
+    .enm-app .enm-ovx-health-r .enm-ovx-act,
+    .enm-app .enm-ovx-foot .enm-ovx-act { flex: 1 1 calc(50% - 4px); }
+    .enm-app .enm-ovx-manage { width: 100%; justify-content: flex-start; margin-top: 2px; }
+    .enm-app .enm-ovx-spacer { display: none; }
+    .enm-app .enm-ovx-hero .enm-overview-name { font-size: 17px; }
+}
+/* v0.5.239 — keep the stat strip a tidy 2-up on phone/narrow (the mock look)
+   rather than the old 4-up-tight / 1-up-stacked. */
+.enm-app[data-app-size="narrow"]  .enm-overview-usage,
+body[data-app-size="narrow"]  .enm-app .enm-overview-usage,
+.enm-app[data-app-size="compact"] .enm-overview-usage,
+body[data-app-size="compact"] .enm-app .enm-overview-usage {
+    grid-template-columns: repeat(2, 1fr);
+}
+
 /* --- Compact viewport overrides ------------------------------------ */
 .enm-app[data-app-size="compact"] .enm-overview-evm-grid,
 body[data-app-size="compact"] .enm-app .enm-overview-evm-grid,

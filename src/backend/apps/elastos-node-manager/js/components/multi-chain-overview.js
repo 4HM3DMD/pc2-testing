@@ -432,10 +432,10 @@
         var html = [
             '<header class="enm-overview-header">',
             '<h2>' + escapeHtml(tFb('overview_pane.title', 'Council overview')) + '</h2>',
-            '<p class="enm-overview-summary">',
-            escapeHtml(this._summaryLineV2(snap)),
-            '</p>',
             '</header>',
+            // v0.5.239 — health headline (single verdict) + bulk actions;
+            // replaces the old per-chain summary line.
+            this._healthHeadlineHtml(snap),
             // v0.5.238 — "This node" identity card: DAO Council membership +
             // BPoS producer status (truthful for ENM's own node key). Empty
             // string until /system/identity resolves into _lastIdentity.
@@ -512,12 +512,13 @@
                         break;
                     }
                 }
+                // v0.5.239 — fold the oracle line INTO the EVM card (between
+                // the metrics and the action footer) as a collapsible
+                // one-liner, instead of a separate row below it.
+                var oracleHtml = oracle ? self._rowHtml(oracle, { variant: 'oracle-nested' }) : '';
                 html.push('<div class="enm-overview-evm-card">');
                 html.push('<ul class="enm-overview-rows" role="list">');
-                html.push(self._rowHtml(evm, { variant: 'evm' }));
-                if (oracle) {
-                    html.push(self._rowHtml(oracle, { variant: 'oracle-nested' }));
-                }
+                html.push(self._rowHtml(evm, { variant: 'evm', oracleHtml: oracleHtml }));
                 html.push('</ul>');
                 html.push('</div>');
             });
@@ -602,14 +603,37 @@
             var rowEls = this._root.querySelectorAll('.enm-overview-row');
             Array.prototype.forEach.call(rowEls, function (row) {
                 row.addEventListener('click', function (ev) {
-                    var actionBtn = ev.target && ev.target.closest
-                        ? ev.target.closest('.enm-overview-action') : null;
+                    var t = ev.target;
+                    var actionBtn = t && t.closest ? t.closest('.enm-overview-action') : null;
                     if (actionBtn) {
                         ev.stopPropagation();
                         self._onAction(actionBtn.dataset.action, actionBtn.dataset.chainId, actionBtn);
                         return;
                     }
+                    // v0.5.239 — "Manage" (hero) routes to the chain detail.
+                    var manageBtn = t && t.closest ? t.closest('.enm-ovx-manage') : null;
+                    if (manageBtn) {
+                        ev.stopPropagation();
+                        self._routeToChain(manageBtn.dataset.chainId || row.dataset.chainId);
+                        return;
+                    }
+                    // v0.5.239 — clicking the folded oracle line toggles its
+                    // detail (expand "relays for…") instead of routing.
+                    var oracleEl = t && t.closest ? t.closest('.enm-ovx-oracle') : null;
+                    if (oracleEl) {
+                        ev.stopPropagation();
+                        oracleEl.classList.toggle('collapsed');
+                        return;
+                    }
                     self._routeToChain(row.dataset.chainId);
+                });
+            });
+            // v0.5.239 — bulk Start all / Restart all in the health headline.
+            var bulkBtns = this._root.querySelectorAll('[data-bulk]');
+            Array.prototype.forEach.call(bulkBtns, function (b) {
+                b.addEventListener('click', function (ev) {
+                    ev.stopPropagation();
+                    self._onBulk(b.dataset.bulk, b);
                 });
             });
             // v0.5.225 audit Phase 21 — constrained-host banner dismiss.
@@ -653,7 +677,9 @@
         // Sparklines — only re-mount the diff. Tear down any chain that
         // disappeared from the snapshot or stopped being alive; mount
         // any newly-alive chain.
-        this._reconcileSparklines(sorted);
+        // v0.5.239 — sparklines removed from the overview (the green-triangle
+        // height plot was visual noise; per-chain trend lives on the detail
+        // page). _reconcileSparklines is no longer called here.
     };
 
     /** @private — v0.5.186 (Council Node UX P2.1) — control-center row: name +
@@ -688,28 +714,51 @@
             : '<span class="enm-overview-uptime" aria-hidden="true"></span>';
         var stateChipAttrs = ' class="enm-overview-state ' + stateClass + '"';
         if (stateHint) { stateChipAttrs += ' title="' + escapeAttr(stateHint) + '"'; }
-        var rowClasses = 'enm-overview-row';
-        if (variant) { rowClasses += ' enm-overview-row--' + variant; }
-        // Nested oracles don't get the spark/uptime/actions on the right —
-        // they're services, not chains-with-height. Same for arbiter; its
-        // SPV state is shown in metrics instead.
-        var isCompact = variant === 'oracle-nested' || variant === 'arbiter';
+        // v0.5.239 — card redesign. Sparkline + uptime + open-arrow removed
+        // (the whole card routes on click; a "Manage" link sits in the hero
+        // footer). Layout is now a vertical card: header (dot+name+state chip
+        // +optional update badge) → meta (block/height) → metrics (peers+RAM)
+        // → optional folded oracle line → labelled action footer.
+        void uptimeHtml; void ariaLabel;
+
+        // Oracle: a compact, collapsible one-liner folded into its parent EVM
+        // card. NOT an .enm-overview-row (so the card click handler doesn't
+        // treat it as a routable chain — clicking it toggles its detail).
+        if (variant === 'oracle-nested') {
+            var rel = c.parentChainId
+                ? escapeHtml(tFb('overview_pane.relays_for', 'Relays for {parent}', { parent: chainNameFor(c.parentChainId, null) }))
+                : '';
+            return '<div class="enm-ovx-oracle collapsed" data-chain-id="' + chainIdAttr + '">'
+                + '<span class="enm-overview-dot ' + stateClass + '" aria-hidden="true"></span>'
+                + '<span class="enm-ovx-oracle-name">' + escapeHtml(displayName) + '</span>'
+                + '<span' + stateChipAttrs + '>' + escapeHtml(stateLabel) + '</span>'
+                + '<span class="enm-ovx-oracle-rel">' + rel + '</span>'
+                + '<span class="enm-ovx-caret" aria-hidden="true">›</span>'
+                + '</div>';
+        }
+
+        var rowClasses = 'enm-overview-row enm-ovx-card';
+        if (variant) { rowClasses += ' enm-overview-row--' + variant + ' enm-ovx-' + variant; }
+        if (v2State === 'stopped' || v2State === 'stalled' || v2State === 'disabled') {
+            rowClasses += ' enm-ovx-attention';
+        }
+        var updateBadge = c.updateAvailable
+            ? '<span class="enm-ovx-update-badge">↑ ' + escapeHtml(tFb('overview_pane.update_available', 'Update available')) + '</span>'
+            : '';
+        var metaH = this._metaHtmlV2(c);
+        var metricsH = this._metricsHtml(c);
         return '<li class="' + rowClasses + '" data-chain-id="' + chainIdAttr
             + '" data-state="' + escapeAttr(v2State) + '">'
-            + '<span class="enm-overview-dot ' + stateClass + '" aria-hidden="true"></span>'
-            + '<div class="enm-overview-main">'
-            +   '<div class="enm-overview-line1">'
-            +     '<span class="enm-overview-name">' + escapeHtml(displayName) + '</span>'
-            +     '<span' + stateChipAttrs + '>' + escapeHtml(stateLabel) + '</span>'
-            +   '</div>'
-            +   '<div class="enm-overview-meta">' + this._metaHtmlV2(c) + '</div>'
-            +   '<div class="enm-overview-metrics">' + this._metricsHtml(c) + '</div>'
+            + '<div class="enm-ovx-top">'
+            +   '<span class="enm-overview-dot ' + stateClass + '" aria-hidden="true"></span>'
+            +   '<span class="enm-overview-name">' + escapeHtml(displayName) + '</span>'
+            +   '<span' + stateChipAttrs + '>' + escapeHtml(stateLabel) + '</span>'
+            +   updateBadge
             + '</div>'
-            + (isCompact ? '' : '<span class="enm-overview-spark" data-chain-id="' + chainIdAttr + '"></span>')
-            + (isCompact ? '' : uptimeHtml)
-            + this._actionsHtml(c)
-            + '<button type="button" class="enm-overview-open" data-chain-id="' + chainIdAttr + '"'
-            +   ' aria-label="' + escapeAttr(ariaLabel) + '">›</button>'
+            + (metaH ? '<div class="enm-overview-meta enm-ovx-meta">' + metaH + '</div>' : '')
+            + (metricsH ? '<div class="enm-ovx-metrics">' + metricsH + '</div>' : '')
+            + ((opts && opts.oracleHtml) ? opts.oracleHtml : '')
+            + this._actionsHtml(c, variant)
             + '</li>';
     };
 
@@ -981,15 +1030,9 @@
                     + '</span>');
             }
         }
-        // CPU %
-        if (typeof pm.cpuPct === 'number' && isFinite(pm.cpuPct)) {
-            // High CPU (>80% of one core) gets a warning class so the operator
-            // can spot churn (the mainchain-leveldb-compaction case fired here).
-            var cpuClass = (pm.cpuPct >= 80) ? 'enm-overview-metric is-busy' : 'enm-overview-metric';
-            bits.push('<span class="' + cpuClass + '">'
-                + escapeHtml(tFb('overview_pane.metric_cpu', 'CPU {pct}%', { pct: pm.cpuPct }))
-                + '</span>');
-        }
+        // v0.5.239 — per-chain CPU% removed (redundant with the top stat
+        // strip's global CPU load; operator: "doesn't need to show CPU for all
+        // pages"). The overview's per-chain metrics are now just peers + RAM.
         // RAM (MB if <1024, GB otherwise)
         if (typeof pm.rssMb === 'number' && isFinite(pm.rssMb)) {
             if (pm.rssMb >= 1024) {
@@ -1004,29 +1047,8 @@
                     + '</span>');
             }
         }
-        // FD count
-        if (typeof pm.fdCount === 'number' && isFinite(pm.fdCount)) {
-            bits.push('<span class="enm-overview-metric enm-overview-metric-dim">'
-                + escapeHtml(tFb('overview_pane.metric_fd', 'FD {n}', { n: pm.fdCount }))
-                + '</span>');
-        }
-        // Per-chain disk usage from /system/usage.perChainMb cache
-        if (this._lastUsage && this._lastUsage.disk && this._lastUsage.disk.perChainMb) {
-            var diskMb = this._lastUsage.disk.perChainMb[c.chainId];
-            if (typeof diskMb === 'number' && isFinite(diskMb)) {
-                if (diskMb >= 1024) {
-                    bits.push('<span class="enm-overview-metric enm-overview-metric-dim">'
-                        + escapeHtml(tFb('overview_pane.metric_disk_gb', 'disk {gb} GB',
-                            { gb: (diskMb / 1024).toFixed(1) }))
-                        + '</span>');
-                } else {
-                    bits.push('<span class="enm-overview-metric enm-overview-metric-dim">'
-                        + escapeHtml(tFb('overview_pane.metric_disk', 'disk {mb} MB',
-                            { mb: Math.round(diskMb) }))
-                        + '</span>');
-                }
-            }
-        }
+        // v0.5.239 — FD count + per-chain disk removed from the overview
+        // (internal noise; still available on the per-chain detail page).
         return bits.join(' ');
     };
 
@@ -1075,15 +1097,14 @@
      * the row delegate intercepts their clicks so acting on a chain never also
      * navigates into it. Always rendered (the empty cell keeps the grid aligned)
      * and always visible for touch discoverability. */
-    EnmMultiChainOverviewPane.prototype._actionsHtml = function (c) {
+    EnmMultiChainOverviewPane.prototype._actionsHtml = function (c, variant) {
         var cid = escapeAttr(c.chainId);
         function btn(action, glyph, key, fallback, cls) {
             var label = tFb(key, fallback);
-            return '<button type="button" class="enm-overview-action ' + cls + '"'
-                + ' data-action="' + action + '" data-chain-id="' + cid + '"'
-                + ' title="' + escapeAttr(label) + '" aria-label="' + escapeAttr(label) + '">'
-                + '<span aria-hidden="true">' + glyph + '</span>'
-                + '</button>';
+            return '<button type="button" class="enm-overview-action enm-ovx-act ' + cls + '"'
+                + ' data-action="' + action + '" data-chain-id="' + cid + '">'
+                + '<span class="enm-ovx-ico" aria-hidden="true">' + glyph + '</span>'
+                + escapeHtml(label) + '</button>';
         }
         var inner = '';
         if (c.alive) {
@@ -1092,7 +1113,19 @@
         } else if (c.state === 'stopped') {
             inner += btn('start', '▶', 'chain_actions.start', 'Start', 'is-start');
         }
-        return '<span class="enm-overview-actions">' + inner + '</span>';
+        // v0.5.239 — Update only when the backend reports an update available
+        // for this chain. Per-EVM detection is a backend follow-up, so this
+        // stays hidden until that lands (mainchain can light up sooner).
+        if (c.updateAvailable) {
+            inner += btn('update', '↑', 'chain_actions.update', 'Update', 'is-update');
+        }
+        var manage = (variant === 'hero')
+            ? '<span class="enm-ovx-spacer"></span>'
+              + '<button type="button" class="enm-ovx-manage" data-chain-id="' + cid + '">'
+              + escapeHtml(tFb('overview_pane.manage', 'Manage')) + ' ›</button>'
+            : '';
+        if (!inner && !manage) { return ''; }
+        return '<div class="enm-ovx-foot">' + inner + manage + '</div>';
     };
 
     /** @private — P2.2 quick action runner. Mirrors chain-card._do: pane-wide
@@ -1101,6 +1134,9 @@
      * Disruptive actions (stop/restart) confirm first; start does not. */
     EnmMultiChainOverviewPane.prototype._onAction = function (kind, chainId, btn) {
         if (!kind || !chainId || !btn) { return; }
+        // v0.5.239 — "Update" isn't a start/stop POST; it drills into the
+        // chain's dashboard where the binary-update flow lives.
+        if (kind === 'update') { this._routeToChain(chainId); return; }
         if (this._pendingAction) { return; }  // one action at a time, pane-wide
         var self = this;
         var displayName = chainNameFor(chainId, null);
@@ -1400,6 +1436,91 @@
      * single-glance health line.
      * @private
      */
+    /**
+     * v0.5.239 — health headline: a single at-a-glance verdict for the whole
+     * node (green when all healthy; warns + names the troubled service when
+     * not) plus bulk Start all / Restart all. Answers the operator's #1
+     * question — "is my node OK?" — in one line.
+     * @private
+     */
+    EnmMultiChainOverviewPane.prototype._healthHeadlineHtml = function (snap) {
+        var chains = (snap && Array.isArray(snap.chains)) ? snap.chains : [];
+        if (chains.length === 0) { return ''; }
+        var total = chains.length, synced = 0, starting = 0, attention = [];
+        chains.forEach(function (c) {
+            var st = normalizeStateV2(c.state);
+            if (st === 'synced') { synced += 1; }
+            else if (st === 'syncing' || st === 'starting') { starting += 1; }
+            else if (st === 'stopped' || st === 'stalled') { attention.push(c); }
+            // 'disabled' is intentionally off — not counted as a problem.
+        });
+        var dotClass, verdict, detail;
+        if (attention.length > 0) {
+            dotClass = 'warn';
+            verdict = (attention.length === 1)
+                ? tFb('overview_pane.health_attention_one', '1 service needs attention')
+                : tFb('overview_pane.health_attention_many', '{n} services need attention', { n: attention.length });
+            var names = attention.map(function (c) {
+                return chainNameFor(c.chainId, c.displayName) + ' ' + stateLabelForV2(c.state).toLowerCase();
+            }).join(', ');
+            detail = '· ' + names + ' · ' + synced + ' of ' + total + ' synced';
+        } else if (starting > 0) {
+            dotClass = 'warn';
+            verdict = tFb('overview_pane.health_syncing', 'Syncing');
+            detail = '· ' + synced + ' of ' + total + ' synced';
+        } else {
+            dotClass = 'ok';
+            verdict = tFb('overview_pane.health_healthy', 'All services healthy');
+            detail = '· ' + total + ' synced';
+        }
+        var anyStopped = chains.some(function (c) { return c.state === 'stopped'; });
+        var bulk = '';
+        if (anyStopped) {
+            bulk += '<button type="button" class="enm-ovx-act is-start" data-bulk="start">'
+                + '<span class="enm-ovx-ico" aria-hidden="true">▶</span>'
+                + escapeHtml(tFb('overview_pane.bulk_start', 'Start all')) + '</button>';
+        }
+        bulk += '<button type="button" class="enm-ovx-act is-restart" data-bulk="restart">'
+            + '<span class="enm-ovx-ico" aria-hidden="true">⟳</span>'
+            + escapeHtml(tFb('overview_pane.bulk_restart', 'Restart all')) + '</button>';
+        return '<section class="enm-ovx-health' + (dotClass === 'warn' ? ' warn' : '') + '">'
+            + '<div class="enm-ovx-health-l">'
+            +   '<span class="enm-ovx-dot-lg ' + dotClass + '" aria-hidden="true"></span>'
+            +   '<span class="enm-ovx-health-verdict">' + escapeHtml(verdict) + '</span>'
+            +   '<span class="enm-ovx-health-detail">' + escapeHtml(detail) + '</span>'
+            + '</div>'
+            + '<div class="enm-ovx-health-r">' + bulk + '</div>'
+            + '</section>';
+    };
+
+    /**
+     * v0.5.239 — bulk Start all / Restart all from the health headline. POSTs
+     * per chain (start → stopped chains; restart → alive chains), then
+     * re-fetches. Frontend-orchestrated; no bulk backend endpoint needed.
+     * @private
+     */
+    EnmMultiChainOverviewPane.prototype._onBulk = function (kind, btn) {
+        if (this._pendingAction) { return; }
+        var self = this;
+        var chains = (this._lastSnap && Array.isArray(this._lastSnap.chains)) ? this._lastSnap.chains : [];
+        var targets = chains.filter(function (c) {
+            return (kind === 'start') ? (c.state === 'stopped') : !!c.alive;
+        }).map(function (c) { return c.chainId; });
+        if (targets.length === 0) { return; }
+        if (self.notifications && typeof self.notifications.info === 'function') {
+            self.notifications.info(
+                (kind === 'start' ? 'Starting ' : 'Restarting ') + targets.length + ' chains…', '');
+        }
+        if (btn) { btn.disabled = true; btn.classList.add('is-busy'); }
+        Promise.all(targets.map(function (cid) {
+            return self.api.post('/chains/' + cid + '/' + kind).catch(function () { return null; });
+        })).then(function () {
+            if (self._destroyed) { return; }
+            if (btn) { btn.disabled = false; btn.classList.remove('is-busy'); }
+            self._fetchInitial();
+        });
+    };
+
     /**
      * v0.5.238 — "This node" identity card. Surfaces ENM's own node status the
      * way node.sh's `status` does, but labeled "DAO Council" (the Cyber
