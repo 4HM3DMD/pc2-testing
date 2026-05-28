@@ -517,22 +517,20 @@ async function startAllChains(args) {
  * crash boot. Skips silently if the db handle was unavailable upstream.
  */
 async function safeAudit(db, log, args) {
-    if (!db) { return; }
-    try {
-        await AuditLog.append(db, {
-            walletAddress: SYSTEM_WALLET,
-            chainId: args.chainId,
-            tier: TIER,
-            ruleId: RULE_ID,
-            decision: args.decision,
-            executor: EXECUTOR,
-            outcome: args.outcome,
-            durationMs: args.durationMs,
-            payload: { action: 'autostart' },
-        });
-    } catch (err) {
-        log.debug(`${ENM_LOG_PREFIX} autoStart: audit append failed (non-fatal): ${err.message}`);
-    }
+    // v0.5.236 — boilerplate (null-guard + try/catch + debug-log) moved to
+    // AuditLog.safeAppend; this wrapper keeps the autostart-specific entry
+    // fields. Behavior unchanged.
+    await AuditLog.safeAppend(db, log, {
+        walletAddress: SYSTEM_WALLET,
+        chainId: args.chainId,
+        tier: TIER,
+        ruleId: RULE_ID,
+        decision: args.decision,
+        executor: EXECUTOR,
+        outcome: args.outcome,
+        durationMs: args.durationMs,
+        payload: { action: 'autostart' },
+    });
 }
 
 module.exports = {

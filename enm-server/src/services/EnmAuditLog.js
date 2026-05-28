@@ -226,8 +226,38 @@ function redactSensitive(obj) {
     return out;
 }
 
+/**
+ * v0.5.236 — swallow-errors convenience wrapper around append(). Four call
+ * sites (routes/maintenance, routes/identity, EnmAutoStart,
+ * EnmStageSyncOrchestrator) each hand-rolled the SAME "skip if no db → append →
+ * log on failure" boilerplate. Centralized here so the null-guard + try/catch
+ * live once; callers still build their own entry (tier / ruleId / defaults
+ * differ per caller, so the field-building stays at the call site). NEVER
+ * throws — a lost audit row must never block the action that authorised it.
+ *
+ * @param {object|null} db    extension data db (null → no-op, returns false)
+ * @param {object} log        logger with .debug/.warn
+ * @param {object} entry      full AuditEntry (see append())
+ * @returns {Promise<boolean>} true if the row was written, false otherwise
+ */
+async function safeAppend(db, log, entry) {
+    if (!db) { return false; }
+    try {
+        await append(db, entry);
+        return true;
+    } catch (err) {
+        try {
+            (log && log.debug ? log.debug : (() => {}))(
+                `${ENM_LOG_PREFIX} audit safeAppend failed (non-fatal): ${err.message}`,
+            );
+        } catch (_) { /* logger unavailable — swallow */ }
+        return false;
+    }
+}
+
 module.exports = {
     append,
+    safeAppend,
     query,
     redactSensitive,
     // 0.2.0-beta.3.8 — wire the SSE publish hook from server.js boot.

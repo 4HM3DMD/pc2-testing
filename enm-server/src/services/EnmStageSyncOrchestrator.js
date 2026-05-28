@@ -290,22 +290,19 @@ function cancel() { _cancelled = true; }
 function isRunning() { return _running; }
 
 async function safeAudit(db, log, args) {
-    if (!db) { return; }
-    try {
-        await AuditLog.append(db, {
-            walletAddress: SYSTEM_WALLET,
-            chainId: args.chainId,
-            ruleId: null,
-            tier: 'AUTOMATED-SAFE',
-            decision: args.decision,
-            executor: 'system',
-            outcome: args.outcome,
-            durationMs: args.durationMs,
-            payload: { action: 'stage-sync' },
-        });
-    } catch (err) {
-        log.debug(`${ENM_LOG_PREFIX} stage-sync: audit append failed (${err.message})`);
-    }
+    // v0.5.236 — shared null-guard + try/catch via AuditLog.safeAppend; this
+    // wrapper keeps the stage-sync-specific entry fields. Behavior unchanged.
+    await AuditLog.safeAppend(db, log, {
+        walletAddress: SYSTEM_WALLET,
+        chainId: args.chainId,
+        ruleId: null,
+        tier: 'AUTOMATED-SAFE',
+        decision: args.decision,
+        executor: 'system',
+        outcome: args.outcome,
+        durationMs: args.durationMs,
+        payload: { action: 'stage-sync' },
+    });
 }
 
 module.exports = { startStaged, cancel, isRunning };
