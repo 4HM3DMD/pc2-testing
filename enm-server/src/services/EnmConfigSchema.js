@@ -175,6 +175,23 @@ const globalSchema = Joi.object({
         onBoot: Joi.boolean().default(true),
         delaySec: Joi.number().integer().min(0).max(600).default(10),
     }).default(),
+    // v0.5.236 — initial-sync strategy for constrained hosts.
+    //   'concurrent' (default) — start all enabled chains at once (legacy).
+    //   'staged'                — EnmStageSyncOrchestrator brings up the heavy
+    //                             chains (mainchain + esc/eid/pg) ≤N at a time,
+    //                             waiting for each to reach tip before starting
+    //                             the next, so a low-end host isn't crushed by
+    //                             simultaneous EVM full-syncs. Oracles pair with
+    //                             their parent; arbiter starts last.
+    // Set from the setup wizard's hardware-tier choice (Card 5). BPoS nodes run
+    // only the mainchain, so staged is a no-op there (one heavy chain) — the
+    // field is harmless regardless of role.
+    syncStrategy: Joi.string().valid('concurrent', 'staged').default('concurrent'),
+    stagedSync: Joi.object({
+        // Heavy-chain window size. 2 = "two chains at once" (operator default
+        // for lower-end recommended hardware).
+        concurrency: Joi.number().integer().min(1).max(4).default(2),
+    }).default(),
     // Log rotation — gzip *.log older than gzipAfterDays, purge *.gz older
     // than purgeAfterDays. main.js scheduler runs compactNow every 24h.
     // beta.3.20 — purgeAfterDays min lowered from 7 → 1 day so the
@@ -547,6 +564,11 @@ function defaultConfig() {
             notifications: { criticalRequiresAck: true },
             audit: { retentionDays: 365 },
             autoStart: { onBoot: true, delaySec: 10 },
+            // v0.5.236 — initial-sync strategy (set by the wizard's hardware
+            // tier choice). 'concurrent' = all-at-once (default); 'staged' =
+            // bring heavy chains up 2-at-a-time on constrained hosts.
+            syncStrategy: 'concurrent',
+            stagedSync: { concurrency: 2 },
             logRotation: { enabled: true, gzipAfterDays: 7, purgeAfterDays: 90 },
         },
         setup: {

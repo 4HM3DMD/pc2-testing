@@ -340,7 +340,49 @@ async function runAutoStart(deps) {
         + `[${orderedChainIds.join(' → ')}] (dependency-DAG order) to start in ${delaySec}s`,
     );
 
+    // v0.5.236 — staged initial sync for constrained hosts. When
+    // global.syncStrategy === 'staged', hand the bring-up to
+    // EnmStageSyncOrchestrator, which runs ≤N heavy chains (mainchain +
+    // esc/eid/pg) concurrently, waiting for each to reach the network tip
+    // before starting the next — so a low-end host isn't crushed by 3
+    // simultaneous EVM full-syncs. Default ('concurrent') keeps the legacy
+    // all-at-once startAllChains path. The orchestrator is idempotent +
+    // resumable (re-derives from live state), so it's safe to invoke on
+    // every boot; once all chains are synced it just (re)starts them and
+    // finishes immediately.
+    const syncStrategy = (cfg.global && cfg.global.syncStrategy) || 'concurrent';
+    const stagedConcurrency = (cfg.global && cfg.global.stagedSync
+        && Number.isInteger(cfg.global.stagedSync.concurrency))
+        ? cfg.global.stagedSync.concurrency : 2;
+
     setTimeout(() => {
+        if (syncStrategy === 'staged') {
+            log.info(
+                `${ENM_LOG_PREFIX} autoStart: syncStrategy=staged — handing bring-up to `
+                + `stage-sync orchestrator (window=${stagedConcurrency})`,
+            );
+            try {
+                const Orchestrator = require('./EnmStageSyncOrchestrator');
+                Orchestrator.startStaged({
+                    extensionHandle,
+                    registry,
+                    chainIds: orderedChainIds,
+                    concurrency: stagedConcurrency,
+                });
+            } catch (err) {
+                // Fail safe: if the orchestrator can't start, fall back to the
+                // all-at-once path so chains still come up (better an over-
+                // eager sync than no node at all).
+                log.error(
+                    `${ENM_LOG_PREFIX} autoStart: stage-sync orchestrator failed to start `
+                    + `(${err.message}) — falling back to concurrent startAllChains`,
+                );
+                startAllChains({
+                    extensionHandle, registry, chainIds: orderedChainIds, pairedServices: pairedServicesSet,
+                }).catch((e) => log.error(`${ENM_LOG_PREFIX} autoStart fallback crashed: ${e.message}`));
+            }
+            return;
+        }
         // Re-read config inside the timer so operator changes during the grace
         // window (e.g. they disabled a chain right after boot) take effect.
         startAllChains({
@@ -357,7 +399,10 @@ async function runAutoStart(deps) {
             });
     }, delayMs);
 
-    return { scheduled: true, delayMs, chainCount: orderedChainIds.length, order: orderedChainIds };
+    return {
+        scheduled: true, delayMs, chainCount: orderedChainIds.length,
+        order: orderedChainIds, syncStrategy,
+    };
 }
 
 /**

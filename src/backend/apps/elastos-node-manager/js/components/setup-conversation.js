@@ -1410,6 +1410,30 @@
             ? t('friendly.setup.card_5.sub')
             : t('friendly.setup.card_5.sub_bpos');
         this.root.setAttribute('aria-label', heading);
+        // v0.5.236 — initial-sync strategy choice (Council only; a BPoS node
+        // runs only the mainchain, so "2 at a time" is meaningless there).
+        // Default 'concurrent' (all-at-once, for recommended hardware); the
+        // operator opts into 'staged' for lower-end hardware. Writes
+        // this._syncStrategy, sent in the install-council body by _beginInstall.
+        var stageRadioHtml = (this._goal === 'council')
+            ? ('<fieldset class="enm-council-form-row enm-card5-syncmode">'
+            +   '<legend class="enm-council-form-label">Initial sync</legend>'
+            +   '<label class="enm-council-form-checkbox">'
+            +     '<input type="radio" name="enm-wiz-5-syncstrategy" value="concurrent" checked>'
+            +     '<span>'
+            +       '<span class="enm-council-form-label">Start all chains at once (fastest)</span>'
+            +       '<span class="enm-council-form-hint">Best on recommended hardware. All chains sync in parallel — quickest to fully online.</span>'
+            +     '</span>'
+            +   '</label>'
+            +   '<label class="enm-council-form-checkbox">'
+            +     '<input type="radio" name="enm-wiz-5-syncstrategy" value="staged">'
+            +     '<span>'
+            +       '<span class="enm-council-form-label">Conserve resources — sync 2 chains at a time</span>'
+            +       '<span class="enm-council-form-hint">For lower-end hardware. Brings up 2 chains, waits for them to finish syncing, then starts the rest. Initial sync takes longer but won\'t overload the host (initial sync is the heaviest part).</span>'
+            +     '</span>'
+            +   '</label>'
+            + '</fieldset>')
+            : '';
         this._body.innerHTML = ''
             + '<h2 class="enm-wiz-heading" id="enm-wiz-heading-5">' + escapeHtml(heading) + '</h2>'
             + '<p class="enm-wiz-para">' + escapeHtml(sub) + '</p>'
@@ -1439,12 +1463,25 @@
             +     '<span class="enm-council-form-hint enm-council-form-hint-evm">'
             +       escapeHtml(t('friendly.setup.card_5.snapshot_evm_note')) + '</span>'
             +   '</span>'
-            + '</label>';
+            + '</label>'
+            + stageRadioHtml;
 
         var self = this;
         var listEl   = this._body.querySelector('.enm-preflight-list');
         var rerunBtn = this._body.querySelector('[data-action="rerun"]');
         var snapsEl  = this._body.querySelector('#enm-wiz-5-snapshots');
+
+        // v0.5.236 — track the sync-strategy radio (Council only). Default
+        // 'concurrent'; flip to 'staged' when the operator picks the
+        // conserve-resources option for lower-end hardware.
+        this._syncStrategy = this._syncStrategy || 'concurrent';
+        var syncRadios = this._body.querySelectorAll('input[name="enm-wiz-5-syncstrategy"]');
+        Array.prototype.forEach.call(syncRadios, function (r) {
+            if (r.checked) { self._syncStrategy = r.value; }
+            r.addEventListener('change', function () {
+                if (r.checked) { self._syncStrategy = r.value; }
+            });
+        });
 
         this._cancelBtn.hidden = false;
         this._cancelBtn.textContent = t('friendly.setup.back');
@@ -1676,6 +1713,9 @@
                 rewardAddress: this._sharedRewardAddress,
                 sharedRewardAddress: this._sharedRewardAddress,
                 useSnapshots: !!useSnapshots,
+                // v0.5.236 — initial-sync strategy from Card 5's radio.
+                // 'staged' → backend brings heavy chains up 2-at-a-time.
+                syncStrategy: this._syncStrategy || 'concurrent',
                 activeNet: 'mainnet',
             };
             this._goto('6');

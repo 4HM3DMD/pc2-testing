@@ -1720,9 +1720,29 @@ function build(extensionHandle) {
         }
         const sharedPassword = masterPassword;  // legacy alias for the orchestrator
 
+        // v0.5.236 — persist the operator's initial-sync strategy (Card 5
+        // hardware-tier choice). 'staged' tells EnmAutoStart to bring the
+        // heavy chains up 2-at-a-time via EnmStageSyncOrchestrator so a
+        // lower-end host isn't crushed by simultaneous EVM full-syncs.
+        // Default 'concurrent' = legacy all-at-once. Written before the
+        // orchestrator + first autoStart so it's in place when chains boot.
+        const syncStrategy = body.syncStrategy === 'staged' ? 'staged' : 'concurrent';
+        try {
+            await ConfigStore.update((c) => {
+                c.global = c.global || {};
+                c.global.syncStrategy = syncStrategy;
+            }, { logger: extensionHandle.log });
+        } catch (err) {
+            extensionHandle.log.warn(
+                `${ENM_LOG_PREFIX} install-council: failed to persist syncStrategy `
+                + `(${err.message}) — defaulting to concurrent`,
+            );
+        }
+
         // Return 202 immediately + run the orchestrator in the background.
         res.status(202).json(successBody({
             started: true,
+            syncStrategy,
             sseTopic: 'setup:council:install',
             statusEndpoint: '/api/enm/setup/install-council/status',
         }));
