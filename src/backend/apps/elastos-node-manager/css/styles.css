@@ -269,137 +269,69 @@ body {
    along with .enm-brand-env (was the MAINNET pill, removed 3.69).
    The PC2 window chrome already shows the app icon + name in its
    title bar; the duplicate inside the iframe was wasted header space.
-   See .enm-chain-selector below for the replacement — a smart chain
-   selector that lives in the same slot.
+   v0.5.237 — the chain-selector dropdown that replaced the brand cluster
+   was itself removed; a static .enm-node-mode label (defined below) now
+   occupies the same topbar slot, and navigation moved to the overview +
+   tabs. See .enm-node-mode / .enm-back-to-overview below. */
 
-   Responsive overrides for .enm-brand-name (lines ~720, ~750) were
-   also dropped — empty selectors on a no-longer-rendered element. */
-
-/* beta.3.70 — chain selector. Lives in the topbar slot vacated by
-   the old brand cluster. Operator's mental model: "what chain am I
-   looking at?" rather than "what app is this?" (the title bar
-   handles the latter). For a BPoS-only install (single chain
-   configured) the selector lists all 7 chain surfaces but only
-   Main chain is enabled; the rest are grayed with a hover tooltip
-   + a footer note explaining why. Once a council operator adds more
-   chains via config, the corresponding options light up. */
-.enm-chain-selector {
-    position: relative;
+/* v0.5.237 — static node-mode label. Replaces the removed chain-selector
+   dropdown in the same topbar slot. Non-interactive; PaneRouter
+   (_detectNodeMode → _applyNodeModeLabel) sets its text from GET /config:
+   "Council node" (>=2 chains) or "BPoS node" (mainchain only). */
+.enm-node-mode {
     flex: 0 0 auto;
-}
-.enm-chain-selector-trigger {
     display: inline-flex;
     align-items: center;
-    gap: var(--sp-1);
-    padding: 4px 10px 4px 12px;
-    background: var(--bg-elevated);
-    color: var(--text-primary);
-    border: 1px solid var(--border-color, var(--border-subtle));
-    border-radius: var(--r-md);
-    font: inherit;
-    font-size: var(--fs-caption);
-    font-weight: var(--fw-medium);
-    line-height: 1.2;
-    cursor: pointer;
-    user-select: none;
-    transition: background var(--motion-fast) var(--ease-out),
-                border-color var(--motion-fast) var(--ease-out);
-}
-.enm-chain-selector-trigger:hover {
-    background: var(--bg-surface);
-    border-color: var(--accent);
-}
-.enm-chain-selector-trigger[aria-expanded="true"] {
-    background: var(--bg-surface);
-    border-color: var(--accent);
-}
-.enm-chain-selector-label {
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--text-secondary);
+    background: var(--bg-tint);
+    border: 1px solid var(--border-color);
+    border-radius: var(--r-pill);
     white-space: nowrap;
 }
-.enm-chain-selector-caret {
-    font-size: 10px;
-    color: var(--text-tertiary);
-    transition: transform var(--motion-fast) var(--ease-out);
-}
-.enm-chain-selector-trigger[aria-expanded="true"] .enm-chain-selector-caret {
-    transform: rotate(180deg);
-}
-.enm-chain-selector-menu {
-    position: absolute;
-    top: calc(100% + var(--sp-1));
-    left: 0;
-    min-width: 280px;
-    max-width: 360px;
-    padding: var(--sp-1);
-    background: var(--bg-elevated);
-    border: 1px solid var(--border-color, var(--border-subtle));
-    border-radius: var(--r-md);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-    z-index: 100;
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-}
-.enm-chain-selector-menu[hidden] { display: none; }
-.enm-chain-selector-option {
-    display: flex;
+.enm-node-mode:empty { display: none; }
+.enm-node-mode[data-mode="council"] { color: var(--accent); }
+.enm-app[data-app-size="narrow"] .enm-node-mode,
+body[data-app-size="narrow"] .enm-node-mode { padding: 3px 8px; font-size: 11px; }
+.enm-app[data-app-size="compact"] .enm-node-mode,
+body[data-app-size="compact"] .enm-node-mode { padding: 2px 6px; font-size: 10px; }
+
+/* v0.5.237 — "Back to overview" control. Rendered at the top of the
+   Dashboard pane when a Council node drills into a single chain
+   (PaneRouter._mountDashboardForActiveChain). Never shown for BPoS. */
+.enm-back-to-overview {
+    display: inline-flex;
     align-items: center;
-    gap: var(--sp-2);
-    padding: var(--sp-1) var(--sp-2);
-    border-radius: var(--r-xs);
-    color: var(--text-secondary);
-    font-size: var(--fs-caption);
-    cursor: pointer;
-    border: none;
-    background: transparent;
-    width: 100%;
-    text-align: left;
+    gap: 6px;
+    margin: 0 0 var(--sp-3) 0;
+    padding: 6px 12px;
+    font-size: 13px;
     font-family: inherit;
-}
-.enm-chain-selector-option:hover:not([disabled]) {
-    background: var(--bg-surface);
-    color: var(--text-primary);
-}
-.enm-chain-selector-option[aria-current="true"] {
+    line-height: 1;
     color: var(--accent);
-    font-weight: var(--fw-semibold);
+    background: var(--accent-soft);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
 }
-.enm-chain-selector-option[disabled] {
-    opacity: 0.45;
-    cursor: not-allowed;
+.enm-back-to-overview:hover {
+    background: var(--bg-elevated);
+    border-color: var(--accent);
 }
-.enm-chain-selector-option-indicator {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    flex: 0 0 auto;
-    background: var(--text-tertiary);
+.enm-back-to-overview:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--accent);
 }
-.enm-chain-selector-option[aria-current="true"] .enm-chain-selector-option-indicator {
-    background: var(--accent);
-    box-shadow: 0 0 6px var(--accent-soft);
+.enm-app[data-app-size="compact"] .enm-back-to-overview,
+body[data-app-size="compact"] .enm-back-to-overview {
+    font-size: 12px;
+    padding: 5px 10px;
 }
-.enm-chain-selector-option[disabled] .enm-chain-selector-option-indicator {
-    background: transparent;
-    border: 1px dashed var(--text-tertiary);
-}
-.enm-chain-selector-option-label {
-    flex: 1 1 auto;
-}
-.enm-chain-selector-option-hint {
-    font-size: 10px;
-    color: var(--text-tertiary);
-    font-weight: var(--fw-regular);
-}
-.enm-chain-selector-footer {
-    margin-top: var(--sp-1);
-    padding: var(--sp-2);
-    background: var(--bg-tint);
-    border-radius: var(--r-xs);
-    color: var(--text-tertiary);
-    font-size: 11px;
-    line-height: 1.45;
-}
+
 
 /* Tab strip — horizontally scrollable on overflow with a right-edge
    fade gradient so the operator sees there's more content past the
@@ -851,22 +783,6 @@ body[data-app-size="narrow"] .enm-app .enm-topbar {
     height: auto;
     min-height: 48px;
 }
-/* beta.3.71 — chain selector compact treatment at narrow. The trigger
-   was sized for wide-mode (padding 4px 10px 4px 12px, fs-caption ~12px).
-   At <700px it competes with 4 tabs for ~660px of horizontal space and
-   forces .enm-tabs to wrap. Shrink trigger footprint + cap the label
-   to keep tabs on one row whenever the viewport allows it. */
-.enm-app[data-app-size="narrow"] .enm-chain-selector-trigger,
-body[data-app-size="narrow"] .enm-app .enm-chain-selector-trigger {
-    padding: 3px 8px 3px 10px;
-    font-size: 11px;
-}
-.enm-app[data-app-size="narrow"] .enm-chain-selector-label,
-body[data-app-size="narrow"] .enm-app .enm-chain-selector-label {
-    max-width: 96px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
 /* beta.3.26 — Phase A. The wide-mode .enm-tabs / .enm-settings-pills
    strips horizontally-scroll any overflowing items behind a mask-
    fade. The whole shape relies on touch swiping past the fade to
@@ -923,33 +839,6 @@ body[data-app-size="compact"] .enm-app .enm-topbar {
        look on the rare wide-enough compact viewport. */
     height: auto;
     min-height: 44px;
-}
-/* beta.3.71 — chain selector compact treatment. At <480px the
-   selector strips down to a minimal chip: tiny padding, 10px font,
-   label capped to ~60px. The dropdown menu opens with full chain
-   names so the trigger only needs to be a visible affordance, not
-   the canonical chain label. aria-label="Chain view selector" on
-   the trigger carries the meaning for screen readers. */
-.enm-app[data-app-size="compact"] .enm-chain-selector-trigger,
-body[data-app-size="compact"] .enm-app .enm-chain-selector-trigger {
-    padding: 2px 6px 2px 8px;
-    font-size: 10px;
-    gap: 4px;
-}
-.enm-app[data-app-size="compact"] .enm-chain-selector-label,
-body[data-app-size="compact"] .enm-app .enm-chain-selector-label {
-    max-width: 64px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-/* beta.3.71 — cap the dropdown menu width so it never escapes the
-   viewport on compact. Without this, the 280-360px menu would clip
-   off the right edge inside a 280px PC2 window. */
-.enm-app[data-app-size="compact"] .enm-chain-selector-menu,
-body[data-app-size="compact"] .enm-app .enm-chain-selector-menu {
-    min-width: 0;
-    width: calc(100vw - 16px);
-    max-width: 320px;
 }
 
 .enm-app[data-app-size="compact"] .enm-tab,
@@ -2158,99 +2047,6 @@ body[data-app-size="compact"] .enm-sys-cell:last-child,
 }
 .enm-detail-copy-slot { flex: 0 0 auto; }
 
-/* ----------------------------------------------------------------
- * v0.5.228 — Inline edit affordance for the EVM block-reward
- * address (evm-detail-card.js). The Edit button sits next to the
- * copy button; clicking it swaps the value cell for an input +
- * Save/Cancel + status. A post-save banner renders at the top of
- * the card body when the chain is alive and a restart is needed
- * to apply the new --pbft.miner.address on the running geth.
- * ---------------------------------------------------------------- */
-.enm-detail-edit-btn {
-    flex: 0 0 auto;
-    white-space: nowrap;
-}
-.enm-detail-addr-row.is-editing .enm-detail-addr,
-.enm-detail-addr-row.is-editing .enm-detail-copy-slot,
-.enm-detail-addr-row.is-editing .enm-detail-edit-btn {
-    display: none;
-}
-.enm-detail-edit-row {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    grid-template-areas:
-        "input actions"
-        "msg   msg";
-    gap: var(--sp-2);
-    align-items: center;
-    width: 100%;
-}
-.enm-detail-edit-input {
-    grid-area: input;
-    font-family: var(--font-mono);
-    font-size: var(--fs-caption);
-    min-width: 0;
-}
-.enm-detail-edit-actions {
-    grid-area: actions;
-    display: flex;
-    gap: var(--sp-1);
-    flex: 0 0 auto;
-}
-.enm-detail-edit-msg {
-    grid-area: msg;
-    min-height: 1.2em;
-    font-size: var(--fs-caption);
-    color: var(--text-tertiary);
-    line-height: 1.4;
-}
-.enm-detail-edit-msg.is-ok   { color: var(--success); }
-.enm-detail-edit-msg.is-err  { color: var(--danger); }
-.enm-detail-edit-msg.is-warn { color: var(--warning, #c08a00); }
-.enm-app[data-app-size="compact"] .enm-detail-edit-row,
-.enm-app[data-app-size="narrow"]  .enm-detail-edit-row {
-    grid-template-columns: 1fr;
-    grid-template-areas:
-        "input"
-        "actions"
-        "msg";
-}
-.enm-app[data-app-size="compact"] .enm-detail-edit-actions,
-.enm-app[data-app-size="narrow"]  .enm-detail-edit-actions {
-    justify-content: flex-end;
-}
-
-/* Post-save banner — sits at the top of the EVM card body. */
-.enm-evm-reward-banner {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-2);
-    padding: var(--sp-2) var(--sp-3);
-    margin-bottom: var(--sp-3);
-    background: var(--info-bg, var(--bg-elevated));
-    border: 1px solid var(--info, var(--border-color));
-    border-radius: var(--r-sm);
-    font-size: var(--fs-caption);
-    color: var(--text-primary);
-    line-height: 1.4;
-}
-.enm-evm-reward-banner-msg {
-    flex: 1 1 auto;
-    min-width: 0;
-}
-.enm-evm-reward-banner-msg.is-err {
-    color: var(--danger);
-}
-.enm-evm-reward-banner .enm-btn {
-    flex: 0 0 auto;
-    white-space: nowrap;
-}
-.enm-app[data-app-size="compact"] .enm-evm-reward-banner,
-.enm-app[data-app-size="narrow"]  .enm-evm-reward-banner {
-    flex-direction: column;
-    align-items: stretch;
-}
-
 /* Compact: stack the horizontal stat rows (label over value) so long values
    aren't crushed against the label on a 320px screen. Address rows are already
    stacked. */
@@ -3345,6 +3141,25 @@ body[data-app-size="compact"] .enm-section-card-foot .enm-btn,
     height: 6px;
     border-radius: 50%;
     background: var(--success);
+}
+
+/* v0.5.237 — in-pane chain picker (replaces the static pill). Lets Logs
+   scope to any installed chain now that the top chain-selector is gone. */
+.enm-log-chain-select {
+    flex: 0 0 auto;
+    max-width: 180px;
+    padding: 4px 8px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-pill);
+    font-size: var(--fs-caption);
+    font-family: inherit;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+.enm-log-chain-select:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--accent);
 }
 
 .enm-log-search {
@@ -6529,8 +6344,8 @@ body[data-app-size="compact"] .enm-app .enm-topbar {
     min-height: 44px;
     height: auto;
 }
-.enm-app[data-app-size="compact"] .enm-chain-selector,
-body[data-app-size="compact"] .enm-app .enm-chain-selector {
+.enm-app[data-app-size="compact"] .enm-node-mode,
+body[data-app-size="compact"] .enm-app .enm-node-mode {
     grid-area: selector;
 }
 .enm-app[data-app-size="compact"] .enm-tabs,
@@ -6740,8 +6555,8 @@ body[data-app-size="compact"] .enm-app .enm-topbar {
         "selector"
         "tabs";
 }
-.enm-app[data-app-size="compact"] .enm-chain-selector,
-body[data-app-size="compact"] .enm-app .enm-chain-selector {
+.enm-app[data-app-size="compact"] .enm-node-mode,
+body[data-app-size="compact"] .enm-app .enm-node-mode {
     justify-self: start;
 }
 
@@ -7086,10 +6901,12 @@ body[data-app-size="compact"] .enm-app .enm-filter-chip {
 }
 
 /* Overview mode body hook (set by PaneRouter._enterOverviewMode /
-   _exitOverviewMode via document.body.dataset.enmOverview). */
-body[data-enm-overview="1"] .enm-app .enm-tabs {
-    display: none;
-}
+   _exitOverviewMode via document.body.dataset.enmOverview).
+   v0.5.237 — the tab strip is NO LONGER hidden in overview mode. The
+   multi-chain overview is now the default Dashboard-pane content for a
+   Council node with the tabs always visible, so the old
+   `body[data-enm-overview="1"] .enm-app .enm-tabs { display:none }` rule
+   was removed. The body hook is kept for overview-specific styling. */
 
 /* v0.5.186 (Council Node UX P1.4) — caption that marks the EVM-tab feature
    grid as roadmap (not live). On-palette tokens only. The feature grid itself
@@ -8250,6 +8067,45 @@ body[data-app-size="compact"] .enm-app .enm-usage-card-value,
     font-size: var(--fs-caption);
     color: var(--text-tertiary);
     line-height: 1.5;
+}
+/* v0.5.237 — per-chain peers/bootnodes accordion inside the consolidated
+   Sidechain settings tab. One <details> per EVM (esc/eid/pg); the chain's
+   EnmPeersPanel is lazily mounted on first open. Full-width + vertical, so
+   it stays usable down to very small widths. */
+.enm-evm-shared-peers-accordion {
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    margin-top: var(--sp-2);
+    background: var(--bg-overlay);
+    overflow: hidden;
+}
+.enm-evm-shared-peers-summary {
+    cursor: pointer;
+    padding: var(--sp-2) var(--sp-3);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    list-style: none;
+    user-select: none;
+}
+.enm-evm-shared-peers-summary::-webkit-details-marker { display: none; }
+.enm-evm-shared-peers-summary::before {
+    content: '▸';
+    display: inline-block;
+    margin-right: 8px;
+    color: var(--text-tertiary);
+    transition: transform 0.15s ease;
+}
+.enm-evm-shared-peers-accordion[open] > .enm-evm-shared-peers-summary::before {
+    transform: rotate(90deg);
+}
+.enm-evm-shared-peers-summary:hover { color: var(--accent); }
+.enm-evm-shared-peers-summary:focus-visible {
+    outline: none;
+    box-shadow: inset 0 0 0 2px var(--accent);
+}
+.enm-evm-shared-peers-mount {
+    padding: 0 var(--sp-3) var(--sp-2);
 }
 .enm-app[data-app-size="compact"] .enm-evm-shared-mining-grid,
 .enm-app[data-app-size="narrow"]  .enm-evm-shared-mining-grid,

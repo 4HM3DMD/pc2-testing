@@ -10,7 +10,7 @@
     <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
     <meta name="referrer" content="no-referrer">
     <title>Elastos Node Manager</title>
-    <link rel="stylesheet" href="css/styles.css?ts=20260527v229d">
+    <link rel="stylesheet" href="css/styles.css?ts=20260528v237">
     <script>
         // Beta 3 — Phase 1c carried over. Dark-only. We hard-code data-theme=dark
         // on documentElement so any rule that still says [data-theme="dark"] keeps
@@ -73,17 +73,21 @@
     <!--
         Beta 3 app shell. Reference: enm-design-mocks/v2/phase-02-chrome.html.
 
-        Structure (post-beta.3.74 — gear icon dropped per operator
-        callout: was redundant with the Settings tab):
+        Structure (v0.5.237 — chain-selector dropdown removed; a static
+        node-mode label takes its slot and navigation moved to the
+        overview-as-default + always-visible tabs):
             .enm-app[data-active-tab="..."]
               .enm-topbar
-                .enm-chain-selector (was .enm-brand pre-3.70)
+                .enm-node-mode      (static "Council node" / "BPoS node")
                 .enm-tabs           (role=tablist, horizontal scroll)
               .enm-main             (pane container)
 
-        EVM tab is dropped — Beta 3 is mainchain-only per directive.
-        Council node UI is deferred. The five tabs from alpha.27 become
-        four (Dashboard / Logs / Settings / Audit).
+        The four tabs are Dashboard / Logs / Settings / Activity. For a
+        Council node the Dashboard pane defaults to the multi-chain
+        overview (click a chain row to drill in; a "Back to overview"
+        control returns). A BPoS node lands on the single mainchain
+        dashboard. All sidechain config lives in Settings → Sidechain
+        settings.
     -->
     <div class="enm-app" id="app" data-active-tab="dashboard">
         <!-- a11y: WCAG 2.4.6 needs a top-level heading. PC2 chrome shows
@@ -92,45 +96,16 @@
         <h1 class="enm-sr-only">Elastos Node Manager</h1>
 
         <header class="enm-topbar" role="banner">
-            <!-- beta.3.70 — brand-mark + brand-name removed. PC2's
-                 window chrome already shows the app icon + name in
-                 the title bar above; duplicating them inside the
-                 iframe was wasted header space. Operator pointed at
-                 this explicitly: "the top label says it why duplicate".
-
-                 What replaces them: a chain selector. Detection:
-
-                   cfg.chains count = 1 (mainchain only)
-                     → BPoS-only operator → selector renders but
-                       only Main chain is enabled; others grayed
-                       with hover tooltip + footer note.
-                   cfg.chains count >= 2
-                     → council operator → all configured chains
-                       enabled, others stay grayed until installed.
-
-                 The selector lists all 7 known chain surfaces
-                 (Multi-chain overview / Main chain / ESC + Oracle
-                 / EID + Oracle / PG + Oracle / Arbiter / SPV) so
-                 the operator sees the full landscape; available
-                 ones light up, unavailable ones explain why.
-                 Selection persists per operator in localStorage. -->
-            <div class="enm-chain-selector" id="enm-chain-selector"
-                 data-mode="bpos-only" data-active="mainchain">
-                <button type="button" class="enm-chain-selector-trigger"
-                        id="enm-chain-selector-trigger"
-                        aria-haspopup="listbox" aria-expanded="false"
-                        aria-label="Chain view selector">
-                    <span class="enm-chain-selector-label" id="enm-chain-selector-label">Main chain</span>
-                    <span class="enm-chain-selector-caret" aria-hidden="true">▾</span>
-                </button>
-                <div class="enm-chain-selector-menu" id="enm-chain-selector-menu"
-                     role="listbox" aria-labelledby="enm-chain-selector-trigger" hidden>
-                    <!-- Options populated by js/components/chain-selector.js
-                         on first activation so the static markup stays
-                         identity-only and we can iterate the option set
-                         from one place. -->
-                </div>
-            </div>
+            <!-- v0.5.237 — the chain-selector dropdown was removed. A static,
+                 non-interactive node-mode label takes its place. PaneRouter
+                 (app.js #_detectNodeMode) sets its text from GET /config:
+                 "Council node" (>=2 chains) or "BPoS node" (mainchain only).
+                 Navigation model: Council boots to the multi-chain overview
+                 by default with the tab strip always visible; clicking a
+                 chain row drills into that chain (a "Back to overview"
+                 control returns). BPoS lands straight on the mainchain
+                 dashboard — no overview, no Back. -->
+            <div class="enm-node-mode" id="enm-node-mode" data-mode="" aria-live="polite"></div>
             <nav class="enm-tabs" id="enm-tabs" role="tablist" aria-label="Sections" hidden>
                 <button type="button" class="enm-tab active" role="tab" id="enm-tab-dashboard" data-tab="dashboard" aria-selected="true"  aria-controls="enm-pane-dashboard" tabindex="0">Dashboard</button>
                 <button type="button" class="enm-tab"        role="tab" id="enm-tab-logs"      data-tab="logs"      aria-selected="false" aria-controls="enm-pane-logs"      tabindex="-1">Logs</button>
@@ -193,7 +168,7 @@
         mock-derived markup; their JS contracts (event listeners,
         lifecycle guards, ARIA wiring) stay intact.
     -->
-    <script defer src="js/strings.js?ts=20260526v228"></script>
+    <script defer src="js/strings.js?ts=20260528v237"></script>
     <script defer src="js/utils.js?ts=20260506g"></script>
     <!-- v0.5.216 — js-sha3 (MIT, emn178/js-sha3 v0.9.3) for EIP-55 keccak-256
          hard-block. Loaded BEFORE utils-eth.js so it can populate root.sha3. -->
@@ -229,7 +204,8 @@
     <script defer src="js/services/online-watcher.js?ts=20260514a"></script>
     <script defer src="js/services/fleet-health-gradient.js?ts=20260512a"></script>
     <script defer src="js/services/height-series.js?ts=20260512a"></script>
-    <script defer src="js/components/chain-selector.js?ts=20260520v168"></script>
+    <!-- v0.5.237 — chain-selector.js removed (the topbar dropdown is gone;
+         a static node-mode label replaces it, PaneRouter routes navigation). -->
     <script defer src="js/components/system-status.js?ts=20260515b3s"></script>
     <script defer src="js/components/sparkline.js?ts=20260512a"></script>
     <script defer src="js/components/power-circle.js?ts=20260512a"></script>
@@ -238,7 +214,7 @@
          cards mounted BELOW the shared chain-card hero. Class B (EVM): mining
          on/off + geth/reward addresses. Class C (Oracle): parent reachable +
          height + last activity/error. Never mounted for the mainchain. -->
-    <script defer src="js/components/evm-detail-card.js?ts=20260527v229d"></script>
+    <script defer src="js/components/evm-detail-card.js?ts=20260528v237"></script>
     <script defer src="js/components/oracle-status-card.js?ts=20260521v187"></script>
     <script defer src="js/components/validator-registration-card.js?ts=20260527v228"></script>
     <!-- beta.3.14 — always-on node-identity card. Truth-corrected from beta.3.13:
@@ -255,11 +231,11 @@
          operator rule, and the entire card was dead bytes in the bundle. -->
     <!-- <script defer src="js/components/producer-identity.js"></script> -->
 
-    <script defer src="js/components/log-viewer.js?ts=20260515b3u"></script>
+    <script defer src="js/components/log-viewer.js?ts=20260528v237"></script>
     <script defer src="js/components/proposal-card.js?ts=20260515b3f"></script>
     <script defer src="js/components/welcome-screen.js?ts=20260515b3e"></script>
     <script defer src="js/components/setup-conversation.js?ts=20260515b3o"></script>
-    <script defer src="js/components/settings-tab.js?ts=20260527v229d"></script>
+    <script defer src="js/components/settings-tab.js?ts=20260528v237"></script>
     <!-- alpha.29 batch 103 — audit-tab lazy-loaded via enmLoadScript when
          the Audit tab first activates. evm-tab similarly lazy, deferred
          in Beta 3 since EVM (sidechain) tab is dropped from the visible
@@ -279,7 +255,7 @@
     <!-- beta.3.91 (Wave M2.3) — Multi-chain overview pane. PaneRouter
          (M2.1) mounts this when the chain selector key is 'all'; until
          this script loads PaneRouter renders the M2.1 stub instead. -->
-    <script defer src="js/components/multi-chain-overview.js?ts=20260527v228"></script>
+    <script defer src="js/components/multi-chain-overview.js?ts=20260528v237"></script>
     <!-- v0.5.168 (Phase 2) — SPV Module pane. app.js mounts EnmSpvModule when
          the chain selector key is 'spv' (aggregate arbiter SPV height +
          per-sidechain SPV heights + on-demand logs-spv tail). -->
@@ -294,6 +270,6 @@
          (Dashboard / Logs / Settings / Audit) replaced its 4-sub-tab
          wrapper; the Dashboard pane now mounts SystemStatus + ChainCard
          + BPoS card + ToolsUpdate directly from app.js._showDashboard. -->
-    <script defer src="js/app.js?ts=20260521v176"></script>
+    <script defer src="js/app.js?ts=20260528v237"></script>
 </body>
 </html>

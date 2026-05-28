@@ -21,10 +21,11 @@
  *      by class (A→B→C→D→E), one section per class, one row per chain:
  *        [● state-dot]  Chain name  ·  state  ·  uptime  ·  sparkline  ·  →
  *
- *   3. Clicking a row routes to that chain's per-chain pane via the
- *      chain-selector contract: write localStorage('enm:chain-selection')
- *      + dispatch enm:chain-change event. PaneRouter listens for that
- *      event and re-mounts.
+ *   3. Clicking a row routes to that chain's per-chain pane by dispatching
+ *      the enm:chain-change event (v0.5.237 — the old chain-selector +
+ *      localStorage contract was removed). PaneRouter listens for that event,
+ *      drills into the chain's dashboard, and shows a "Back to overview"
+ *      control. Drill-in is session-only; a reload returns to the overview.
  *
  *   4. destroy() unsubscribes SSE + per-chain height-series subs + tears
  *      down all per-chain sparkline instances + removes the root element.
@@ -1538,25 +1539,11 @@
      */
     EnmMultiChainOverviewPane.prototype._routeToChain = function (chainId) {
         if (!chainId) { return; }
-        try {
-            if (root.localStorage && typeof root.localStorage.setItem === 'function') {
-                root.localStorage.setItem('enm:chain-selection', chainId);
-            }
-        } catch (_) { /* private mode */ }
-        // Mirror the new label into the selector trigger so the topbar
-        // updates in sync with the route. Best-effort: a missing selector
-        // element just means the topbar will catch up on its own next
-        // _render. PaneRouter's listener does the heavy lifting.
-        try {
-            var selectorEl = document.getElementById('enm-chain-selector');
-            if (selectorEl) {
-                selectorEl.setAttribute('data-active', chainId);
-                var label = selectorEl.querySelector('.enm-chain-selector-label');
-                if (label && CHAIN_DISPLAY_FALLBACK[chainId]) {
-                    label.textContent = CHAIN_DISPLAY_FALLBACK[chainId];
-                }
-            }
-        } catch (_) { /* no-op */ }
+        // v0.5.237 — the chain selector dropdown was removed. Row clicks route
+        // PURELY via the enm:chain-change event below; PaneRouter catches it
+        // and drills into the chain's dashboard (rendering a "Back to overview"
+        // control). Nothing is persisted — drill-in is session-only, so a
+        // reload always lands a Council node back on the overview.
         try {
             document.dispatchEvent(new CustomEvent('enm:chain-change', {
                 detail: { key: chainId, source: 'overview-row-click' },

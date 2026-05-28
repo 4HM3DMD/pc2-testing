@@ -589,8 +589,8 @@
                     // labeled "Node public key" with a "Share with
                     // Essentials" pill. Display-name parity: "Main chain"
                     // replaces lowercase "mainchain" raw id.
-                    sub:             'All 8 services are installed and starting up. On the dashboard, '
-                                   + 'switch the chain selector to "Multi-chain overview" to watch them '
+                    sub:             'All 8 services are installed and starting up. The Dashboard tab '
+                                   + 'shows the multi-chain overview where you can watch them '
                                    + 'come online. To earn rewards on Main chain, copy the Node public '
                                    + 'key from the Node identity card and paste it into Elastos '
                                    + 'Essentials when registering as a BPoS supernode.',
@@ -796,6 +796,13 @@
             unconfigured: 'Not configured',
         },
 
+        // v0.5.237 — static topbar node-mode label (replaces the removed
+        // chain selector). Set by PaneRouter from GET /config.
+        node_mode: {
+            council: 'Council node',
+            bpos:    'BPoS node',
+        },
+
         // beta.3.94 (Wave M2.6) — multi-chain overview pane copy.
         overview_pane: {
             title:                'Council overview',
@@ -813,6 +820,9 @@
             row_aria_open:        'Open {chainName} dashboard',
             // SR announcer message after row click.
             announce_switched_to: 'Switched to {chainName}',
+            // v0.5.237 — label of the control that returns from a drilled-in
+            // per-chain dashboard to the multi-chain overview (Council only).
+            back_to_overview:     '← Back to overview',
             // v0.5.186 (Council Node UX P2.1) — control-center row meta line.
             // {n} = thousands-separated block height; {parent} = parent
             // EVM chain name an Oracle relays for.
@@ -936,17 +946,14 @@
         pane_stub: {
             // Dashboard stub title is "{chainName} dashboard".
             dashboard_title:      '{chainName} dashboard',
-            // 0.5.29 audit Session 29 — operator-facing copy, drop M3/M4/M6
-            // milestone tags. The detailed per-chain dashboard for EVM
-            // sidechains / Oracles / Arbiter isn't shipped yet; the
-            // existing Settings tab and chain-selector still work for
-            // those chains, just no rich Dashboard view.
-            dashboard_body:       'A detailed dashboard for this chain isn\'t ready yet. To check its current state use the Settings tab, or switch the chain selector to <b>Multi-chain overview</b> to see status for every installed chain in one place.',
+            // Per-chain dashboard fallback stub (rare). v0.5.237 — copy
+            // updated for the selector-free navigation: the Dashboard tab is
+            // the multi-chain overview; clicking a chain row drills in.
+            dashboard_body:       'A detailed dashboard for this chain isn\'t ready yet. The Dashboard tab shows every installed chain\'s status in the multi-chain overview — click a chain there to drill into it.',
             // Multi-chain overview stub (shown only when the real
             // EnmMultiChainOverviewPane component fails to load).
-            // 0.5.29 audit Session 29 — drop M2.1/M2.3 milestone tags.
             overview_title:       'Multi-chain overview',
-            overview_body:        'The multi-chain overview pane couldn\'t load. This is unexpected — try refreshing the page. If it keeps happening, switch the chain selector back to <b>Main chain</b> and continue from there.',
+            overview_body:        'The multi-chain overview couldn\'t load. This is unexpected — try refreshing the page.',
         },
 
         // 0.5.136 audit Session 136 — Class B/C/D stub keys dropped.
@@ -1468,11 +1475,15 @@
             // (validator/follower wording, no "on/off" template).
             // Removed.
             evm_shared_sync_title:              'Sync mode',
-            evm_shared_sync_help:               'How geth catches up to the chain tip. ‘fast’ downloads block headers + state snapshots (default, fastest). ‘full’ re-executes every transaction. ‘archive’ keeps every historical state (massive disk).',
+            evm_shared_sync_help:               'How geth catches up to the chain tip. ‘full’ re-executes every transaction from genesis — validator-grade and the default for Council nodes. ‘archive’ additionally retains every historical state (much larger disk). (Fast sync was removed in v0.5.235.)',
             evm_shared_sync_shared:             '✓ All three chains on ‘{mode}’.',
             evm_shared_sync_diverged:           '⚠ Diverged: {summary}',
             evm_shared_sync_apply_btn:          'Apply to all three',
-            evm_shared_perchain_footer:         'Per-chain settings (bootnodes, ports, binary version, EVM account address) live in each chain’s own card on the dashboard.',
+            // v0.5.237 — per-chain peers/bootnodes accordion in the
+            // consolidated Sidechain settings tab.
+            evm_shared_peers_title:             'Peers & bootnodes',
+            evm_shared_peers_help:              'Bootnodes are per chain — open a chain below to view and edit its peer list. Use this if a sidechain is stuck at 0 peers; new bootnodes are dialled immediately when the chain is running.',
+            evm_shared_perchain_footer:         'Ports, binary version, and the EVM account address are managed automatically. Mining is derived on-chain (no manual toggle). A chain’s live status and Start / Stop / Restart / Resync controls are on its dashboard card.',
 
             // v0.5.228 — Staged chain resume. Gated behind a Danger Zone
             // enable/disable toggle (operator directive 2026-05-26: the

@@ -324,29 +324,13 @@
             ? new root.EnmHeightSeriesClient(this.services.api, this.services.sse)
             : null;
 
-        // beta.3.70 — mount the chain selector in the topbar. It's a
-        // small dropdown that REPLACES the old static MAINNET pill +
-        // duplicate brand cluster. Loads /config asynchronously to
-        // detect node mode (BPoS-only vs council) and renders the
-        // option list accordingly (others grayed for BPoS-only).
-        // Mount is best-effort: if the element or component is
-        // missing for any reason, app continues without it.
-        try {
-            var selectorEl = document.getElementById('enm-chain-selector');
-            if (selectorEl && root.EnmChainSelector) {
-                this._chainSelector = new root.EnmChainSelector({
-                    root: selectorEl,
-                    api: this.services.api,
-                });
-                this._chainSelector.mount();
-            }
-        } catch (err) {
-            // Non-fatal — log to console so a real bug surfaces in
-            // dev tools, but never block the rest of init.
-            if (typeof console !== 'undefined') {
-                console.warn('ENM chain selector mount failed:', err && err.message);
-            }
-        }
+        // v0.5.237 — the chain-selector dropdown was removed. The topbar
+        // now shows a static node-mode label (#enm-node-mode) that
+        // PaneRouter populates from GET /config (Council vs BPoS). The
+        // council-vs-BPoS detection that used to live in chain-selector.js
+        // now lives in PaneRouter._detectNodeMode; navigation between the
+        // multi-chain overview and a per-chain dashboard is driven by the
+        // enm:chain-change event (overview row clicks + the Back control).
 
         // beta.3.89 (Wave M2.1) — install the PaneRouter listener so
         // selector key changes route to the right pane content + tab
@@ -581,18 +565,17 @@
                 + 'Hard-refresh the page (Ctrl-Shift-R, or ⌘-Shift-R on Mac).</p>';
             return;
         }
-        // beta.3.93 (M2.5) — pass chainId + chainClass so the settings
-        // tab dispatches to the right per-class mount entry point.
-        // Falls back to mainchain/A for the legacy single-chain path
-        // (PaneRouter init defaults _activeChainId to 'mainchain'
-        // when nothing's stored in localStorage).
-        var chainId = this._activeChainId || 'mainchain';
-        var CHAIN_CLASS = root.enmChainClass; // P1.6 — single source (utils.js)
+        // v0.5.237 — Settings is GLOBAL now (no longer per-chain). The
+        // consolidated shell covers every chain — including all sidechains via
+        // the "Sidechain settings" section — so it always mounts with the
+        // mainchain (Class A) context regardless of which chain the operator
+        // drilled into. The SettingsTab constructor renders the global shell
+        // unconditionally; we pass A for clarity.
         this._settingsTab = new root.EnmSettingsTab({
             api: this.services.api,
             notifications: this.services.notifications,
-            chainId: chainId,
-            chainClass: CHAIN_CLASS[chainId] || 'A',
+            chainId: 'mainchain',
+            chainClass: 'A',
         });
         this._settingsTab.mount(this.els.paneSettings);
     };
@@ -849,14 +832,12 @@
         this._revealContent();
         this._clearPanes();
         if (this.els.tabs) { this.els.tabs.hidden = true; }
-        // beta.0.4.2 — hide the chain selector during the setup wizard.
-        // Pre-0.4.2 the selector mounted in init() and stayed visible
-        // through every screen including welcome — confusing the
-        // operator who saw "Multi-chain overview" as a clickable option
-        // before they'd even installed mainchain. The selector belongs
-        // on the dashboard, not the welcome screen.
-        var selectorEl = document.getElementById('enm-chain-selector');
-        if (selectorEl) { selectorEl.hidden = true; }
+        // v0.5.237 — hide the static node-mode label during the setup
+        // wizard (it only makes sense once chains are installed; the
+        // mode isn't known until /config has chains). _showDashboard
+        // re-shows + populates it via _detectNodeMode.
+        var modeLabel = document.getElementById('enm-node-mode');
+        if (modeLabel) { modeLabel.hidden = true; }
 
         // alpha.28.1 batch 79 (Round-22 finding #3) — if init() already
         // fetched /setup/state and passed us the result, branch
@@ -978,10 +959,8 @@
     };
 
     ENMApp.prototype._showDashboard = function () {
-        // beta.0.4.2 — restore the chain selector when leaving setup
-        // wizard for the dashboard. Pairs with _showSetupWizard's hide.
-        var selectorEl = document.getElementById('enm-chain-selector');
-        if (selectorEl) { selectorEl.hidden = false; }
+        // v0.5.237 — the static node-mode label is re-shown + populated by
+        // _detectNodeMode below (it was hidden during the setup wizard).
         // beta.0.4.7 — the Council continuation banner has been deleted.
         // The redesigned 7-card wizard (setup-conversation.js) installs
         // everything (mainchain + ESC + EID + PG + 3 oracles + Arbiter)
@@ -1044,31 +1023,27 @@
         // re-mounts triggered by selector clicks.
         var self = this;
         this._dashboardMounted = true;
-        if (this._activeChainId === 'all') {
-            this._enterOverviewMode();
-        } else {
-            this._mountDashboardForActiveChain();
-        }
-
-        // 0.5.8 audit Session 8 fix — re-detect council mode after install.
-        // Pre-0.5.8 the chain-selector's _refreshAvailability fired only at
-        // app init (boot), so chains installed during the wizard never
-        // triggered the v0.5.0 council-default 'all' switch. Operator
-        // landed on the mainchain pane with the selector still labeled
-        // "Main chain"; they had to click the dropdown manually to find
-        // the multi-chain overview. Calling refresh() here re-runs the
-        // /config GET; if the now-installed chain set is Council-shaped
-        // AND no stored selection exists, the selector flips to 'all' +
-        // dispatches enm:chain-change → PaneRouter (now in dashboard
-        // -mounted=true state) catches it via _handleChainChange →
-        // re-mounts the pane to the multi-chain overview. One brief
-        // flicker between initial pane mount and overview mount; way
-        // better than the stale "Main chain" label the operator hit
-        // in our session.
-        if (this._chainSelector && typeof this._chainSelector.refresh === 'function') {
-            try { this._chainSelector.refresh(); }
-            catch (_) { /* defensive: don't block dashboard render on selector refresh */ }
-        }
+        // v0.5.237 — route by node mode, re-detected on every dashboard
+        // entry. This subsumes the old 0.5.8 "re-detect Council after
+        // install" fix: when the Council wizard finishes, onComplete →
+        // _showDashboard → _detectNodeMode sees the freshly-installed chains
+        // and lands on the overview. Drill-in is session-only, so we always
+        // reset to the mode's default landing (overview for Council,
+        // mainchain for BPoS) rather than restoring a stored per-chain pick.
+        this._drilledIn = false;
+        this._detectNodeMode().then(function (mode) {
+            // Guard: if we transitioned back to the setup wizard while
+            // /config was in flight (e.g. a reinstall), don't mount.
+            if (!self._dashboardMounted) { return; }
+            if (mode === 'council') {
+                self._activeChainId = 'all';
+                self._enterOverviewMode();
+            } else {
+                self._activeChainId = 'mainchain';
+                self._overviewMode = false;
+                self._mountDashboardForActiveChain();
+            }
+        });
 
         // Notifications pipeline — keep CRITICAL proposal cards popping
         // on top of the dashboard.
@@ -1132,57 +1107,64 @@
     };
 
     /**
-     * beta.3.89 (Wave M2.1) — PaneRouter wiring.
+     * PaneRouter wiring (v0.5.237 — selector removed).
      *
-     * Wires the chain selector's enm:chain-change event into:
-     *   1. Tab strip visibility (hidden when key='all')
-     *   2. Pane mount (per-chain Dashboard for chain keys, multi-chain
-     *      overview pane for 'all')
+     * Listens for the enm:chain-change event and routes the Dashboard pane:
+     *   - key='all'  → multi-chain overview (Council default; _enterOverviewMode)
+     *   - chain key  → drill into that chain's per-chain dashboard
+     *                  (_handleChainChange → _mountDashboardForActiveChain,
+     *                  with a "Back to overview" control)
      *
-     * The pre-M2.1 dashboard mounted unconditionally for mainchain and
-     * the selector event was silent (zero listeners). With PaneRouter,
-     * the selector becomes load-bearing: clicking "Multi-chain overview"
-     * actually swaps the dashboard for an aggregate view.
+     * Emitters of enm:chain-change are now the overview row click
+     * (multi-chain-overview.js#_routeToChain) and the "Back to overview"
+     * control — the old chain-selector dropdown that used to drive this is
+     * gone. The boot landing is decided by node mode (_detectNodeMode):
+     * Council → overview, BPoS → mainchain dashboard. The tab strip stays
+     * visible in every mode. Drill-in is session-only (no persistence).
      *
-     * Selector ↔ PaneRouter sync:
-     *   - localStorage 'enm:chain-selection' is the shared key. Selector
-     *     writes; PaneRouter reads at boot for the initial activeChainId.
-     *   - chain-selector.js dispatches enm:chain-change on user click AND
-     *     on availability auto-reset (selector's _refreshAvailability
-     *     forces back to mainchain when stored selection is invalid for
-     *     this install's mode). PaneRouter listens for both.
-     *
-     * Idempotent — _paneRouterInstalled gate stops re-wiring on Retry.
+     * Idempotent — the _paneRouterInstalled gate stops re-wiring on the
+     * init() re-run path (e.g. online-watcher reconnect), so there is
+     * exactly one document-level listener.
      *
      * @private
      */
     ENMApp.prototype._initPaneRouter = function () {
         if (this._paneRouterInstalled) { return; }
         this._paneRouterInstalled = true;
-        // Initial activeChainId from the selector's storage key. Falls
-        // back to 'mainchain' for any unknown / missing value so the
-        // dashboard always has a definite chain to mount for.
-        this._activeChainId = this._loadStoredChainSelection();
-        // overviewMode flag tracks whether we're rendering the multi-
-        // chain aggregate pane (true) or a per-chain dashboard (false).
-        // Default false; switched by _enterOverviewMode / _exitOverviewMode.
-        this._overviewMode = (this._activeChainId === 'all');
-        // _dashboardMounted gates the listener so events fired during
-        // the setup wizard period (selector mounts at init, before the
-        // dashboard exists) don't try to manipulate panes that haven't
-        // been created.
+        // v0.5.237 — node mode ('council' | 'bpos-only') is resolved by
+        // _detectNodeMode (GET /config) and is the authoritative driver of
+        // the boot landing: Council → multi-chain overview; BPoS → mainchain
+        // dashboard. _showDashboard re-detects on every dashboard entry so a
+        // node that just became Council during the setup wizard flips to the
+        // overview. Provisional defaults until detection resolves:
+        this._nodeMode = null;
+        // 'all' = the multi-chain overview pane; a specific chainId = a
+        // per-chain dashboard. _showDashboard overrides this from _nodeMode,
+        // so the value here is only a provisional placeholder.
+        this._activeChainId = 'all';
+        this._overviewMode = true;
+        // _drilledIn: true once the operator clicks a chain row in the
+        // overview (Council only). Gates the "Back to overview" control and
+        // is reset whenever we re-enter the overview. The drill-in is
+        // session-only — a reload always lands a Council node back on the
+        // overview (locked decision), so we never restore it from storage.
+        this._drilledIn = false;
+        // _dashboardMounted gates the listener so events fired during the
+        // setup wizard period don't manipulate panes that don't exist yet.
         if (typeof this._dashboardMounted !== 'boolean') {
             this._dashboardMounted = false;
         }
         var self = this;
-        // Listen at document level so the event bubbles from the
-        // selector root (which sits in the topbar, sibling of the
-        // pane container). bubbles:true is set by chain-selector.js.
+        // Listen at document level for enm:chain-change. Emitters: the
+        // overview row click (_routeToChain) and the "Back to overview"
+        // control. The idempotency gate above (_paneRouterInstalled) keeps
+        // this from double-wiring on the init() re-run path (online-watcher
+        // reconnect), so there's exactly one router listener.
         document.addEventListener('enm:chain-change', function (ev) {
-            var key = (ev && ev.detail && ev.detail.key) || 'mainchain';
+            var key = (ev && ev.detail && ev.detail.key) || 'all';
             if (!self._dashboardMounted) {
-                // Setup wizard is up — just remember the new selection
-                // so _showDashboard picks it up on transition.
+                // Setup wizard is up — just remember the selection so
+                // _showDashboard picks it up on transition.
                 self._activeChainId = key;
                 self._overviewMode = (key === 'all');
                 return;
@@ -1192,18 +1174,61 @@
     };
 
     /**
+     * v0.5.237 — resolve node mode from GET /config. Council (>=2 configured
+     * chains) vs BPoS-only (mainchain only). Ported from the deleted
+     * chain-selector.js#_refreshAvailability so PaneRouter no longer depends
+     * on the selector component. Also populates the static topbar node-mode
+     * label. Returns a Promise<'council'|'bpos-only'> that resolves to
+     * 'bpos-only' on any error (safe default — a BPoS node never shows the
+     * overview, so a transient /config failure can't strand a Council
+     * operator in an empty overview).
+     *
      * @private
-     * @returns {string} one of: 'all', 'mainchain', 'esc', 'eid', 'pg',
-     *                   'arbiter', 'spv'. Falls back to 'mainchain' on
-     *                   missing / unknown / non-string values.
      */
-    ENMApp.prototype._loadStoredChainSelection = function () {
-        var VALID = { all: 1, mainchain: 1, esc: 1, eid: 1, pg: 1, arbiter: 1, spv: 1 };
-        try {
-            var v = root.localStorage && root.localStorage.getItem('enm:chain-selection');
-            if (typeof v === 'string' && VALID[v] === 1) { return v; }
-        } catch (_) { /* private-mode / storage disabled */ }
-        return 'mainchain';
+    ENMApp.prototype._detectNodeMode = function () {
+        var self = this;
+        if (!this.services || !this.services.api || typeof this.services.api.get !== 'function') {
+            return Promise.resolve('bpos-only');
+        }
+        return this.services.api.get('/config', { skipCache: true }).then(function (data) {
+            // api.js unwraps the envelope to parsed.result; resolve config
+            // across all three shapes (full envelope / unwrapped result /
+            // bare config) — the same triple-shape guard the selector used,
+            // which a prior bug got wrong and mis-detected every Council node.
+            var cfg = (data && data.result && data.result.config)
+                   || (data && data.config)
+                   || data || {};
+            var chains = (cfg && cfg.chains) || {};
+            var mode = (Object.keys(chains).length <= 1) ? 'bpos-only' : 'council';
+            self._nodeMode = mode;
+            self._applyNodeModeLabel(mode);
+            return mode;
+        }).catch(function () {
+            self._nodeMode = self._nodeMode || 'bpos-only';
+            self._applyNodeModeLabel(self._nodeMode);
+            return self._nodeMode;
+        });
+    };
+
+    /**
+     * v0.5.237 — set the static topbar node-mode label text + data-mode.
+     * @private
+     * @param {'council'|'bpos-only'} mode
+     */
+    ENMApp.prototype._applyNodeModeLabel = function (mode) {
+        var el = document.getElementById('enm-node-mode');
+        if (!el) { return; }
+        el.hidden = false;
+        el.dataset.mode = mode;
+        var t = root.enmTOrFallback;
+        function _fb(key, fb) {
+            if (typeof t !== 'function') { return fb; }
+            var v = t(key);
+            return (!v || v === key || v === ('[' + key + ']')) ? fb : v;
+        }
+        el.textContent = (mode === 'council')
+            ? _fb('node_mode.council', 'Council node')
+            : _fb('node_mode.bpos', 'BPoS node');
     };
 
     /**
@@ -1230,10 +1255,13 @@
             this._enterOverviewMode();
             return;
         }
-        // Specific chain. Exit overview mode if we were in it, then
-        // re-mount the Dashboard pane for the new chain. Only re-mounts
+        // Specific chain — drill in. Exit overview mode if we were in it,
+        // then mount the Dashboard pane for the new chain. Only re-mounts
         // when chainId actually changed — clicking the same chain twice
         // is a no-op (saves a full teardown + remount cycle).
+        // v0.5.237 — mark drilled-in so _mountDashboardForActiveChain renders
+        // the "Back to overview" control (Council only).
+        this._drilledIn = true;
         var prev = this._activeChainId;
         this._activeChainId = key;
         if (this._overviewMode) {
@@ -1255,9 +1283,15 @@
      */
     ENMApp.prototype._enterOverviewMode = function () {
         this._overviewMode = true;
-        // Hide tabs (overview has no Dashboard/Logs/Settings/Audit split).
-        if (this.els.tabs) { this.els.tabs.hidden = true; }
-        // Mirror on body for CSS hooks (M2.3 styling reads this).
+        // v0.5.237 — entering the overview clears any drill-in state (the
+        // "Back to overview" control only exists for a drilled-in chain).
+        this._drilledIn = false;
+        // v0.5.237 — tabs STAY VISIBLE in overview mode. The overview is now
+        // the default Dashboard-pane content for a Council node, not a
+        // full-screen takeover, so Logs / Settings / Activity remain one
+        // click away. (The old `this.els.tabs.hidden = true` here — and the
+        // CSS rule keyed on body[data-enm-overview] — hid them; both removed.)
+        // The body flag is kept as a CSS hook for overview-specific styling.
         if (document.body) { document.body.dataset.enmOverview = '1'; }
         // Tear down per-chain mounts so their SSE subs + timers free.
         this._teardownHomeView();
@@ -1288,6 +1322,12 @@
             try { this._overviewPane.destroy(); } catch (_) { /* idempotent */ }
         }
         this._overviewPane = null;
+        // v0.5.237 — tabs are visible in overview mode now, so the operator
+        // may have mounted Logs / Settings / Activity while on the overview.
+        // Drop those lazy handles before clearing the pane DOM; otherwise the
+        // next tab click returns early on a stale handle and shows a blank
+        // pane (the old code was safe only because overview hid the tabs).
+        this._teardownLazyPanes();
         this._clearPanes();
     };
 
@@ -1335,6 +1375,27 @@
         var pane = this.els.paneDashboard;
         if (!pane) { return; }
         var chainId = this._activeChainId || 'mainchain';
+        // v0.5.237 — "Back to overview" control. Rendered only when a Council
+        // node has drilled into a chain from the overview (never for BPoS,
+        // which has no overview). The pane is cleared by the caller before
+        // this runs, so we prepend it above the chain cards. Routes back via
+        // the same enm:chain-change('all') contract the overview rows use.
+        if (this._drilledIn && this._nodeMode === 'council') {
+            var selfBack = this;
+            var backBtn = document.createElement('button');
+            backBtn.type = 'button';
+            backBtn.className = 'enm-back-to-overview';
+            var _bt = root.enmTOrFallback;
+            var _blabel = '← Back to overview';
+            if (typeof _bt === 'function') {
+                var _bv = _bt('overview_pane.back_to_overview');
+                if (_bv && _bv !== 'overview_pane.back_to_overview'
+                    && _bv !== '[overview_pane.back_to_overview]') { _blabel = _bv; }
+            }
+            backBtn.textContent = _blabel;
+            backBtn.addEventListener('click', function () { selfBack._handleChainChange('all'); });
+            pane.appendChild(backBtn);
+        }
         // beta.3.92 (M2.4) — chainClass static lookup mirrors the
         // server-side ChainAdapter.CHAIN_ID_TO_CLASS table. Passed
         // down to chain-card (and future per-class components) so

@@ -550,6 +550,15 @@ function build(extensionHandle) {
                     isOnDuty: derivedRole ? !!derivedRole.inCurrent : null,
                     inNextRotation: derivedRole ? !!derivedRole.inNext : null,
                 } : null,
+                // v0.5.237 — persisted sync mode (full | archive) per EVM
+                // sidechain, so the consolidated Sidechain settings tab reads
+                // the REAL value instead of assuming 'full' (the frontend's
+                // pre-237 fallback). Class B only; null elsewhere. fast is
+                // coerced to full at write time (v0.5.235), so a legacy stored
+                // 'fast' surfaces as 'full' here too.
+                sync: (adapter.chainClass === 'B' && chainCfg.sync) ? {
+                    mode: (chainCfg.sync.mode && chainCfg.sync.mode !== 'fast') ? chainCfg.sync.mode : 'full',
+                } : null,
                 // v0.5.229 (Phase D) — CR Committee membership summary,
                 // only attached to the MAINCHAIN response so the chain-
                 // card chip can label Council operators correctly. Null

@@ -137,31 +137,19 @@
         this._sections = {};
         this._navItems = {};
         this._pills = {};
-        // beta.3.93 (M2.5) — dispatch by class. Class A keeps the full
-        // existing 7-card settings (network / identity / security /
-        // alerts / storage / advanced / danger). Classes B/C/D/E render
-        // M2.5 stubs explaining the milestone path; M3.3/M4.2/M6.4
-        // replace each stub with the real per-class layout.
-        switch (this.chainClass) {
-            case 'A':
-                this._mountMainchainSettings();
-                break;
-            case 'B':
-                this._mountEvmSidechainSettings(this.chainId);
-                break;
-            case 'C':
-                this._mountOracleSettings(this.chainId);
-                break;
-            case 'D':
-                this._mountArbiterSettings();
-                break;
-            case 'E':
-                this._mountSpvSettings();
-                break;
-            default:
-                this._mountMainchainSettings(); // safest fallback
-                break;
-        }
+        // v0.5.237 — Settings is now GLOBAL (one settings area for the whole
+        // node), no longer scoped per-chain. The chain-selector that used to
+        // scope Settings to a single chain was removed; ALL sidechain
+        // configuration now lives in the shared "Sidechain settings" section
+        // of this one shell (reward + sync for every EVM, read-only validator
+        // status, and a per-chain peers/bootnodes accordion). So every
+        // instance renders the full global shell regardless of the
+        // chainId/chainClass it was constructed with.
+        //
+        // The old per-class mounts (_mountEvmSidechainSettings / _renderClassBForm
+        // / _mountOracleSettings / _mountArbiterSettings / _mountSpvSettings)
+        // are now unreachable and are removed in the Phase 5 dead-code cleanup.
+        this._mountMainchainSettings();
     }
 
     SettingsTab.prototype.mount = function (parent) {
@@ -190,924 +178,6 @@
         this._renderShell();
     };
 
-    /**
-     * Class B (EVM sidechain: ESC / EID / PG) settings mount.
-     *
-     * Layout — Mining & Rewards · PBFT signing keystore reference · Sync
-     * mode · Restart. The signing keystore is shared with the Main chain
-     * (PBFT convention). Reads cfg.chains[chainId] via GET /config; saves
-     * changes via PUT /chains/<id>/class-b-config.
-     *
-     * @private
-     * @param {string} chainId — esc | eid | pg
-     */
-    SettingsTab.prototype._mountEvmSidechainSettings = function (chainId) {
-        var fallbackChainNames = { esc: 'Smart Chain (ESC)', eid: 'Identity Chain (EID)', pg: 'PG Chain' };
-        var name = _tFb('chain_name.' + chainId, fallbackChainNames[chainId] || chainId);
-        var self = this;
-        this.root.innerHTML = ''
-            + '<header class="enm-settings-class-head">'
-            + '<h2>' + escapeHtml(name) + ' settings</h2>'
-            + '<p class="enm-settings-class-sub">EVM sidechain — mining and sync controls. '
-            + 'Block signing reuses the Main chain keystore; ENM never holds the private key.</p>'
-            + '</header>'
-            + '<div class="enm-settings-class-body" data-state="loading">'
-            + '<p class="enm-stub">Loading current configuration…</p>'
-            + '</div>';
-        var body = this.root.querySelector('.enm-settings-class-body');
-        this.api.get('/config', { skipCache: true }).then(function (data) {
-            if (self._destroyed) { return; }
-            var cfg = (data && data.config) || {};
-            var chainCfg = (cfg.chains && cfg.chains[chainId]) || null;
-            if (!chainCfg) {
-                body.dataset.state = 'unconfigured';
-                // 0.5.13 audit Session 13 — strip M3.5 milestone ref from
-                // operator-facing copy. Pre-0.5.13 said "Use the setup
-                // wizard (lands in M3.5) to install this chain" — operator
-                // cannot decode the M3.5 tag.
-                body.innerHTML = ''
-                    + '<div class="enm-settings-class-stub">'
-                    + '<p><strong>' + escapeHtml(name) + ' is not yet installed.</strong></p>'
-                    + '<p>Use the setup wizard to install this chain before '
-                    + 'configuring its mining and sync options.</p>'
-                    + '</div>';
-                return;
-            }
-            self._renderClassBForm(body, chainId, chainCfg);
-        }).catch(function (err) {
-            if (self._destroyed) { return; }
-            // 0.5.132 audit Session 132 — silence on 401. Loading state
-            // ("Loading current configuration…") stays in the body; login
-            // overlay takes over, on re-auth the operator can switch
-            // chains away and back to re-trigger this load cleanly.
-            if (err && err.status === 401) { return; }
-            body.dataset.state = 'error';
-            body.innerHTML = '<p class="enm-stub">Failed to load config: '
-                + escapeHtml((err && err.message) || String(err)) + '</p>';
-        });
-    };
-
-    /**
-     * @private — paint the Class B editor form. Sections:
-     *   - Mining & Rewards: enabled toggle, rewardAddress, evmKeystoreAddr, threads
-     *   - PBFT signing keystore: read-only pointer to mainchain keystore
-     *   - Sync mode: fast | full | archive
-     *   - Restart: per-chain restart
-     */
-    SettingsTab.prototype._renderClassBForm = function (parent, chainId, chainCfg) {
-        var self = this;
-        var miner = chainCfg.miner || {};
-        var sync = chainCfg.sync || {};
-        // v0.5.187 (Phase 4) — compute the display name here. Pre-0.5.187 this
-        // method referenced an undefined `name`, silently reading window.name
-        // (the Restart button rendered "Restart " with an empty suffix).
-        var fallbackChainNames = { esc: 'Smart Chain (ESC)', eid: 'Identity Chain (EID)', pg: 'PG Chain' };
-        var name = _tFb('chain_name.' + chainId, fallbackChainNames[chainId] || chainId);
-        parent.dataset.state = 'ready';
-        parent.innerHTML = '';
-
-        // v0.5.187 (Council Node UX Phase 4) — re-emit through the same
-        // canonical primitives the Class-A (mainchain) settings use:
-        // makeSection (savable card w/ Save+Revert+status), makeInfoCard
-        // (foot-less read-only/action card), makeFormRow / makeToggleRow /
-        // makeInput / makeSelectWrap for controls. Class A render path is
-        // untouched (this method is only reached for chainClass === 'B').
-
-        // ---- Card 1: Mining & sync (savable) ----
-        var sec = makeSection({
-            id: 'classb-mining',
-            icon: '',
-            title: 'Mining & sync',
-            help: 'Whether this node produces blocks for ' + name + ', where rewards go, and '
-                + 'how much history it keeps. Restart the chain after saving to apply.',
-            tag: { kind: 'muted', label: 'Restart to apply' },
-        });
-
-        // v0.5.228 — replace the writable "Mining on/off" toggle with a
-        // READ-ONLY "Validator status" badge. Mining on an Elastos EVM
-        // sidechain is not an operator-settable knob: it's derived from
-        // on-chain producer / Council membership (the chain's PBFT
-        // engine self-gates Seal() based on the current arbiter slate;
-        // see EvmSidechainAdapter.detectProducerRole + start, both
-        // already shipped since v0.5.188). The pre-v228 toggle was
-        // misleading — clicking it changed cfg.miner.enabled in
-        // ConfigStore, but EvmSidechainAdapter.start always overwrote
-        // it before spawn, so the toggle was visible but ineffectual.
-        // Operator directive 2026-05-27: "node.sh doesn't work like
-        // that for council nodes — after binding, the chain itself
-        // recognized it's a council node and the set evm mining
-        // addresses automatically became mining addresses".
-        //
-        // The badge is populated asynchronously from
-        // GET /api/enm/system/council-status, which exposes the same
-        // detectProducerRole the spawn path uses. Initial render shows
-        // a loading state. If the fetch fails or times out, the badge
-        // falls back to whatever cfg.miner.enabled currently reads as
-        // (the cached derived value from the last successful spawn).
-        var statusRow = document.createElement('div');
-        statusRow.className = 'enm-classb-validator-row';
-        statusRow.setAttribute('role', 'group');
-        statusRow.setAttribute('aria-label', 'Validator status');
-        var statusBadgeId = 'enm-classb-validator-' + chainId;
-        statusRow.innerHTML = ''
-            + '<div class="enm-classb-validator-head">'
-            +   '<div class="enm-classb-validator-label">Validator status</div>'
-            +   '<div class="enm-classb-validator-help">'
-            +     'Derived from the on-chain CR-Council / DPoS arbiter slate. '
-            +     'Mining activates automatically when this node\'s public key '
-            +     'is bound to a Council seat (via Elastos Essentials) and the '
-            +     'current rotation includes it — there is no manual toggle.'
-            +   '</div>'
-            + '</div>'
-            + '<div class="enm-classb-validator-body">'
-            +   '<span id="' + statusBadgeId + '" class="enm-classb-validator-badge"'
-            +     ' data-state="loading">Checking on-chain status…</span>'
-            + '</div>';
-        sec.body.appendChild(statusRow);
-        // Fire the council-status fetch immediately so the badge resolves
-        // soon after render. Fallback to the cached miner.enabled if the
-        // endpoint is unreachable (boot path, mainchain still syncing).
-        (function (badgeId, cid, cachedEnabled) {
-            self.api.get('/system/council-status').then(function (env) {
-                if (self._destroyed) { return; }
-                var data = (env && env.data) || env || {};
-                var perChain = (data.chains && data.chains[cid]) || null;
-                var badge = self.root.querySelector('#' + badgeId);
-                if (!badge) { return; }
-                var s = (perChain && perChain.chainState) || 'unknown';
-                // Map raw chainState → visible label + badge color.
-                // 'on-duty'  → green   "On-duty"
-                // 'standby'  → amber   "Standby"
-                // 'inactive' → gray    "Inactive (not in current rotation)"
-                // 'unknown'  → gray    "Detecting…"
-                // 'follower' → gray    "Follower (not configured for mining)"
-                var labelMap = {
-                    'on-duty':  { label: 'On-duty',   sub: 'Producing blocks this rotation — rewards land at the address below.' },
-                    'standby':  { label: 'Standby',   sub: 'Bound to a Council seat; in the next rotation\'s arbiter slate.' },
-                    'inactive': { label: 'Inactive',  sub: 'Not in the current or next arbiter slate. Mining activates automatically when this node\'s public key is on-duty.' },
-                    'unknown':  { label: 'Detecting', sub: 'Reading mainchain arbiter slate… retry every chain start.' },
-                    'follower': { label: 'Follower',  sub: 'Chain not configured for mining (no init was run).' },
-                };
-                var meta = labelMap[s] || labelMap.unknown;
-                badge.dataset.state = s;
-                badge.textContent = meta.label;
-                // Add the explanatory sub-line right after the badge.
-                var subEl = badge.parentNode.querySelector('.enm-classb-validator-sub');
-                if (!subEl) {
-                    subEl = document.createElement('div');
-                    subEl.className = 'enm-classb-validator-sub';
-                    badge.parentNode.appendChild(subEl);
-                }
-                subEl.textContent = meta.sub;
-            }).catch(function (err) {
-                if (self._destroyed) { return; }
-                if (err && err.status === 401) { return; }
-                // v0.5.228d (audit F3) — fallback wording. The pre-228d
-                // label "(cached)" implied the backend had recently
-                // confirmed this state; in reality the fallback reads
-                // cfg.miner.enabled from disk, which is the value the
-                // last successful spawn wrote — could be hours/days
-                // stale. "(from last spawn)" is honest about the
-                // source. Real-time state lives on /system/council-status
-                // which this fallback only runs when we couldn't
-                // reach.
-                var badge = self.root.querySelector('#' + badgeId);
-                if (!badge) { return; }
-                if (cachedEnabled) {
-                    badge.dataset.state = 'on-duty';
-                    badge.textContent = 'On-duty (from last spawn)';
-                } else {
-                    badge.dataset.state = 'inactive';
-                    badge.textContent = 'Inactive (from last spawn)';
-                }
-                var subEl = badge.parentNode.querySelector('.enm-classb-validator-sub');
-                if (!subEl) {
-                    subEl = document.createElement('div');
-                    subEl.className = 'enm-classb-validator-sub';
-                    badge.parentNode.appendChild(subEl);
-                }
-                subEl.textContent = 'Could not reach /system/council-status; '
-                    + 'showing the value from this node\'s last spawn. '
-                    + 'Live status refreshes on every chain start.';
-            });
-        }(statusBadgeId, chainId, !!miner.enabled));
-
-        var rewardInput = makeInput({ value: miner.rewardAddress || '', placeholder: '0x…40 hex chars', mono: true, ariaLabel: 'Reward address' });
-        rewardInput.setAttribute('spellcheck', 'false');
-        rewardInput.setAttribute('autocomplete', 'off');
-        var rewardRow = makeFormRow({ label: 'Reward address', help: 'Where mining rewards are credited. 0x + 40 hex characters.', control: rewardInput });
-        sec.body.appendChild(rewardRow);
-
-        var evmInput = makeInput({ value: miner.evmKeystoreAddr || '', placeholder: '0x…40 hex chars (often same as reward)', mono: true, ariaLabel: 'EVM keystore address' });
-        evmInput.setAttribute('spellcheck', 'false');
-        evmInput.setAttribute('autocomplete', 'off');
-        var evmRow = makeFormRow({ label: 'EVM keystore address', help: 'Account unlocked for signing. 0x + 40 hex characters.', control: evmInput });
-        sec.body.appendChild(evmRow);
-
-        var threadsInput = makeInput({ type: 'number', value: Number.isInteger(miner.threads) ? miner.threads : 1, min: 1, max: 16, ariaLabel: 'Mining threads' });
-        threadsInput.addEventListener('input', function () { sec.setDirty(true); });
-        sec.body.appendChild(makeFormRow({ label: 'Mining threads', help: 'CPU threads used while mining is on.', control: threadsInput }));
-
-        // v0.5.235 — fast sync removed. ENM nodes are validators (Council/BPoS);
-        // EVM chains always run validator-grade full sync. Only full (default)
-        // and archive (full + all historical state) remain.
-        var syncSel = makeSelectWrap({
-            options: [
-                { value: 'full', label: 'full — validator-grade (recommended)' },
-                { value: 'archive', label: 'archive — full + all historical state' },
-            ],
-            value: (sync.mode && sync.mode !== 'fast') ? sync.mode : 'full',
-            onChange: function () { sec.setDirty(true); },
-        });
-        sec.body.appendChild(makeFormRow({ label: 'Sync mode', help: 'How much chain history this node retains. Council/BPoS nodes always full-sync.', control: syncSel.el }));
-
-        parent.appendChild(sec.card);
-
-        // ---- Card 2: Block-signing keystore (read-only) ----
-        parent.appendChild(makeInfoCard({
-            title: 'Block-signing keystore',
-            help: 'This chain signs blocks with the Main chain keystore; ENM never holds the '
-                + 'private key. To change its password or import a different one, switch the '
-                + 'chain selector to Main chain and open Settings → Identity.',
-            codeLine: 'chains/mainchain/keystore.dat',
-        }).card);
-
-        // ---- Card 3: Restart (action) ----
-        var restartCard = makeInfoCard({
-            title: 'Restart',
-            help: 'After saving mining or sync changes, restart ' + name + ' to apply them. '
-                + 'Also useful if the chain is stuck or stalls on sync.',
-        });
-        var restartBtn = document.createElement('button');
-        restartBtn.type = 'button';
-        restartBtn.className = 'enm-btn enm-btn-secondary';
-        restartBtn.textContent = 'Restart ' + name;
-        var restartStatus = document.createElement('p');
-        restartStatus.className = 'enm-section-card-foot-status';
-        restartStatus.setAttribute('role', 'status');
-        restartStatus.setAttribute('aria-live', 'polite');
-        restartStatus.hidden = true;
-        restartCard.body.appendChild(restartBtn);
-        restartCard.body.appendChild(restartStatus);
-        parent.appendChild(restartCard.card);
-
-        // ---- Card 4: Binary update (v0.5.187 Phase 5) — re-download latest ----
-        // The backend (POST /chains/:id/update) re-downloads the latest binary
-        // (node.sh ela_update model) and requires the chain stopped. There is
-        // NO per-EVM "update available" check endpoint (/updates/available is
-        // mainchain-only), so this honestly offers a re-download + shows the
-        // installed version — it does not fake a vX→vY diff or "up to date".
-        var updateCard = makeInfoCard({
-            title: 'Binary update',
-            help: 'Re-downloads the latest ' + name + ' binary. Stop the chain first (from the '
-                + 'dashboard or overview), update here, then start it again. Updating replaces '
-                + 'only the binary — it does not touch chain data.',
-        });
-        var verList = document.createElement('div');
-        verList.className = 'enm-detail-list';
-        var verRow = document.createElement('div');
-        verRow.className = 'enm-detail-row';
-        var verLbl = document.createElement('span');
-        verLbl.className = 'enm-detail-label';
-        verLbl.textContent = 'Installed version';
-        var verVal = document.createElement('span');
-        verVal.className = 'enm-detail-value enm-detail-addr';
-        verVal.textContent = chainCfg.binaryVersion || 'unknown';
-        verRow.appendChild(verLbl);
-        verRow.appendChild(verVal);
-        verList.appendChild(verRow);
-        updateCard.body.appendChild(verList);
-        var updateBtn = document.createElement('button');
-        updateBtn.type = 'button';
-        updateBtn.className = 'enm-btn enm-btn-secondary';
-        updateBtn.textContent = 'Update binary';
-        var updateStatus = document.createElement('p');
-        updateStatus.className = 'enm-section-card-foot-status';
-        updateStatus.setAttribute('role', 'status');
-        updateStatus.setAttribute('aria-live', 'polite');
-        updateStatus.hidden = true;
-        updateCard.body.appendChild(updateBtn);
-        updateCard.body.appendChild(updateStatus);
-        parent.appendChild(updateCard.card);
-        updateBtn.addEventListener('click', function () {
-            self._updateClassB(chainId, name, updateBtn, updateStatus);
-        });
-
-        // ---- Card 5: Network peers (self-contained panel) ----
-        var peersCard = makeInfoCard({
-            title: 'Network peers',
-            help: 'Bootnodes and live peers for ' + name + '. Changes here apply immediately and '
-                + 'are independent of the mining/sync save above.',
-        });
-        var peersMount = document.createElement('div');
-        peersCard.body.appendChild(peersMount);
-        parent.appendChild(peersCard.card);
-
-        // ---- v0.5.216 audit Phase 2 (AUDIT-FLOW-B01, P1) — address
-        // validation now routes through the SHARED root.enmEthAddress
-        // helper (same source the setup wizard Card 4 uses), so the
-        // EIP-55 mixed-case hard-block that protects new operators at
-        // install time also protects operators ROTATING addresses via
-        // Settings. Pre-v0.5.216 this section had only basic format
-        // validation — paste a mixed-case address with one char's case
-        // flipped, save, and future rewards went to a different
-        // account silently. Now blocked + suggested-correct-case shown
-        // inline. Closes XFLOW-04 + XFLOW-16 duplication of validateEth.
-        var ethApi = root.enmEthAddress;
-        var classifyAddr = function (v) {
-            var str = (v || '').trim();
-            if (!str) { return { kind: 'empty' }; }
-            if (!ethApi || typeof ethApi.check !== 'function') {
-                // Defensive fallback if utils-eth failed to load —
-                // preserves the pre-v0.5.216 format-only check.
-                return /^0x[0-9a-fA-F]{40}$/.test(str)
-                    ? { kind: 'ok' }
-                    : { kind: 'bad' };
-            }
-            var r = ethApi.check(str);
-            if (r.ok) {
-                return r.warn === 'no_keccak'
-                    ? { kind: 'ok-degraded' }
-                    : { kind: 'ok' };
-            }
-            if (r.error === 'eip55_checksum') {
-                return { kind: 'checksum', suggested: r.suggested };
-            }
-            return { kind: 'bad' };
-        };
-        // Tiny helper to surface a one-line correction hint inline in
-        // the row's existing status area. The row's data-validity attr
-        // also drives any per-row CSS (red border on 'bad'/'checksum').
-        var setRowStatus = function (row, msg) {
-            // Find or create a status span at the foot of the row.
-            var slot = row.querySelector('.enm-row-status') || (function () {
-                var s = document.createElement('div');
-                s.className = 'enm-row-status';
-                s.setAttribute('aria-live', 'polite');
-                row.appendChild(s);
-                return s;
-            }());
-            slot.textContent = msg || '';
-            slot.hidden = !msg;
-        };
-        var refreshValidity = function () {
-            var r = classifyAddr(rewardInput.value);
-            var e = classifyAddr(evmInput.value);
-            rewardRow.setAttribute('data-validity', r.kind);
-            evmRow.setAttribute('data-validity', e.kind);
-            setRowStatus(rewardRow, r.kind === 'checksum'
-                ? 'Wrong checksum — did you mean: ' + r.suggested + '?'
-                : '');
-            setRowStatus(evmRow, e.kind === 'checksum'
-                ? 'Wrong checksum — did you mean: ' + e.suggested + '?'
-                : '');
-            // Disable Save on either field being a definite typo: 'bad'
-            // (format) or 'checksum' (mixed-case mismatch). 'empty' and
-            // 'ok-degraded' still allow save — empty is a real signal
-            // (operator clearing the field to disable mining), and the
-            // degraded mode means keccak couldn't verify so we default
-            // to permissive (same as pre-v0.5.216 behavior).
-            sec.saveBtn.disabled = (r.kind === 'bad' || r.kind === 'checksum')
-                || (e.kind === 'bad' || e.kind === 'checksum');
-        };
-        rewardInput.addEventListener('input', function () { sec.setDirty(true); refreshValidity(); });
-        evmInput.addEventListener('input', function () { sec.setDirty(true); refreshValidity(); });
-        refreshValidity();
-
-        // ---- save (reads control handles; enmRunOnce guards double-submit) ----
-        // v0.5.228 — controls.enabled is intentionally absent. The save
-        // body below no longer includes miner.enabled — the backend
-        // derives it from on-chain arbiter slate at every chain start.
-        var controls = { reward: rewardInput, evm: evmInput, threads: threadsInput, syncMode: syncSel };
-        sec.saveBtn.addEventListener('click', function () {
-            self._saveClassB(chainId, controls, sec);
-        });
-        sec.revertBtn.addEventListener('click', function () {
-            // No enabledToggle to revert — it's a derived read-only badge.
-            rewardInput.value = miner.rewardAddress || '';
-            evmInput.value = miner.evmKeystoreAddr || '';
-            threadsInput.value = Number.isInteger(miner.threads) ? miner.threads : 1;
-            syncSel.setValue((sync.mode && sync.mode !== 'fast') ? sync.mode : 'full');
-            refreshValidity();
-            sec.setDirty(false);
-            if (sec.statusEl) { sec.statusEl.textContent = ''; }
-        });
-
-        // ---- restart (confirm-before-disruptive + enmRunOnce) ----
-        restartBtn.addEventListener('click', function () {
-            self._restartClassB(chainId, name, restartBtn, restartStatus);
-        });
-
-        // ---- Network peers panel — destroy any prior instance first (form
-        // re-renders on chain switch / reload); destroy() tears it down. ----
-        if (this._peersPanel) {
-            try { this._peersPanel.destroy(); } catch (_) { /* idempotent */ }
-            this._peersPanel = null;
-        }
-        if (root.EnmPeersPanel) {
-            this._peersPanel = new root.EnmPeersPanel({
-                api: this.api,
-                chainId: chainId,
-                notifications: this.notifications,
-            });
-            this._peersPanel.mount(peersMount);
-        }
-    };
-
-    /** @private — v0.5.187 (Phase 4): reads from the control handles built in
-     * _renderClassBForm (toggle/select expose getValue; inputs expose .value).
-     * enmRunOnce guards the Save button against double-submit and manages its
-     * disabled/label state; the status line is managed separately. */
-    SettingsTab.prototype._saveClassB = function (chainId, controls, sec) {
-        var self = this;
-        var status = sec.statusEl;
-        // v0.5.228 — miner.enabled removed from the request body. It's
-        // a derived value (computed at every chain start from on-chain
-        // arbiter slate), not operator-settable. Sending it from this
-        // form would be a no-op at best and misleading at worst.
-        var body = {
-            miner: {
-                rewardAddress: (controls.reward.value || '').trim(),
-                evmKeystoreAddr: (controls.evm.value || '').trim(),
-                threads: parseInt(controls.threads.value, 10) || 1,
-            },
-            sync: {
-                mode: controls.syncMode.getValue(),
-            },
-        };
-        if (status) { status.textContent = ''; }
-        var doSave = function () {
-            return self.api.put('/chains/' + chainId + '/class-b-config', body).then(function () {
-                if (self._destroyed) { return; }
-                sec.setDirty(false);
-                // Point the operator at the in-pane Restart card to apply.
-                if (status) { status.textContent = 'Saved. Use Restart below to apply.'; }
-            }).catch(function (err) {
-                if (self._destroyed) { return; }
-                // Silence on 401 — boot path owns re-auth.
-                if (err && err.status === 401) { return; }
-                if (status) { status.textContent = 'Save failed: ' + ((err && err.message) || String(err)); }
-            });
-        };
-        if (typeof root.enmRunOnce === 'function') {
-            root.enmRunOnce(sec.saveBtn, 'Saving…', doSave);
-        } else {
-            sec.saveBtn.disabled = true;
-            doSave().finally(function () { sec.saveBtn.disabled = false; });
-        }
-    };
-
-    /**
-     * @private — v0.5.187 (Phase 5): re-download the latest binary for an EVM
-     * chain via POST /chains/:id/update (node.sh ela_update model). The backend
-     * requires the chain stopped (409 otherwise) and exposes NO per-EVM
-     * "update available" check — so this is a safe re-download with a clear
-     * stop-first message on 409, not a version diff. Confirm + enmRunOnce.
-     */
-    SettingsTab.prototype._updateClassB = function (chainId, name, btn, statusEl) {
-        var self = this;
-        if (typeof root.confirm === 'function'
-            && !root.confirm('Update the ' + name + ' binary now? Stop the chain first; this '
-                + 're-downloads the latest binary and does not touch chain data.')) {
-            return;
-        }
-        statusEl.hidden = false;
-        statusEl.className = 'enm-section-card-foot-status';
-        statusEl.textContent = 'Updating…';
-        var doUpdate = function () {
-            return self.api.post('/chains/' + chainId + '/update', {}).then(function () {
-                if (self._destroyed) { return; }
-                statusEl.className = 'enm-section-card-foot-status success';
-                statusEl.textContent = 'Binary updated. Start the chain to run the new version.';
-            }).catch(function (err) {
-                if (self._destroyed) { return; }
-                if (err && err.status === 401) { statusEl.hidden = true; return; }
-                statusEl.className = 'enm-section-card-foot-status error';
-                // 409 = chain still running; the backend message tells the
-                // operator to stop it first. Surface the backend message verbatim.
-                statusEl.textContent = (err && err.message) ? err.message : 'Update failed. Try again.';
-            });
-        };
-        if (typeof root.enmRunOnce === 'function') {
-            root.enmRunOnce(btn, 'Updating…', doUpdate);
-        } else {
-            btn.disabled = true;
-            doUpdate().finally(function () { btn.disabled = false; });
-        }
-    };
-
-    /**
-     * @private — Restart a Class B chain via POST /chains/<id>/restart.
-     * v0.5.187 (Phase 4): confirm-before-disruptive (parity with the overview
-     * quick actions) + enmRunOnce guards the button against double-submit. A
-     * restart interrupts in-progress sync work, so the operator confirms first.
-     */
-    SettingsTab.prototype._restartClassB = function (chainId, name, btn, statusEl) {
-        var self = this;
-        if (typeof root.confirm === 'function'
-            && !root.confirm('Restart ' + name + '? In-progress sync work will be interrupted.')) {
-            return;
-        }
-        statusEl.hidden = true;
-        var doRestart = function () {
-            return self.api.post('/chains/' + chainId + '/restart', {}).then(function () {
-                if (self._destroyed) { return; }
-                statusEl.hidden = false;
-                statusEl.textContent = 'Restart requested. Watch the chain card for status.';
-            }).catch(function (err) {
-                if (self._destroyed) { return; }
-                // Silence error text on 401 — boot path owns re-auth.
-                if (err && err.status === 401) { return; }
-                statusEl.hidden = false;
-                statusEl.textContent = 'Restart failed: ' + ((err && err.message) || String(err));
-            });
-        };
-        if (typeof root.enmRunOnce === 'function') {
-            root.enmRunOnce(btn, 'Restarting…', doRestart);
-        } else {
-            btn.disabled = true;
-            doRestart().finally(function () { btn.disabled = false; });
-        }
-    };
-
-    /**
-     * beta.3.93 (Wave M2.5) — Class C (Oracle: esc-oracle, eid-oracle,
-     * pg-oracle) settings mount.
-     *
-     * Oracles don't normally appear in the chain selector — they're
-     * surfaced inside their parent chain's pane as a sub-status panel
-     * (plan §3 Smart UI Behavior). This mount exists for completeness
-     * + the rare case of direct deep-linking (e.g. localStorage
-     * tampering). M4.2 (beta.3.2) will deliver the real layout.
-     *
-     * @private
-     * @param {string} chainId — esc-oracle | eid-oracle | pg-oracle
-     */
-    SettingsTab.prototype._mountOracleSettings = function (chainId) {
-        // beta.0.3.2 (Wave M4.2) — real Class C settings layout.
-        // Replaces the M2.5 stub. Read-only display of the oracle's
-        // wire (parent chain, script path, node version, port) plus
-        // a Restart button (the only writable interaction since
-        // oracles have no rewards/keystore/peers to tune).
-        var fallbackChainNames = {
-            'esc-oracle': 'ESC Oracle',
-            'eid-oracle': 'EID Oracle',
-            'pg-oracle':  'PG Oracle',
-        };
-        var name = _tFb('chain_name.' + chainId, fallbackChainNames[chainId] || chainId);
-        var self = this;
-        this.root.innerHTML = ''
-            + '<header class="enm-settings-class-head">'
-            + '<h2>' + escapeHtml(name) + ' settings</h2>'
-            + '<p class="enm-settings-class-sub">Class C (Oracle) — '
-            + 'stateless Node.js relayer. No keystore, no rewards, '
-            + 'no peers. Relays cross-chain transactions from its '
-            + 'parent EVM sidechain to mainchain.</p>'
-            + '</header>'
-            + '<div class="enm-settings-class-body" data-state="loading">'
-            + '<p class="enm-stub">Loading current configuration…</p>'
-            + '</div>';
-        var body = this.root.querySelector('.enm-settings-class-body');
-        this.api.get('/config', { skipCache: true }).then(function (data) {
-            if (self._destroyed) { return; }
-            var cfg = (data && data.config) || {};
-            var oracleCfg = (cfg.chains && cfg.chains[chainId]) || null;
-            if (!oracleCfg) {
-                body.dataset.state = 'unconfigured';
-                // 0.5.12 audit Session 12 — strip M4.4 / plan refs from
-                // operator-facing copy. Pre-0.5.12 said "lands in M4.4 /
-                // For now use the parent chain pane to monitor + install"
-                // — dev-internal milestone refs the operator can't decode.
-                body.innerHTML = ''
-                    + '<div class="enm-settings-class-stub">'
-                    + '<p><strong>' + escapeHtml(name) + ' is not yet installed.</strong></p>'
-                    + '<p>This oracle activates automatically when its parent chain '
-                    + 'finishes installing. Open the parent chain\'s dashboard to '
-                    + 'check status or trigger install from the setup wizard.</p>'
-                    + '</div>';
-                return;
-            }
-            self._renderClassCInfo(body, chainId, oracleCfg);
-        }).catch(function (err) {
-            if (self._destroyed) { return; }
-            // 0.5.132 audit Session 132 — silence on 401, see _mountEvmSidechainSettings.
-            if (err && err.status === 401) { return; }
-            body.dataset.state = 'error';
-            body.innerHTML = '<p class="enm-stub">Failed to load config: '
-                + escapeHtml((err && err.message) || String(err)) + '</p>';
-        });
-    };
-
-    /**
-     * @private — paint Class C (oracle) info pane. Read-only display
-     * of the oracle's wire shape; M4.4 adds the parent-restart hook
-     * that drives the operator action surface here.
-     */
-    SettingsTab.prototype._renderClassCInfo = function (parent, chainId, oracleCfg) {
-        parent.dataset.state = 'ready';
-        var self = this;
-        parent.innerHTML = '';
-
-        // v0.5.187 (Council Node UX Phase 4) — re-emit through the canonical
-        // makeInfoCard (foot-less .enm-section-card) + the shared .enm-detail-row
-        // key/value primitive, matching the Class-A reference. Class A untouched.
-
-        // ---- Card 1: Oracle wiring (read-only key/value) ----
-        var wiring = makeInfoCard({
-            title: 'Oracle wiring',
-            help: 'Read-only — an oracle is a stateless relayer with nothing to tune.',
-        });
-        var fields = [
-            { label: 'Parent chain',     value: oracleCfg.parentChainId || '—' },
-            { label: 'HTTP port',        value: (oracleCfg.ports && oracleCfg.ports.httpRpc) || '—' },
-            { label: 'Script path',      value: oracleCfg.scriptPath || '—' },
-            { label: 'Node.js version',  value: oracleCfg.nodejsVersion || '—' },
-            { label: 'Network',          value: oracleCfg.activeNet || 'mainnet' },
-            { label: 'Process enabled',  value: oracleCfg.enabled ? 'on' : 'off' },
-        ];
-        var list = document.createElement('div');
-        list.className = 'enm-detail-list';
-        fields.forEach(function (f) {
-            var row = document.createElement('div');
-            row.className = 'enm-detail-row';
-            var lbl = document.createElement('span');
-            lbl.className = 'enm-detail-label';
-            lbl.textContent = f.label;
-            var val = document.createElement('span');
-            val.className = 'enm-detail-value';
-            val.textContent = String(f.value);
-            row.appendChild(lbl);
-            row.appendChild(val);
-            list.appendChild(row);
-        });
-        wiring.body.appendChild(list);
-        parent.appendChild(wiring.card);
-
-        // ---- Card 2: Nothing to tune (info) ----
-        parent.appendChild(makeInfoCard({
-            title: 'Nothing to tune',
-            help: 'This oracle is a stateless relay between '
-                + (oracleCfg.parentChainId || 'its parent chain') + ' and the Main chain. '
-                + 'It has no keystore, mining rewards, or peers — so there are no per-oracle '
-                + 'settings to change. To move it to a different port or swap the relayer '
-                + 'script, re-install via the setup wizard.',
-        }).card);
-
-        // ---- Card 3: Restart (action) ----
-        var restartCard = makeInfoCard({
-            title: 'Restart',
-            help: 'If the oracle stalls or loses its parent connection, a restart re-handshakes with both endpoints.',
-        });
-        var restartBtn = document.createElement('button');
-        restartBtn.type = 'button';
-        restartBtn.className = 'enm-btn enm-btn-secondary';
-        restartBtn.textContent = 'Restart oracle';
-        var statusEl = document.createElement('p');
-        statusEl.className = 'enm-section-card-foot-status';
-        statusEl.setAttribute('role', 'status');
-        statusEl.setAttribute('aria-live', 'polite');
-        statusEl.hidden = true;
-        restartCard.body.appendChild(restartBtn);
-        restartCard.body.appendChild(statusEl);
-        parent.appendChild(restartCard.card);
-
-        // Restart — confirm-before-disruptive + enmRunOnce (parity w/ Class B).
-        restartBtn.addEventListener('click', function () {
-            if (self._destroyed) { return; }
-            if (typeof root.confirm === 'function'
-                && !root.confirm('Restart this oracle? In-progress relay work will be interrupted.')) {
-                return;
-            }
-            statusEl.hidden = true;
-            var doRestart = function () {
-                return self.api.post('/chains/' + chainId + '/restart', {}).then(function () {
-                    if (self._destroyed) { return; }
-                    statusEl.hidden = false;
-                    statusEl.textContent = 'Restart requested. Watch the chain card for status.';
-                }).catch(function (err) {
-                    if (self._destroyed) { return; }
-                    if (err && err.status === 401) { return; }
-                    statusEl.hidden = false;
-                    statusEl.textContent = 'Restart failed: ' + ((err && err.message) || String(err));
-                });
-            };
-            if (typeof root.enmRunOnce === 'function') {
-                root.enmRunOnce(restartBtn, 'Restarting…', doRestart);
-            } else {
-                restartBtn.disabled = true;
-                doRestart().finally(function () { restartBtn.disabled = false; });
-            }
-        });
-    };
-
-    /**
-     * Class D (Arbiter cross-chain signer) settings mount.
-     *
-     * Layout — Wallet & Mining · Configured chains · Restart. The arbiter
-     * is the most security-sensitive component: it signs cross-chain
-     * messages between mainchain and the EVM sidechains, and it reuses
-     * the Main chain keystore.
-     *
-     * @private
-     */
-    SettingsTab.prototype._mountArbiterSettings = function () {
-        var self = this;
-        this.root.innerHTML = ''
-            + '<header class="enm-settings-class-head">'
-            + '<h2>Arbiter settings</h2>'
-            + '<p class="enm-settings-class-sub">Cross-chain signer — the most '
-            + 'security-sensitive component. It signs cross-chain messages between '
-            + 'Main chain and the EVM sidechains, using the Main chain keystore.</p>'
-            + '</header>'
-            + '<div class="enm-settings-class-body" data-state="loading">'
-            + '<p class="enm-stub">Loading current configuration…</p>'
-            + '</div>';
-        var body = this.root.querySelector('.enm-settings-class-body');
-        this.api.get('/config', { skipCache: true }).then(function (data) {
-            if (self._destroyed) { return; }
-            var cfg = (data && data.config) || {};
-            var arb = (cfg.chains && cfg.chains.arbiter) || null;
-            if (!arb) {
-                body.dataset.state = 'unconfigured';
-                // 0.5.14 audit Session 14 — drop curl-bait copy. Pre-0.5.14
-                // told operator to "Install via POST /api/enm/setup/install-
-                // class-d" which exposed a backend endpoint as if the
-                // operator were going to fire it manually.
-                body.innerHTML = ''
-                    + '<div class="enm-settings-class-stub">'
-                    + '<p><strong>Arbiter is not yet installed.</strong></p>'
-                    + '<p>Install via the setup wizard. The arbiter requires '
-                    + 'all four chains (Main chain, ESC, EID, PG) to be configured '
-                    + 'first — the wizard will surface the option once they are.</p>'
-                    + '</div>';
-                return;
-            }
-            self._renderClassDInfo(body, arb, cfg.chains || {});
-        }).catch(function (err) {
-            if (self._destroyed) { return; }
-            // 0.5.132 audit Session 132 — silence on 401, see _mountEvmSidechainSettings.
-            if (err && err.status === 401) { return; }
-            body.dataset.state = 'error';
-            body.innerHTML = '<p class="enm-stub">Failed to load config: '
-                + escapeHtml((err && err.message) || String(err)) + '</p>';
-        });
-    };
-
-    /**
-     * @private — Class D info panes. Wallet & Mining read-only DL +
-     * Configured-chains DL (config-presence, not live reach) + Restart.
-     */
-    SettingsTab.prototype._renderClassDInfo = function (parent, arbCfg, allChains) {
-        parent.dataset.state = 'ready';
-        var self = this;
-        parent.innerHTML = '';
-
-        // v0.5.187 (Council Node UX Phase 4) — canonical makeInfoCard +
-        // .enm-detail-row, matching the Class-A reference. Class A untouched.
-        function kv(label, value, mono) {
-            var row = document.createElement('div');
-            row.className = 'enm-detail-row';
-            var l = document.createElement('span');
-            l.className = 'enm-detail-label';
-            l.textContent = label;
-            var v = document.createElement('span');
-            v.className = mono ? 'enm-detail-value enm-detail-addr' : 'enm-detail-value';
-            v.textContent = value;
-            row.appendChild(l);
-            row.appendChild(v);
-            return row;
-        }
-
-        var addr = (arbCfg.mining && arbCfg.mining.miningAddress) || '—';
-        var fee  = (arbCfg.mining && arbCfg.mining.sideChainPowFeeEla) || '—';
-
-        // ---- Card 1: Wallet & mining (read-only) ----
-        var wallet = makeInfoCard({
-            title: 'Wallet & mining',
-            help: 'The arbiter signs with the Main chain keystore (chains/mainchain/keystore.dat) '
-                + 'and shares the Main chain wallet password (encrypted at rest). To change the '
-                + 'password, switch the chain selector to Main chain and open Settings → Identity.',
-        });
-        var wlist = document.createElement('div');
-        wlist.className = 'enm-detail-list';
-        wlist.appendChild(kv('Mining address (Main chain)', addr, true));
-        wlist.appendChild(kv('SideChainPow fee (ELA)', String(fee), false));
-        wallet.body.appendChild(wlist);
-        parent.appendChild(wallet.card);
-
-        // ---- Card 2: Configured chains (config presence, not live reach) ----
-        var chainsCard = makeInfoCard({
-            title: 'Configured chains',
-            help: 'The arbiter signs messages between these four chains; all must be configured '
-                + 'before it can run. Live reachability is shown on the arbiter’s dashboard card '
-                + '(retested every 30s) — this lists configuration only.',
-        });
-        var clist = document.createElement('div');
-        clist.className = 'enm-detail-list';
-        ['mainchain', 'esc', 'eid', 'pg'].forEach(function (cid) {
-            var configured = !!allChains[cid];
-            var rpcPort = (configured && allChains[cid].ports) ? allChains[cid].ports.rpc : '—';
-            clist.appendChild(kv(
-                cid.toUpperCase(),
-                configured ? ('Configured (RPC port ' + rpcPort + ')') : 'Not configured',
-                false,
-            ));
-        });
-        chainsCard.body.appendChild(clist);
-        parent.appendChild(chainsCard.card);
-
-        // ---- Card 3: Restart (action) ----
-        var restartCard = makeInfoCard({
-            title: 'Restart',
-            help: 'Restart the arbiter if one of the four chains it monitors was just restarted, '
-                + 'or if cross-chain reach has degraded.',
-        });
-        var restartBtn = document.createElement('button');
-        restartBtn.type = 'button';
-        restartBtn.className = 'enm-btn enm-btn-secondary';
-        restartBtn.textContent = 'Restart arbiter';
-        var statusEl = document.createElement('p');
-        statusEl.className = 'enm-section-card-foot-status';
-        statusEl.setAttribute('role', 'status');
-        statusEl.setAttribute('aria-live', 'polite');
-        statusEl.hidden = true;
-        restartCard.body.appendChild(restartBtn);
-        restartCard.body.appendChild(statusEl);
-        parent.appendChild(restartCard.card);
-
-        // Restart — confirm-before-disruptive + enmRunOnce. The arbiter is the
-        // most security-sensitive component; cross-chain signing pauses during
-        // the bounce, so the operator confirms first.
-        restartBtn.addEventListener('click', function () {
-            if (self._destroyed) { return; }
-            if (typeof root.confirm === 'function'
-                && !root.confirm('Restart the arbiter? Cross-chain signing pauses until it is back.')) {
-                return;
-            }
-            statusEl.hidden = true;
-            var doRestart = function () {
-                return self.api.post('/chains/arbiter/restart', {}).then(function () {
-                    if (self._destroyed) { return; }
-                    statusEl.hidden = false;
-                    statusEl.textContent = 'Restart requested. Watch the arbiter card for status.';
-                }).catch(function (err) {
-                    if (self._destroyed) { return; }
-                    if (err && err.status === 401) { return; }
-                    statusEl.hidden = false;
-                    statusEl.textContent = 'Restart failed: ' + ((err && err.message) || String(err));
-                });
-            };
-            if (typeof root.enmRunOnce === 'function') {
-                root.enmRunOnce(restartBtn, 'Restarting…', doRestart);
-            } else {
-                restartBtn.disabled = true;
-                doRestart().finally(function () { restartBtn.disabled = false; });
-            }
-        });
-    };
-
-    /**
-     * Class E (SPV) settings mount.
-     *
-     * SPV (Simple Payment Verification) is a wallet/client protocol —
-     * mobile and light wallets use it to verify transactions without
-     * holding the full chain. The Main chain node already serves SPV
-     * clients via Bloom-filter relaying (Elastos.ELA/elanet/server.go);
-     * there is no separate SPV node mode an operator runs. This pane
-     * exists because the chain-selector ships an "SPV Module" row;
-     * its job here is to tell the operator honestly that there's
-     * nothing to configure.
-     *
-     * @private
-     */
-    SettingsTab.prototype._mountSpvSettings = function () {
-        var title = _tFb('settings_class_stub.spv_title', 'SPV (light client)');
-        var lead = _tFb(
-            'settings_class_stub.spv_lead',
-            'SPV (Simple Payment Verification) is a wallet/client protocol, '
-            + 'not a node mode. Lightweight wallets — like the Elastos Essentials '
-            + 'mobile wallet — connect to your Main chain node and use SPV to '
-            + 'verify transactions without downloading the full chain.',
-        );
-        var note = _tFb(
-            'settings_class_stub.spv_note',
-            'Your Main chain node already serves SPV clients automatically. '
-            + 'There is nothing to configure here, and you can safely ignore '
-            + 'this option.',
-        );
-        this.root.innerHTML = '';
-        // v0.5.187 (Council Node UX Phase 4) — single canonical card so SPV
-        // matches the other classes' chrome. SPV genuinely has nothing to
-        // configure, so this stays an honest "nothing here" pane (no controls).
-        // Class A render path untouched.
-        var card = makeInfoCard({ title: title, help: lead });
-        var noteEl = document.createElement('p');
-        noteEl.className = 'enm-section-card-help';
-        noteEl.textContent = note;
-        card.body.appendChild(noteEl);
-        this.root.appendChild(card.card);
-    };
-
     SettingsTab.prototype.destroy = function () {
         this._destroyed = true;
         // BP-E audit fix — tear down the chip-input's internal flash-
@@ -1119,9 +189,22 @@
             try { this._adv.whiteIp.destroy(); } catch (_) { /* idempotent */ }
         }
         // v0.5.176 — stop the Network peers panel's poll + detach it.
+        // (Legacy single-panel handle from the removed _renderClassBForm path;
+        // kept defensively until that dead method is deleted in Phase 5.)
         if (this._peersPanel && typeof this._peersPanel.destroy === 'function') {
             try { this._peersPanel.destroy(); } catch (_) { /* idempotent */ }
             this._peersPanel = null;
+        }
+        // v0.5.237 — tear down the per-chain EVM peers panels mounted in the
+        // consolidated Sidechain settings accordion (esc/eid/pg). One panel
+        // per opened accordion; loop so none leaks its /peers poll timer.
+        if (this._evmShared && Array.isArray(this._evmShared.peersPanels)) {
+            this._evmShared.peersPanels.forEach(function (p) {
+                if (p && typeof p.destroy === 'function') {
+                    try { p.destroy(); } catch (_) { /* idempotent */ }
+                }
+            });
+            this._evmShared.peersPanels = [];
         }
         if (this.root.parentNode) { this.root.parentNode.removeChild(this.root); }
     };
@@ -1907,6 +990,42 @@
             btn: syncBtn,
         };
 
+        // --- Peers & bootnodes (per chain) ------------------------------
+        // v0.5.237 — peers/bootnodes are genuinely per-chain (each EVM keeps
+        // its own enode set), so they get a per-chain collapsible accordion
+        // here inside the single Sidechain settings tab. Each <details> lazily
+        // mounts an EnmPeersPanel the first time it's opened, so collapsed
+        // chains never poll. This replaces the per-chain peers panel that used
+        // to live in _renderClassBForm — reached only via the removed chain
+        // selector.
+        var peersCard = _buildDangerCard({
+            kind: 'info',
+            title: t('settings.evm_shared_peers_title'),
+            help:  t('settings.evm_shared_peers_help'),
+        });
+        body.appendChild(peersCard.el);
+        this._evmShared.peersMounts = {};
+        this._evmShared.peersPanels = [];
+        this._evmShared.peersWired = {};
+        EVM_SHARED_CHAINS.forEach(function (cid) {
+            var det = document.createElement('details');
+            det.className = 'enm-evm-shared-peers-accordion';
+            det.dataset.chain = cid;
+            var sum = document.createElement('summary');
+            sum.className = 'enm-evm-shared-peers-summary';
+            sum.textContent = _tFb('chain_name.' + cid, cid);
+            det.appendChild(sum);
+            var mount = document.createElement('div');
+            mount.className = 'enm-evm-shared-peers-mount';
+            det.appendChild(mount);
+            peersCard.body.appendChild(det);
+            self._evmShared.peersMounts[cid] = mount;
+            // Lazy-mount the panel the first time this accordion opens.
+            det.addEventListener('toggle', function () {
+                if (det.open) { self._mountEvmPeersPanel(cid); }
+            });
+        });
+
         // --- Per-chain footer note --------------------------------------
         var footer = document.createElement('div');
         footer.className = 'enm-evm-shared-footer-note';
@@ -1914,6 +1033,29 @@
         body.appendChild(footer);
 
         return card;
+    };
+
+    /**
+     * v0.5.237 — lazily mount the per-chain EnmPeersPanel for one EVM
+     * sidechain (esc/eid/pg) inside its Sidechain-settings accordion.
+     * Idempotent — mounts at most once per chain (gated by peersWired) so
+     * re-opening the accordion doesn't stack panels or duplicate polls.
+     * @private
+     * @param {string} chainId — esc | eid | pg
+     */
+    SettingsTab.prototype._mountEvmPeersPanel = function (chainId) {
+        if (!this._evmShared || !this._evmShared.peersMounts) { return; }
+        if (this._evmShared.peersWired[chainId]) { return; }
+        var mount = this._evmShared.peersMounts[chainId];
+        if (!mount || !root.EnmPeersPanel) { return; }
+        var panel = new root.EnmPeersPanel({
+            api: this.api,
+            chainId: chainId,
+            notifications: this.notifications,
+        });
+        panel.mount(mount);
+        this._evmShared.peersPanels.push(panel);
+        this._evmShared.peersWired[chainId] = true;
     };
 
     /**

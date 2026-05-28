@@ -249,6 +249,17 @@
         };
     }
 
+    /** v0.5.237 — friendly chain name for the in-pane picker; falls back to
+     * the raw id when strings.js hasn't loaded or the key is missing. */
+    function _logChainName(id) {
+        var t = root.enmTOrFallback;
+        if (typeof t === 'function') {
+            var v = t('chain_name.' + id);
+            if (v && v !== ('chain_name.' + id) && v !== ('[chain_name.' + id + ']')) { return v; }
+        }
+        return id;
+    }
+
     function LogViewer(opts) {
         if (!opts || !opts.api) {
             throw new TypeError('LogViewer: { api, chainId } required');
@@ -256,7 +267,15 @@
         this.api = opts.api;
         this.sse = opts.sse || null;        // optional — graceful degrade
         this.notifications = opts.notifications || null;
-        this.chainId = opts.chainId || 'mainchain';
+        // v0.5.237 — Logs is reachable from the overview now (tabs always
+        // visible), where the router's active chain is 'all'. Normalize that
+        // (and any falsy / aggregate value) to a real chain; the in-pane chain
+        // picker lets the operator switch from here. Default: mainchain.
+        var _cid = opts.chainId || 'mainchain';
+        this.chainId = (_cid === 'all') ? 'mainchain' : _cid;
+        // Installed chains for the in-pane picker; populated by _loadChainList.
+        this._availableChains = null;
+        this._chainSelect = null;
 
         this._lines = []; // { stream, line, ts } — most recent at end
         this._followTail = true;
@@ -350,7 +369,69 @@
         parent.appendChild(this.root);
         this._loadInitialTail();
         this._subscribe();
+        this._loadChainList();
         return this;
+    };
+
+    /** @private — v0.5.237 — populate the in-pane chain picker from GET
+     * /config so the operator can switch which chain's logs they view. Best-
+     * effort: on failure the picker keeps just the current (seed) chain. */
+    LogViewer.prototype._loadChainList = function () {
+        var self = this;
+        if (!this.api || typeof this.api.get !== 'function') { return; }
+        this.api.get('/config').then(function (data) {
+            if (self._destroyed || !self._chainSelect) { return; }
+            var cfg = (data && data.result && data.result.config)
+                   || (data && data.config) || data || {};
+            var chains = (cfg && cfg.chains) || {};
+            var ids = Object.keys(chains);
+            if (ids.length === 0) { return; }
+            self._availableChains = ids;
+            self._chainSelect.innerHTML = '';
+            ids.forEach(function (id) {
+                var opt = document.createElement('option');
+                opt.value = id;
+                opt.textContent = _logChainName(id);
+                self._chainSelect.appendChild(opt);
+            });
+            // Edge case: current chain not in the configured set — keep it
+            // selectable so the viewer never points at a missing option.
+            if (ids.indexOf(self.chainId) === -1) {
+                var cur = document.createElement('option');
+                cur.value = self.chainId;
+                cur.textContent = _logChainName(self.chainId);
+                self._chainSelect.insertBefore(cur, self._chainSelect.firstChild);
+            }
+            self._chainSelect.value = self.chainId;
+        }).catch(function () { /* keep the seed option */ });
+    };
+
+    /** @private — v0.5.237 — switch the viewer to a different chain's logs:
+     * unsubscribe the old SSE topic, reset the buffer + counters, clear the
+     * scroller, then re-seed the tail + subscribe the new topic. The toolbar
+     * (search, live, level filters) is preserved — no full remount. */
+    LogViewer.prototype._switchChain = function (newId) {
+        if (!newId || newId === this.chainId || this._destroyed) { return; }
+        if (this._unsubscribe) { this._unsubscribe(); this._unsubscribe = null; }
+        this.chainId = newId;
+        this._lines = [];
+        this._lvlCounts = { error: 0, warn: 0, info: 0, debug: 0 };
+        this._collapsedCount = 0;
+        this._initialTailDone = false;
+        this._pendingSseBatches = [];
+        if (this._scroller) { this._scroller.innerHTML = ''; }
+        if (this._chainSelect && this._chainSelect.value !== newId) {
+            this._chainSelect.value = newId;
+        }
+        // Reset the meta count + per-level chips to zero for the new chain.
+        if (typeof this._refreshMeta === 'function') { this._refreshMeta(); }
+        ['error', 'warn', 'info', 'debug'].forEach(function (lvl) {
+            if (typeof this._refreshLvlChipCount === 'function') {
+                this._refreshLvlChipCount(lvl);
+            }
+        }, this);
+        this._loadInitialTail();
+        this._subscribe();
     };
 
     LogViewer.prototype.destroy = function () {
@@ -386,18 +467,26 @@
 
         var title = document.createElement('div');
         title.className = 'enm-log-title';
-        title.textContent = this.chainId;
-        // a11y: heading truncates with text-overflow:ellipsis on narrow
-        // widths. Mirror the full label into title= so it stays readable.
-        title.title = this.chainId;
+        title.textContent = 'Logs';
         toolbarLeft.appendChild(title);
 
-        // Chain pill — only one chain in v0.1; the pill is a surface
-        // ready for a future selector. Active by default.
-        var pill = document.createElement('span');
-        pill.className = 'enm-log-chain-pill active';
-        pill.textContent = this.chainId;
-        toolbarLeft.appendChild(pill);
+        // v0.5.237 — in-pane chain picker (replaces the static chain pill).
+        // The top chain-selector dropdown was removed, so Logs owns its own
+        // chain scope. Populated by _loadChainList from GET /config; switching
+        // re-seeds the tail + swaps the SSE topic without a full remount.
+        var chainSelect = document.createElement('select');
+        chainSelect.className = 'enm-log-chain-select';
+        chainSelect.setAttribute('aria-label', 'Log chain');
+        var seedOpt = document.createElement('option');
+        seedOpt.value = this.chainId;
+        seedOpt.textContent = _logChainName(this.chainId);
+        chainSelect.appendChild(seedOpt);
+        chainSelect.value = this.chainId;
+        chainSelect.addEventListener('change', function () {
+            self._switchChain(chainSelect.value);
+        });
+        this._chainSelect = chainSelect;
+        toolbarLeft.appendChild(chainSelect);
 
         // Search input. Debounced 200ms so the regex compile + DOM
         // re-walk doesn't fire on every keystroke.

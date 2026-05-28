@@ -34,13 +34,12 @@
  * aria-labelledby on the card root. Copy is inline English to match the
  * peer node-identity-card (pending any future bulk i18n pass).
  *
- * v0.5.228 — Block-reward address is operator-editable inline. EIP-55
- * client-side validation via enmEthAddress.check; PUT
- * /chains/:id/class-b-config writes miner.rewardAddress; on success a
- * "restart to apply" hint surfaces with an inline restart-now button when
- * the chain is currently running (so the new --pbft.miner.address takes
- * effect on the relaunched geth process). The EVM account row stays
- * read-only — that's the auto-generated local keystore account and
+ * v0.5.237 — this card is READ-ONLY on the dashboard. Block-reward editing
+ * moved to the single global Settings → Sidechain settings tab (one reward
+ * address for all EVM sidechains), so both address rows render without an
+ * Edit affordance. The former inline reward editor + post-save restart
+ * banner (and their state) were removed entirely. The EVM account row was
+ * always read-only — that's the auto-generated local keystore account and
  * changing it would orphan the geth keystore.
  */
 
@@ -48,19 +47,6 @@
     'use strict';
 
     var POLL_INTERVAL_MS = 60_000;
-    // v0.5.228 — chain states the backend reports for a *running* EVM chain
-    // (synced / actively-syncing / starting). When the chain is in one of
-    // these, a reward-address change needs a restart to take effect; when
-    // it's stopped / unconfigured / disabled, the change is picked up
-    // automatically on next start. Treats v1 aliases (running / healthy)
-    // as alive too in case enmStateVocab isn't loaded.
-    var ALIVE_STATES = ['synced', 'syncing', 'starting', 'stalled', 'running', 'healthy'];
-    function isChainAlive(state) {
-        if (root.enmStateVocab && typeof root.enmStateVocab.isAlive === 'function') {
-            return !!root.enmStateVocab.isAlive(state);
-        }
-        return state ? ALIVE_STATES.indexOf(String(state)) >= 0 : false;
-    }
 
     function EvmDetailCard(opts) {
         if (!opts || !opts.api) { throw new TypeError('EnmEvmDetailCard: { api } required'); }
@@ -88,14 +74,10 @@
         this._lastMiner  = null;
         this._lastState  = null;  // v0.5.228 — most-recent chain state for restart-now affordance
         this._lastHtml   = null;  // v0.5.191 — render-dedup cache
-        // v0.5.228 — reward-address inline editor state. While editing,
-        // background polls stash new data into _lastMiner but do NOT
-        // rebuild the DOM (would wipe the operator's in-flight input).
-        this._editingReward       = false;
-        this._editingValue        = '';
-        this._editorMsg           = '';
-        this._editorMsgKind       = '';   // '' | 'ok' | 'err' | 'warn'
-        this._pendingRestartHint  = false;  // set true after save; cleared after restart-now
+        // v0.5.237 — the inline reward editor was removed (this card is
+        // read-only; reward editing lives in Settings → Sidechain settings),
+        // so its state fields (_editingReward / _editingValue / _editorMsg /
+        // _editorMsgKind / _pendingRestartHint) are gone.
     }
 
     EvmDetailCard.prototype.mount = function (parent) {
@@ -130,11 +112,6 @@
             var d = (env && env.result) || (env && env.data) || env || {};
             self._lastMiner = d.miner || null;
             self._lastState = (d && d.state) || null;
-            // v0.5.228 — never rebuild the DOM while the operator is mid-edit
-            // (would wipe their typed input). The latest data is stashed in
-            // _lastMiner/_lastState and will be used by the next render after
-            // the editor exits.
-            if (self._editingReward) { return; }
             self._render(d);
         }).catch(function (err) {
             if (self._destroyed) { return; }
@@ -152,8 +129,6 @@
         var miner = d && d.miner ? d.miner : null;
         var evmAddr = miner && miner.evmKeystoreAddr ? miner.evmKeystoreAddr : null;
         var rewardAddr = miner && miner.rewardAddress ? miner.rewardAddress : null;
-        var chainState = (d && d.state) || this._lastState;
-        var chainAlive = isChainAlive(chainState);
 
         // v0.5.228d (audit F4/F5/F6) — read the DERIVED validator state
         // from the new miner.chainState field (now returned by GET
@@ -213,9 +188,10 @@
             +   '<div class="enm-detail-list">'
             +     this._addrRow('Block reward address',
                     'Where this node\'s block rewards are credited (geth flag --pbft.miner.address). '
-                    + 'You can change this safely; the new address applies on next chain start.',
-                    rewardAddr, 'reward', { editable: true })
-            +     this._addrRow('EVM account', evmAccountHint, evmAddr, 'evm-account', { editable: false })
+                    + 'v0.5.237 — read-only here; edit it (for all sidechains at once) in '
+                    + 'Settings → Sidechain settings.',
+                    rewardAddr, 'reward')
+            +     this._addrRow('EVM account', evmAccountHint, evmAddr, 'evm-account')
             +   '</div>'
             + '</div>'
             + '<div class="enm-section-card-foot">'
@@ -229,9 +205,6 @@
         // duplicate copy buttons. Every render-relevant value (mining flag,
         // both addresses via data-copy-value + is-empty) is in `html`.
         if (html === this._lastHtml) {
-            // Still need to refresh the post-save editor msg / restart-now
-            // hint without rebuilding the whole card.
-            this._refreshEditorBanner(chainAlive);
             return;
         }
         this._lastHtml = html;
@@ -262,269 +235,17 @@
             }
         }
 
-        // v0.5.228 — wire the reward-address Edit button + render any
-        // post-save editor banner / restart-now affordance.
-        this._wireRewardEditor();
-        this._refreshEditorBanner(chainAlive);
-    };
-
-    /** @private — wire the Edit button on the reward row.
-     * Clicking it swaps the value cell for an inline editor (input +
-     * Save + Cancel + status line). The card-level _editingReward flag
-     * pauses background re-renders so the operator's typed input is
-     * never wiped under their fingers by a 60s poll. */
-    EvmDetailCard.prototype._wireRewardEditor = function () {
-        var self = this;
-        var editBtn = this.root.querySelector('[data-edit="reward"]');
-        if (!editBtn) { return; }
-        editBtn.addEventListener('click', function () { self._enterRewardEdit(); });
-    };
-
-    /** @private — render or remove the post-save banner that tells the
-     * operator a restart is required to apply the new address. Idempotent
-     * so we can call it from both the dedup-skip and full-rebuild paths. */
-    EvmDetailCard.prototype._refreshEditorBanner = function (chainAlive) {
-        // Banner lives at the top of the card body so it sits near the
-        // addresses without disturbing the row layout.
-        var body = this.root.querySelector('.enm-section-card-body');
-        if (!body) { return; }
-        var existing = body.querySelector('.enm-evm-reward-banner');
-        if (!this._pendingRestartHint) {
-            if (existing) { existing.parentNode.removeChild(existing); }
-            return;
-        }
-        var html = ''
-            + '<div class="enm-evm-reward-banner" role="status" aria-live="polite">'
-            +   '<div class="enm-evm-reward-banner-msg">'
-            +     (chainAlive
-                    ? 'Reward address saved. The currently running chain still uses the previous address — restart it to apply the change.'
-                    : 'Reward address saved. The new address will be used the next time this chain is started.')
-            +   '</div>'
-            +   (chainAlive
-                  ? '<button type="button" class="enm-btn enm-btn-primary enm-btn-sm" data-action="reward-restart">Restart chain now</button>'
-                  : '<button type="button" class="enm-btn enm-btn-sm" data-action="reward-dismiss">Got it</button>')
-            + '</div>';
-        if (existing) {
-            existing.outerHTML = html;
-        } else {
-            body.insertAdjacentHTML('afterbegin', html);
-        }
-        var self = this;
-        var restartBtn = body.querySelector('[data-action="reward-restart"]');
-        if (restartBtn) {
-            restartBtn.addEventListener('click', function () { self._restartChainAfterSave(restartBtn); });
-        }
-        var dismissBtn = body.querySelector('[data-action="reward-dismiss"]');
-        if (dismissBtn) {
-            dismissBtn.addEventListener('click', function () {
-                self._pendingRestartHint = false;
-                self._refreshEditorBanner(false);
-            });
-        }
-    };
-
-    /** @private — swap the reward value cell with an inline editor. */
-    EvmDetailCard.prototype._enterRewardEdit = function () {
-        if (this._editingReward) { return; }  // already open
-        this._editingReward = true;
-        this._editingValue = (this._lastMiner && this._lastMiner.rewardAddress) || '';
-        this._editorMsg = '';
-        this._editorMsgKind = '';
-        this._renderRewardEditor();
-    };
-
-    /** @private — close the editor without saving. */
-    EvmDetailCard.prototype._exitRewardEdit = function () {
-        this._editingReward = false;
-        this._editingValue = '';
-        this._editorMsg = '';
-        this._editorMsgKind = '';
-        // Force a re-render of the row by invalidating the dedup cache; the
-        // next _render() call from a poll OR our immediate trigger below
-        // will rebuild the row with the latest backend value.
-        this._lastHtml = null;
-        this._poll();
-    };
-
-    /** @private — render the inline editor over the reward row. We keep
-     * the rest of the card intact and only replace the row contents. */
-    EvmDetailCard.prototype._renderRewardEditor = function () {
-        var row = this.root.querySelector('.enm-detail-addr-row[data-key="reward"]');
-        if (!row) { return; }
-        row.classList.add('is-editing');
-        // Preserve the row head (label + hint); only swap the value stack.
-        var stack = row.querySelector('.enm-detail-value-stack');
-        if (!stack) { return; }
-        var v = this._editingValue || '';
-        var inputId = 'enm-evm-reward-edit-' + Math.random().toString(36).slice(2, 8);
-        var msgClass = this._editorMsgKind ? (' is-' + this._editorMsgKind) : '';
-        stack.outerHTML = ''
-            + '<div class="enm-detail-edit-row" role="group" aria-label="Edit reward address">'
-            +   '<label class="enm-sr-only" for="' + inputId + '">Reward address</label>'
-            +   '<input type="text" id="' + inputId
-            +     '" class="enm-input enm-detail-edit-input"'
-            +     ' autocomplete="off" spellcheck="false" inputmode="text"'
-            +     ' placeholder="0x… (40 hex characters)"'
-            +     ' value="' + esc(v) + '">'
-            +   '<div class="enm-detail-edit-actions">'
-            +     '<button type="button" class="enm-btn enm-btn-sm" data-action="reward-cancel">Cancel</button>'
-            +     '<button type="button" class="enm-btn enm-btn-primary enm-btn-sm" data-action="reward-save">Save</button>'
-            +   '</div>'
-            +   '<div class="enm-detail-edit-msg' + msgClass + '" role="status" aria-live="polite">'
-            +     esc(this._editorMsg || '')
-            +   '</div>'
-            + '</div>';
-
-        var input = row.querySelector('.enm-detail-edit-input');
-        var saveBtn = row.querySelector('[data-action="reward-save"]');
-        var cancelBtn = row.querySelector('[data-action="reward-cancel"]');
-        var self = this;
-        if (input) {
-            input.addEventListener('input', function () { self._editingValue = input.value; });
-            input.addEventListener('keydown', function (e) {
-                if (e.key === 'Enter') { e.preventDefault(); self._saveReward(saveBtn); }
-                else if (e.key === 'Escape') { e.preventDefault(); self._exitRewardEdit(); }
-            });
-            // Focus + select-all so the operator can immediately overwrite or copy-paste.
-            setTimeout(function () {
-                if (self._destroyed) { return; }
-                try { input.focus(); input.select(); } catch (_) {}
-            }, 0);
-        }
-        if (cancelBtn) { cancelBtn.addEventListener('click', function () { self._exitRewardEdit(); }); }
-        if (saveBtn) { saveBtn.addEventListener('click', function () { self._saveReward(saveBtn); }); }
-    };
-
-    /** @private — validate + PUT the new reward address. */
-    EvmDetailCard.prototype._saveReward = function (saveBtn) {
-        var self = this;
-        var raw = String(this._editingValue || '').trim();
-        // Empty value clears the operator-supplied reward address (rewards
-        // then fall back to the geth keystore default per FIX-C12b). Treat
-        // explicit-empty as a valid intent.
-        var payload;
-        if (raw === '') {
-            payload = '';
-        } else {
-            var check = (root.enmEthAddress && typeof root.enmEthAddress.check === 'function')
-                ? root.enmEthAddress.check(raw)
-                : null;
-            if (!check) {
-                this._editorMsg = 'Address validator unavailable. Refresh the page.';
-                this._editorMsgKind = 'err';
-                this._renderRewardEditor();
-                return;
-            }
-            if (!check.ok) {
-                if (check.error === 'missing_0x') {
-                    this._editorMsg = 'Missing "0x" prefix. Suggested: ' + check.suggested;
-                } else if (check.error === 'format') {
-                    this._editorMsg = 'Not a valid Ethereum address (need 0x + 40 hex characters).';
-                } else if (check.error === 'eip55_checksum') {
-                    // Soft offer the corrected form rather than block.
-                    this._editorMsg = 'EIP-55 checksum mismatch. Did you mean ' + check.suggested + ' ?';
-                } else {
-                    this._editorMsg = 'Invalid address.';
-                }
-                this._editorMsgKind = 'err';
-                this._renderRewardEditor();
-                return;
-            }
-            payload = check.normalized;
-        }
-        // Spinner + disable while in flight.
-        var doSave = function () {
-            return self.api.put('/chains/' + self.chainId + '/class-b-config', {
-                miner: { rewardAddress: payload },
-            }).then(function () {
-                if (self._destroyed) { return; }
-                self._editingReward = false;
-                self._editorMsg = '';
-                self._editorMsgKind = '';
-                self._pendingRestartHint = true;  // surfaces the banner on next render
-                // Refresh: pull updated cfg.miner; the banner will mention
-                // restart-required iff the chain is currently alive.
-                self._lastHtml = null;
-                self._poll();
-            }).catch(function (err) {
-                if (self._destroyed) { return; }
-                var msg = (err && err.body && err.body.error && err.body.error.message)
-                    || (err && err.message)
-                    || 'Save failed.';
-                self._editorMsg = msg;
-                self._editorMsgKind = 'err';
-                // Re-render editor so the operator can correct + retry.
-                self._renderRewardEditor();
-            });
-        };
-        if (typeof root.enmRunOnce === 'function' && saveBtn) {
-            root.enmRunOnce(saveBtn, 'Saving…', doSave);
-        } else {
-            doSave();
-        }
-    };
-
-    /** @private — call POST /chains/:id/restart from the post-save banner. */
-    EvmDetailCard.prototype._restartChainAfterSave = function (btn) {
-        var self = this;
-        var doRestart = function () {
-            return self.api.post('/chains/' + self.chainId + '/restart').then(function () {
-                if (self._destroyed) { return; }
-                self._pendingRestartHint = false;
-                self._lastHtml = null;
-                self._poll();
-            }).catch(function (err) {
-                if (self._destroyed) { return; }
-                // Surface the failure in the banner area without blowing
-                // away the card.
-                var body = self.root.querySelector('.enm-section-card-body');
-                if (!body) { return; }
-                var existing = body.querySelector('.enm-evm-reward-banner');
-                var msg = (err && err.body && err.body.error && err.body.error.message)
-                    || (err && err.message) || 'Restart failed.';
-                if (existing) {
-                    existing.innerHTML = ''
-                        + '<div class="enm-evm-reward-banner-msg is-err">'
-                        +   'Restart failed: ' + esc(msg)
-                        + '</div>'
-                        + '<button type="button" class="enm-btn enm-btn-primary enm-btn-sm" data-action="reward-restart">Try again</button>';
-                    var retry = existing.querySelector('[data-action="reward-restart"]');
-                    if (retry) {
-                        retry.addEventListener('click', function () { self._restartChainAfterSave(retry); });
-                    }
-                }
-            });
-        };
-        if (typeof root.enmRunOnce === 'function' && btn) {
-            root.enmRunOnce(btn, 'Restarting…', doRestart);
-        } else {
-            doRestart();
-        }
     };
 
     /** @private — stacked label + hint + monospace address value + copy button.
      * When the value is unknown we render "—" and omit the copy button (nothing
-     * to copy) — never a fabricated address.
-     *
-     * v0.5.228 — opts.editable=true adds an Edit button to the value stack;
-     * the row also gets data-key so the inline editor can find it on swap.
-     * "Set address" is the empty-state label so an unset row is still a
-     * discoverable affordance, not a dead-end "—". */
-    EvmDetailCard.prototype._addrRow = function (label, hint, value, key, opts) {
+     * to copy) — never a fabricated address. v0.5.237 — read-only: the inline
+     * Edit affordance was removed (reward editing lives in Settings → Sidechain
+     * settings). data-key is kept for stable row identity. */
+    EvmDetailCard.prototype._addrRow = function (label, hint, value, key) {
         var copySlot = value
             ? '<span class="enm-detail-copy-slot" data-copy="' + esc(key) + '" data-copy-value="' + esc(value) + '"></span>'
             : '';
-        var editable = opts && opts.editable === true;
-        var editSlot = '';
-        if (editable) {
-            var editLabel = value ? 'Edit' : 'Set address';
-            editSlot = ''
-                + '<button type="button" class="enm-btn enm-btn-sm enm-detail-edit-btn"'
-                +   ' data-edit="' + esc(key) + '"'
-                +   ' aria-label="' + esc(editLabel + ' ' + label) + '">'
-                +   esc(editLabel)
-                + '</button>';
-        }
         return '<div class="enm-detail-addr-row' + (value ? '' : ' is-empty') + '"'
             + ' data-key="' + esc(key) + '">'
             + '<div class="enm-detail-row-head">'
@@ -534,7 +255,6 @@
             + '<div class="enm-detail-value-stack">'
             +   '<code class="enm-detail-addr" data-fill="' + esc(key) + '"></code>'
             +   copySlot
-            +   editSlot
             + '</div>'
             + '</div>';
     };
