@@ -301,8 +301,11 @@ const setupSchema = Joi.object({
 //     EnmCrypto.validateEthAddress.
 //   - miner.evmKeystorePasswordEncrypted is the AES-GCM envelope
 //     produced by EnmEncryption (H24 — no plaintext on disk).
-//   - sync.mode mirrors geth's --syncmode {fast,full,archive}; node.sh
-//     defaults to 'fast'.
+//   - sync.mode mirrors geth's --syncmode. v0.5.235: ENM EVM chains
+//     always run validator-grade FULL sync (default 'full'). 'fast' is
+//     retained in valid() only so legacy stored configs still load — the
+//     adapter + routes coerce any 'fast' to 'full' at use. node.sh runs
+//     producers on full (esc_start:2152, eid_start:4390).
 const classBPortsSchema = Joi.object({
     rpc:       PORT_RANGE.required(),
     p2p:       PORT_RANGE.required(),
@@ -324,7 +327,11 @@ const classBMinerSchema = Joi.object({
     threads: Joi.number().integer().min(1).max(16).default(1),
 }).default();
 const classBSyncSchema = Joi.object({
-    mode: Joi.string().valid('fast', 'full', 'archive').default('fast'),
+    // v0.5.235 — default 'full' (validator-grade). 'fast' stays in valid()
+    // for load-compat with pre-v0.5.235 stored configs; it's coerced to
+    // 'full' by EvmSidechainAdapter.start() (which re-persists) and by the
+    // setup/chains routes.
+    mode: Joi.string().valid('fast', 'full', 'archive').default('full'),
 }).default();
 const classBSchema = Joi.object({
     enabled: Joi.boolean().default(false),

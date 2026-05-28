@@ -605,17 +605,26 @@ class EvmSidechainAdapter extends ChainAdapter {
                 args.push('--pbft.keystore.password', secrets.pbftPasswordFile);
             }
         }
-        // Sync mode: 'fast' / 'full' / 'archive'.
-        if (cfg.sync && cfg.sync.mode) {
-            args.push('--syncmode', cfg.sync.mode);
-        } else if (cfg.miner && cfg.miner.enabled === true) {
-            // v0.5.185 P2-D — node.sh forces `--syncmode full` on a producing
-            // council validator (esc_start:2152). Without it geth defaults to
-            // 'fast', and a PBFT producer on fast-sync can mis-serve / mis-mine
-            // before its state is complete. Match node.sh for miners; non-miner
-            // followers keep geth's default.
-            args.push('--syncmode', 'full');
-        }
+        // Sync mode — v0.5.235: EVM chains ALWAYS full-sync (council-ready).
+        //
+        // Operator directive 2026-05-28: "all ENM apps should be council ready,
+        // remove fast sync." ENM is a validator tool — a Council node produces
+        // EVM blocks when on-duty, and node.sh runs producers on --syncmode full
+        // (esc_start:2152, eid_start:4390). Rather than fast-when-following /
+        // full-when-producing (the pre-v0.5.235 role-based flip), every EVM
+        // chain now runs validator-grade FULL sync regardless of current
+        // on-duty status, so the node is always production-ready with complete
+        // self-validated state and never needs a fast→full re-sync when it goes
+        // on-duty. This is safe for from-genesis sync ONLY because v0.5.235 also
+        // wipes SPV in lockstep with geth (chainResync) — full-sync re-executes
+        // every block (incl. EID's DID tx at 166,410), which requires the
+        // arbiter context the lockstep SPV supplies.
+        //
+        // Fast sync is removed. An explicit 'archive' override is still honored
+        // (full + retain all historical state); any other value — including a
+        // legacy stored 'fast' — is coerced to 'full'.
+        const syncMode = (cfg.sync && cfg.sync.mode === 'archive') ? 'archive' : 'full';
+        args.push('--syncmode', syncMode);
         // Miner — enabled for council validators (the sidechain produces
         // blocks). Values:
         //   miner.enabled         → enable mining at all
@@ -895,15 +904,16 @@ class EvmSidechainAdapter extends ChainAdapter {
 
             const wasMiner = !!(cfg.miner && cfg.miner.enabled);
             if (cfg.miner) { cfg.miner.enabled = shouldMine; }
-            if (shouldMine) {
-                // Confirmed on-duty → miner: node.sh's council branch uses full sync.
-                if (!cfg.sync) { cfg.sync = {}; }
-                if (cfg.sync.mode !== 'full') { cfg.sync.mode = 'full'; }
-            } else if (cfg.sync && cfg.sync.mode === 'full') {
-                // Follower → drop forced full so it fast-syncs (avoids the DID wedge);
-                // leave any explicit non-full mode untouched.
-                cfg.sync.mode = 'fast';
-            }
+            // v0.5.235 — syncmode is NO LONGER role-dependent. EVM chains
+            // always full-sync (buildSpawnArgs hardcodes it). Producer status
+            // controls ONLY --mine (miner.enabled), never the sync mode. The
+            // old shouldMine→full / follower→fast flips are removed; the
+            // forced-full-sync DID wedge they were avoiding is now handled
+            // structurally by the lockstep SPV wipe (v0.5.235 chainResync).
+            // Migrate any legacy stored 'fast' to 'full' so persisted config
+            // stays honest with what actually runs.
+            if (!cfg.sync) { cfg.sync = {}; }
+            if (cfg.sync.mode === 'fast' || !cfg.sync.mode) { cfg.sync.mode = 'full'; }
             if (_roleLog) {
                 const crNote = crMemberCheck
                     ? ` crMember.isCrMember=${crMemberCheck.isCrMember}, source=${crMemberCheck.source}.`
@@ -912,20 +922,22 @@ class EvmSidechainAdapter extends ChainAdapter {
                     `${ENM_LOG_PREFIX} ${this.chainId}: producer-role check → isProducer=${role.isProducer} `
                     + `(source=${role.source}, inCurrent=${role.inCurrent}, inNext=${role.inNext})`
                     + crNote
-                    + ` → ${shouldMine ? 'MINER (full sync)' : 'FOLLOWER (no --mine, fast sync)'}`
+                    + ` → ${shouldMine ? 'MINER (--mine)' : 'non-producer (no --mine)'}; sync=full (always)`
                     + `${wasMiner !== shouldMine ? (shouldMine ? ' [PROMOTED]' : ' [demoted]') : ''}. `
                     + 'Mining is on-chain producer state, not an ENM toggle.',
                 );
             }
         } catch (err) {
-            // Fail-safe: on an unexpected detection error, run as FOLLOWER (never mine
-            // on an unknown role — the chain self-gates anyway and fast-sync is safe).
+            // Fail-safe: on an unexpected detection error, do NOT mine (never
+            // --mine on an unknown role — the chain self-gates anyway). v0.5.235:
+            // sync stays FULL even on detection failure; only mining is demoted.
             if (cfg.miner) { cfg.miner.enabled = false; }
-            if (cfg.sync && cfg.sync.mode === 'full') { cfg.sync.mode = 'fast'; }
+            if (!cfg.sync) { cfg.sync = {}; }
+            if (cfg.sync.mode === 'fast' || !cfg.sync.mode) { cfg.sync.mode = 'full'; }
             if (_roleLog) {
                 _roleLog.warn(
                     `${ENM_LOG_PREFIX} ${this.chainId}: producer-role detection failed `
-                    + `(${err && err.message ? err.message : err}) — running as FOLLOWER (fail-safe).`,
+                    + `(${err && err.message ? err.message : err}) — no --mine (fail-safe), sync=full.`,
                 );
             }
         }

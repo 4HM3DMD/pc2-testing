@@ -386,20 +386,47 @@ async function chainResync(opts) {
             // The EVM chaindata dir is named after the geth fork's instance:
             // esc/eid use "geth", but the PG fork uses "pgp" (verified on disk:
             // chains/pg/data/pgp/chaindata). Each chain has exactly ONE of these,
-            // so listing both is safe — the absent one is a no-op rm. The mining
-            // keystore (data/keystore) and SPV mainchain-watch state (data/header,
-            // data/store, data/spv_transaction_info.db, data/logs-spv) are NOT
-            // listed and are preserved.
+            // so listing both is safe — the absent one is a no-op rm.
+            //
+            // v0.5.235 — LOCKSTEP WIPE. The SPV mainchain-watch state
+            // (data/header, data/store, data/spv_transaction_info.db,
+            // data/logs-spv) is now wiped ALONGSIDE the geth chaindata.
+            // Pre-v0.5.235 it was preserved "to save the hours-long SPV
+            // re-download" — but that was exactly backwards: wiping geth to
+            // genesis while keeping SPV at the mainchain tip DECOUPLES the
+            // arbiter context an EVM PBFT chain needs to validate headers,
+            // so the resync wedges forever (proven on EID 2026-05-27:
+            // stuck at block 574,384 for 9h with "retrieved hash chain is
+            // invalid"). node.sh never decouples them — its SPV lives as a
+            // sibling of geth under <chain>/data/ and is only ever rebuilt
+            // TOGETHER with the chain. Wiping both → geth + SPV re-sync from
+            // genesis in lockstep, SPV feeding arbiter sets in order → the
+            // chain validates cleanly (proven: the joint wipe drove EID from
+            // 574k → 4M+ in ~15 min). The SPV bulk header re-sync is fast
+            // (404k → 1.75M mainchain blocks in 15 min observed), so the
+            // "saves hours" rationale was false; preserving it caused a
+            // PERMANENT stall, which is far worse.
+            //
+            // The mining keystore (data/keystore) + network identity
+            // (data/{geth|pgp}/nodekey, backed up above and restored after)
+            // are still preserved — those are operator identity, not chain
+            // state.
             candidates = [
                 path.join(dataDir, 'geth'),        // esc/eid EVM blockchain DB
                 path.join(dataDir, 'pgp'),         // pg EVM blockchain DB
                 path.join(dataDir, 'geth.ipc'),    // stale ipc socket (esc/eid)
                 path.join(dataDir, 'pgp.ipc'),     // v0.5.185 P2-B — stale ipc socket (pg)
-                // v0.5.185 P2-A — data/peers.json is NOT wiped: it is the SPV
-                // mainchain-watch addrmgr peer cache (ELA-SPV), not EVM fork
-                // state, so wiping it only slows the SPV mainchain re-handshake
-                // after a resync. The EVM eth-layer peer DB is data/<instance>/
-                // nodes, which lives INSIDE geth/pgp above and is wiped with it.
+                // v0.5.235 — SPV mainchain-watch state, wiped in lockstep
+                // with geth (see rationale above).
+                path.join(dataDir, 'header'),
+                path.join(dataDir, 'store'),
+                path.join(dataDir, 'spv_transaction_info.db'),
+                path.join(dataDir, 'logs-spv'),
+                // peers.json IS now wiped too: it is the SPV addrmgr peer
+                // cache; on a from-genesis SPV resync a stale cache only
+                // slows the re-handshake, and keeping it served no purpose
+                // once SPV itself is wiped.
+                path.join(dataDir, 'peers.json'),
                 path.join(DataDir.enmDataDir(), '.tmp', 'bootstrap', chainId),
             ];
         } else {
@@ -415,23 +442,16 @@ async function chainResync(opts) {
                 path.join(DataDir.enmDataDir(), '.tmp', 'bootstrap', chainId),
             ];
         }
-        // P1-7 / v0.5.185 P2-C hard safety net — NEVER delete identity or SPV
-        // state, even if a future edit mistakenly adds them to the candidates.
-        // The mining keystore (identity) is permanent + unrecoverable. For
-        // Class B the embedded-SPV store (header/store/spv_transaction_info.db/
-        // logs-spv) takes hours to re-download and, if wiped, the EVM chain
-        // CANNOT validate until SPV re-syncs (the operator's dev: "if you
-        // removed spv data you must wait until spv sync finished"). Absolute.
+        // P1-7 hard safety net — NEVER delete the mining keystore (identity),
+        // which is permanent + unrecoverable. This stays absolute.
+        //
+        // v0.5.235 — the SPV state (header/store/spv_transaction_info.db/
+        // logs-spv) is DELIBERATELY no longer protected: it must be wiped in
+        // lockstep with geth (see the candidates comment above). The old
+        // "preserve SPV" guard caused the arbiter-context decoupling that
+        // wedged EID. The network identity (data/{geth|pgp}/nodekey) is
+        // preserved separately by the backup/restore added in v0.5.231.
         const protectedPaths = [path.join(cdir, 'data', 'keystore')];
-        if (adapter.chainClass === 'B') {
-            const d = path.join(cdir, 'data');
-            protectedPaths.push(
-                path.join(d, 'header'),
-                path.join(d, 'store'),
-                path.join(d, 'spv_transaction_info.db'),
-                path.join(d, 'logs-spv'),
-            );
-        }
         candidates = candidates.filter((p) => {
             for (const prot of protectedPaths) {
                 const rel = path.relative(p, prot);

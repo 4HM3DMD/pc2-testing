@@ -1144,14 +1144,17 @@ function build(extensionHandle) {
                 }
                 threads = body.miner.threads;
             }
-            let syncMode = 'fast';
+            // v0.5.235 — default + floor is FULL. Fast sync is removed; a
+            // 'fast' request is accepted for backward-compat but coerced to
+            // 'full' (EVM chains are always validator-grade full sync).
+            let syncMode = 'full';
             if (body.sync && body.sync.mode) {
                 if (!['fast', 'full', 'archive'].includes(body.sync.mode)) {
                     return res.status(400).json(errorBody(
-                        'sync.mode must be one of fast | full | archive',
+                        'sync.mode must be one of full | archive',
                     ));
                 }
-                syncMode = body.sync.mode;
+                syncMode = (body.sync.mode === 'fast') ? 'full' : body.sync.mode;
             }
             const minerEnabled = body.miner && body.miner.enabled === true;
             // beta.0.4.1 (operator directive) — SHA256 manifest is
@@ -2501,11 +2504,17 @@ async function runCouncilInstall(args) {
                             evmKeystorePasswordEncrypted: '',
                             threads: 1,
                         },
-                        // v0.5.189 — install as a FOLLOWER on fast sync (node.sh's
-                        // else branch). start() flips this to 'full' when it PROMOTES
-                        // a confirmed on-duty node to miner. Fast sync also dodges the
-                        // EID full-execution DID wedge for non-producers.
-                        sync: { mode: 'fast' },
+                        // v0.5.235 — install on FULL sync (council-ready). EVM
+                        // chains always full-sync now; the old fast-follower
+                        // default is removed. The forced-full-sync DID wedge
+                        // that fast used to dodge is handled structurally by
+                        // the lockstep SPV wipe (chainResync v0.5.235), so a
+                        // from-genesis full-sync builds a correct DID index and
+                        // validates cleanly (node.sh runs producers on full).
+                        // miner.enabled stays false here — mining is promoted
+                        // at boot by detectProducerRole when on-duty; only the
+                        // sync mode is now unconditionally full.
+                        sync: { mode: 'full' },
                         bootnodes: [],
                         healing: { enabledRules: {} },
                         binarySha256Expected: '',

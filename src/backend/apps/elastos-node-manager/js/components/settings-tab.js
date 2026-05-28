@@ -408,16 +408,18 @@
         threadsInput.addEventListener('input', function () { sec.setDirty(true); });
         sec.body.appendChild(makeFormRow({ label: 'Mining threads', help: 'CPU threads used while mining is on.', control: threadsInput }));
 
+        // v0.5.235 — fast sync removed. ENM nodes are validators (Council/BPoS);
+        // EVM chains always run validator-grade full sync. Only full (default)
+        // and archive (full + all historical state) remain.
         var syncSel = makeSelectWrap({
             options: [
-                { value: 'fast', label: 'fast — recommended (recent state only)' },
-                { value: 'full', label: 'full — keep all blocks' },
+                { value: 'full', label: 'full — validator-grade (recommended)' },
                 { value: 'archive', label: 'archive — full + all historical state' },
             ],
-            value: sync.mode || 'fast',
+            value: (sync.mode && sync.mode !== 'fast') ? sync.mode : 'full',
             onChange: function () { sec.setDirty(true); },
         });
-        sec.body.appendChild(makeFormRow({ label: 'Sync mode', help: 'How much chain history this node retains.', control: syncSel.el }));
+        sec.body.appendChild(makeFormRow({ label: 'Sync mode', help: 'How much chain history this node retains. Council/BPoS nodes always full-sync.', control: syncSel.el }));
 
         parent.appendChild(sec.card);
 
@@ -585,7 +587,7 @@
             rewardInput.value = miner.rewardAddress || '';
             evmInput.value = miner.evmKeystoreAddr || '';
             threadsInput.value = Number.isInteger(miner.threads) ? miner.threads : 1;
-            syncSel.setValue(sync.mode || 'fast');
+            syncSel.setValue((sync.mode && sync.mode !== 'fast') ? sync.mode : 'full');
             refreshValidity();
             sec.setDirty(false);
             if (sec.statusEl) { sec.statusEl.textContent = ''; }
@@ -1876,9 +1878,9 @@
         body.appendChild(syncCard.el);
         var syncSelectWrap = document.createElement('div');
         syncSelectWrap.className = 'enm-evm-shared-input-row';
+        // v0.5.235 — fast removed; validator-grade full is the default.
         syncSelectWrap.innerHTML = ''
             + '<select class="enm-select enm-evm-shared-select" aria-label="Sync mode">'
-            +   '<option value="fast">fast</option>'
             +   '<option value="full">full</option>'
             +   '<option value="archive">archive</option>'
             + '</select>';
@@ -1940,10 +1942,10 @@
                     enabled: !!(d.miner && d.miner.enabled),
                     chainState: (d.miner && d.miner.chainState) || null,
                     // sync.mode isn't currently returned by /chains/:id;
-                    // when missing we treat all as 'fast' (the schema
-                    // default) so the row still works. A future
-                    // backend pass should add sync.mode to the response.
-                    syncMode: (d.sync && d.sync.mode) || 'fast',
+                    // when missing we treat as 'full' (v0.5.235 default —
+                    // fast sync removed). A future backend pass should add
+                    // sync.mode to the response.
+                    syncMode: (d.sync && d.sync.mode && d.sync.mode !== 'fast') ? d.sync.mode : 'full',
                     ok: true,
                 };
             }).catch(function () {
@@ -2176,7 +2178,9 @@
     SettingsTab.prototype._applyEvmSharedSync = function (mode, btn, statusEl) {
         var self = this;
         var t = root.enmTOrFallback || root.enmT || function (k) { return k; };
-        if (['fast', 'full', 'archive'].indexOf(mode) < 0) {
+        // v0.5.235 — fast removed; coerce any legacy 'fast' to 'full'.
+        if (mode === 'fast') { mode = 'full'; }
+        if (['full', 'archive'].indexOf(mode) < 0) {
             statusEl.textContent = 'Invalid sync mode.';
             statusEl.className = 'enm-evm-shared-status is-err';
             return;

@@ -2024,10 +2024,12 @@ function build(extensionHandle) {
                     const m = String(body.sync.mode);
                     if (!['fast', 'full', 'archive'].includes(m)) {
                         return res.status(400).json(errorBody(
-                            'sync.mode: must be one of fast | full | archive',
+                            'sync.mode: must be one of full | archive',
                         ));
                     }
-                    syncMode = m;
+                    // v0.5.235 — fast sync removed; coerce a legacy 'fast'
+                    // request to 'full' (EVM chains are always full-sync).
+                    syncMode = (m === 'fast') ? 'full' : m;
                 }
             }
             // Optional bootnodes array replace. v0.5.175 — validate each as a
