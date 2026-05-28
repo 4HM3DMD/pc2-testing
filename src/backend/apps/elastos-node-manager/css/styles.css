@@ -7291,6 +7291,76 @@ body[data-app-size="compact"] .enm-app .enm-filter-chip {
     font-size: 13px;
     color: var(--text-tertiary);
 }
+/* v0.5.238 — "This node" identity card: DAO Council + BPoS status. */
+.enm-app .enm-overview-identity {
+    margin: 0 0 var(--sp-4, 16px) 0;
+    padding: var(--sp-3, 12px) var(--sp-4, 16px);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color, var(--border-subtle));
+    border-radius: 10px;
+}
+.enm-app .enm-identity-head {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-tertiary);
+    margin-bottom: var(--sp-2, 8px);
+}
+.enm-app .enm-identity-pills {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--sp-2, 8px) var(--sp-5, 24px);
+}
+.enm-app .enm-identity-pill {
+    display: flex;
+    align-items: baseline;
+    gap: var(--sp-2, 8px);
+    min-width: 0;
+}
+.enm-app .enm-identity-pill-label {
+    flex: 0 0 auto;
+    font-size: 12px;
+    color: var(--text-tertiary);
+}
+.enm-app .enm-identity-pill-val {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+.enm-app .enm-identity-dot {
+    flex: 0 0 auto;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--text-tertiary);
+}
+.enm-app .enm-identity-dot.state-synced { background: var(--success); }
+.enm-app .enm-identity-dot.state-syncing { background: var(--warning, #c08a00); }
+.enm-app .enm-identity-dot.state-unconfigured { background: var(--text-tertiary); opacity: 0.5; }
+.enm-app .enm-identity-hint {
+    margin-top: var(--sp-2, 8px);
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--text-tertiary);
+}
+.enm-app .enm-identity-keys {
+    margin-top: var(--sp-2, 8px);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px var(--sp-3, 12px);
+    font-size: 12px;
+    color: var(--text-tertiary);
+}
+.enm-app .enm-identity-kv-k { margin-right: 2px; color: var(--text-tertiary); }
+.enm-app .enm-identity-keys .enm-mono { color: var(--text-secondary); }
+.enm-app .enm-identity-sep { opacity: 0.5; }
 .enm-app .enm-overview-body {
     display: flex;
     flex-direction: column;
@@ -7324,8 +7394,14 @@ body[data-app-size="compact"] .enm-app .enm-filter-chip {
    truth (height + sync badge for A/B; "relays for <parent>" for C) under its
    name; the actions column carries state-gated start/stop/restart. */
 .enm-app .enm-overview-row {
-    display: grid;
-    grid-template-columns: 16px minmax(160px, 1fr) 90px 56px auto 16px;
+    /* v0.5.238 — flex (was a fixed 6-column grid). The grid's per-variant
+       column counts didn't match the rendered cells — the EVM variant
+       declared 5 columns for 6 cells, so the action buttons were crammed into
+       a 14px track and collided with the sparkline (the "dark squares" bug).
+       Flex lets the main column grow while the right-side cluster (sparkline ·
+       uptime · actions · arrow) sizes to content and never collides, at any
+       width. The variant grid-template-columns rules below are now inert. */
+    display: flex;
     align-items: center;
     gap: var(--sp-3, 12px);
     padding: var(--sp-2, 8px) var(--sp-3, 12px);
@@ -7341,6 +7417,17 @@ body[data-app-size="compact"] .enm-app .enm-filter-chip {
     flex-direction: column;
     gap: 2px;
     min-width: 0;
+    flex: 1 1 auto;
+}
+/* v0.5.238 — flex sizing for the row children: main grows/shrinks (its
+   min-width:0 lets long text ellipsize), while the right-side cluster holds
+   its natural size so the action buttons never get squashed. */
+.enm-app .enm-overview-dot,
+.enm-app .enm-overview-spark,
+.enm-app .enm-overview-uptime,
+.enm-app .enm-overview-actions,
+.enm-app .enm-overview-open {
+    flex: 0 0 auto;
 }
 .enm-app .enm-overview-line1 {
     display: flex;
@@ -7805,8 +7892,11 @@ body[data-app-size="compact"] .enm-app .enm-usage-card-value,
     font-family: inherit;
     border: 1px solid var(--border-color, var(--border-subtle));
     border-radius: 6px;
-    background: var(--bg-page);
-    color: var(--text-tertiary);
+    /* v0.5.238 — was bg-page + text-tertiary, which made the buttons read as
+       blank dark squares against the dark card. Lift to an elevated surface +
+       secondary glyph so they clearly look like tappable controls. */
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
     cursor: pointer;
     transition: color 120ms, border-color 120ms, background-color 120ms, opacity 120ms;
 }

@@ -823,6 +823,19 @@
             // v0.5.237 — label of the control that returns from a drilled-in
             // per-chain dashboard to the multi-chain overview (Council only).
             back_to_overview:     '← Back to overview',
+            // v0.5.238 — "This node" identity card (DAO Council + BPoS status).
+            identity: {
+                title:              'This node',
+                aria:               'This node identity',
+                council_label:      'DAO Council',
+                bpos_label:         'BPoS',
+                not_council:        'Not a Council member',
+                council_unbound:    'Not bound to a seat',
+                bpos_unregistered:  'Not registered',
+                bpos_hint:          'A Council node still registers as a BPoS producer separately (in Essentials) to earn staking rewards.',
+                key_label:          'Key',
+                addr_label:         'Address',
+            },
             // v0.5.186 (Council Node UX P2.1) — control-center row meta line.
             // {n} = thousands-separated block height; {parent} = parent
             // EVM chain name an Oracle relays for.

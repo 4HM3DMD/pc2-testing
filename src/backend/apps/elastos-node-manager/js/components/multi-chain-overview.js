@@ -436,6 +436,10 @@
             escapeHtml(this._summaryLineV2(snap)),
             '</p>',
             '</header>',
+            // v0.5.238 — "This node" identity card: DAO Council membership +
+            // BPoS producer status (truthful for ENM's own node key). Empty
+            // string until /system/identity resolves into _lastIdentity.
+            this._identityCardHtml(),
             // v0.5.225 audit Phase 21 — provider-cap banner. Only renders
             // when /system/host-limits reports a tight cap AND operator
             // hasn't dismissed it. Auto-detected; opt-in per operator
@@ -1396,6 +1400,107 @@
      * single-glance health line.
      * @private
      */
+    /**
+     * v0.5.238 — "This node" identity card. Surfaces ENM's own node status the
+     * way node.sh's `status` does, but labeled "DAO Council" (the Cyber
+     * Republic / CR Council is the Elastos DAO): DAO Council membership
+     * (name + state) and BPoS producer status (name + state), side by side,
+     * plus the mining key + address. Truthful — reflects ENM's node key, so a
+     * node that isn't bound to a Council seat reads "Not a Council member" and
+     * an unregistered producer reads "Not registered" (with a hint that a
+     * Council node still registers BPoS separately to earn staking rewards).
+     * Sourced from /system/identity (this._lastIdentity); returns '' until that
+     * resolves so the card never flashes an empty state.
+     * @private
+     */
+    EnmMultiChainOverviewPane.prototype._identityCardHtml = function () {
+        var id = this._lastIdentity;
+        if (!id) { return ''; }
+        var ks = id.keystore || {};
+        var cr = id.crMember || null;
+        var prod = id.producer || null;
+        var setupRole = id.setupRole || 'unknown';
+
+        function trunc(s, head, tail) {
+            s = String(s || '');
+            if (s.length <= head + tail + 1) { return s; }
+            return s.slice(0, head) + '…' + s.slice(-tail);
+        }
+        function pill(label, dotState, valueText) {
+            return '<div class="enm-identity-pill">'
+                + '<span class="enm-identity-pill-label">' + escapeHtml(label) + '</span>'
+                + '<span class="enm-identity-pill-val">'
+                +   '<span class="enm-identity-dot state-' + escapeAttr(dotState) + '" aria-hidden="true"></span>'
+                +   escapeHtml(valueText)
+                + '</span></div>';
+        }
+
+        // DAO Council (CRC) row.
+        var councilDot, councilText;
+        if (cr && cr.isCrMember) {
+            councilDot = 'synced';
+            councilText = (cr.state || 'Member') + (cr.nickname ? ' · ' + cr.nickname : '');
+        } else {
+            councilDot = 'unconfigured';
+            councilText = (setupRole === 'council')
+                ? tFb('overview_pane.identity.council_unbound', 'Not bound to a seat')
+                : tFb('overview_pane.identity.not_council', 'Not a Council member');
+        }
+
+        // BPoS producer row.
+        var bposDot, bposText;
+        if (prod && prod.state) {
+            bposDot = (prod.state === 'Active') ? 'synced' : 'syncing';
+            bposText = prod.state + (prod.nickname ? ' · ' + prod.nickname : '');
+        } else {
+            bposDot = 'unconfigured';
+            bposText = tFb('overview_pane.identity.bpos_unregistered', 'Not registered');
+        }
+
+        // Hint: a Council node still registers BPoS separately (node.sh shows
+        // CRC + BPoS as independent roles). Only when BPoS is absent on a
+        // Council install / member.
+        var hint = '';
+        if ((!prod || !prod.state) && (setupRole === 'council' || (cr && cr.isCrMember))) {
+            hint = '<div class="enm-identity-hint">'
+                + escapeHtml(tFb('overview_pane.identity.bpos_hint',
+                    'A Council node still registers as a BPoS producer separately (in Essentials) to earn staking rewards.'))
+                + '</div>';
+        }
+
+        // Mining key + address.
+        var keyLine = '';
+        var keyParts = [];
+        if (ks.publicKey) {
+            keyParts.push('<span class="enm-identity-kv"><span class="enm-identity-kv-k">'
+                + escapeHtml(tFb('overview_pane.identity.key_label', 'Key')) + '</span> '
+                + '<span class="enm-mono">' + escapeHtml(trunc(ks.publicKey, 6, 4)) + '</span></span>');
+        }
+        if (ks.address) {
+            keyParts.push('<span class="enm-identity-kv"><span class="enm-identity-kv-k">'
+                + escapeHtml(tFb('overview_pane.identity.addr_label', 'Address')) + '</span> '
+                + '<span class="enm-mono">' + escapeHtml(trunc(ks.address, 6, 4)) + '</span></span>');
+        }
+        if (keyParts.length) {
+            keyLine = '<div class="enm-identity-keys">'
+                + keyParts.join('<span class="enm-identity-sep" aria-hidden="true">·</span>')
+                + '</div>';
+        }
+
+        return '<section class="enm-overview-identity" aria-label="'
+            + escapeAttr(tFb('overview_pane.identity.aria', 'This node identity')) + '">'
+            + '<div class="enm-identity-head">'
+            +   escapeHtml(tFb('overview_pane.identity.title', 'This node'))
+            + '</div>'
+            + '<div class="enm-identity-pills">'
+            +   pill(tFb('overview_pane.identity.council_label', 'DAO Council'), councilDot, councilText)
+            +   pill(tFb('overview_pane.identity.bpos_label', 'BPoS'), bposDot, bposText)
+            + '</div>'
+            + hint
+            + keyLine
+            + '</section>';
+    };
+
     EnmMultiChainOverviewPane.prototype._summaryLineV2 = function (snap) {
         var totals = (snap && snap.totals) || { total: 0 };
         if (!totals.total) {
@@ -1428,10 +1533,10 @@
         var setupRole = id.setupRole || 'unknown';
         var rolePrefix = '';
         if (cr && cr.isCrMember) {
-            rolePrefix = 'CR Council · ' + (cr.state || 'Elected');
+            rolePrefix = 'DAO Council · ' + (cr.state || 'Elected');
             if (cr.nickname) { rolePrefix += ' (' + cr.nickname + ')'; }
         } else if (setupRole === 'council') {
-            rolePrefix = 'CR Council install · not currently bound';
+            rolePrefix = 'DAO Council install · not currently bound';
         } else if (id.producer && id.producer.state) {
             rolePrefix = 'BPoS · ' + id.producer.state;
         }
