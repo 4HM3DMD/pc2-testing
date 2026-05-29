@@ -251,7 +251,7 @@ class HealthChecker {
                 // escalated within seconds of the chain being created
                 // instead of waiting the 2-min grace.
                 //
-                // Observed on srv832310 post-bootstrap: chain started at
+                // Observed on a test node post-bootstrap: chain started at
                 // 20:27:30, F2 escalated at 20:27:55 (25s in, with grace
                 // supposed to be 120s). Then 3 budget attempts in the next
                 // 4s — operator saw 5 notifications in 70 seconds.
@@ -361,7 +361,7 @@ class HealthChecker {
                 // per chain (30min cooldown) so this fires every
                 // medium tick (30s) but only writes audit/SSE every
                 // half hour the chain stays down. Safety net for the
-                // 23:56:42 srv832310 pattern where F1 escalation
+                // 23:56:42 test-node pattern where F1 escalation
                 // happened once but the operator missed the SSE.
                 const STUCK_GRACE_MS = 5 * 60_000;
                 if (s.lastExit && !s.lastExit.manualStop && s.lastExit.at

@@ -356,12 +356,12 @@ fi
 # role:"system" test-apps bundle — on EVERY pc2-node (re)start. install-local
 # always sets cid='local:<name>' (AppInstallService.ts), so a plain pc2-node
 # restart (it crashes + systemd-restarts periodically — observed NRestarts=7 on
-# pc2new) reaps ENM and takes ALL chains down until a manual redeploy. We
+# a test node) reaps ENM and takes ALL chains down until a manual redeploy. We
 # rewrite the cid to 'manual:<tag>' after a healthy install so the sweeper
 # skips ENM. Chain data lives in externalDataDirs, which the sweeper's
 # uninstall() never touches — so this protects only the management layer.
 #
-# This was verified on the old server (srv832310) but lost in the pc2new
+# This was verified on an earlier test server but lost in the current
 # migration because it was a server-local edit; keeping it in the repo'd
 # script makes it migration-proof. Idempotent + non-fatal.
 # =============================================================================

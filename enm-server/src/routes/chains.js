@@ -2220,7 +2220,7 @@ async function runChainRollback(adapter, extensionHandle, opts) {
     // beta.3.61 — explicit confirmation gate. The KB-cited rollback path
     // (ela-cli rollback) is "non-transactional, DANGEROUS". An interrupted
     // rollback (SSH drop, OS reboot, OOM) leaves FFLDB block index and
-    // UTXO state desynchronized — verified empirically on srv832310 when
+    // UTXO state desynchronized — verified empirically on a test node when
     // a long-running rollback was interrupted and subsequent boots got
     // stuck at "INITIALIZE FINISHED → server shutting down" with no
     // recovery short of full chain wipe + bootstrap. The caller MUST

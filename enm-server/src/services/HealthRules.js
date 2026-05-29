@@ -672,7 +672,7 @@ function detectF18(snap) {
     // follower / observer node the same condition is technically true
     // (cloud hosters typically block inbound by default) but the
     // consequence is just less peer diversity, not slashing risk.
-    // Operator on srv832310 (Hostinger, no BPoS registration) hit
+    // Operator on a test node (Hostinger, no BPoS registration) hit
     // this as a CRITICAL alert with copy that didn't match their
     // situation. Downgrade for non-BPoS; keep the urgent shape for
     // BPoS operators where ports actually matter.
@@ -689,7 +689,7 @@ function detectF18(snap) {
                 'Outbound peers > 0 but inbound = 0. BPoS requires inbound on P2P (20338) '
                 + 'and DPoS p2p (20339) to receive consensus messages. On a hosted VPS the '
                 + 'usual cause is the host firewall: run `sudo ufw allow 20338/tcp && '
-                + 'sudo ufw allow 20339/tcp` (verified fix on srv832310, 2026-05-15). At '
+                + 'sudo ufw allow 20339/tcp` (verified fix on a test node, 2026-05-15). At '
                 + 'home behind a router: forward those ports or enable UPnP. Either way, '
                 + 'missed votes accumulate silently.',
             payload: {

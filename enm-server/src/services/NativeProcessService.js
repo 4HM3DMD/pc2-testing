@@ -805,7 +805,7 @@ class NativeProcessService extends EventEmitter {
             // beta.3.81 — Wave B item ⑧ — external SIGTERM forensics.
             // When ela exits via SIGTERM but ENM didn't initiate the
             // stop (wasManual=false), something outside ENM killed the
-            // process. Operators on srv832310 hit this repeatedly:
+            // process. Operators on a test node hit this repeatedly:
             // chain dies every 30-90min, no audit row, no clue who's
             // sending the signal. Capture a forensic snapshot to the
             // server log so the next death event leaves a trail we
@@ -971,7 +971,7 @@ class NativeProcessService extends EventEmitter {
     /**
      * beta.3.81 — Wave B item ⑧ — capture forensic context when ela
      * receives an external SIGTERM (manual=false). Goal: identify the
-     * killer, which has been mystery on srv832310 for weeks.
+     * killer, which has been a mystery in testing for weeks.
      *
      * Strategy: collect the cheapest "what was happening around the
      * moment of death" signals available. All commands are bounded

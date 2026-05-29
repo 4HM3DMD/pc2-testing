@@ -12,7 +12,7 @@
  *   But no code ever read the field — so every ENM restart (deploy, crash, host
  *   reboot) left enabled chains stopped until F1's slow self-heal tick eventually
  *   cleared whatever blocker (stale LOCK, etc.) and restarted them. That window
- *   was minutes to hours depending on F1 cadence. After a deploy on srv832310
+ *   was minutes to hours depending on F1 cadence. After a deploy on a test node
  *   the chain stayed `state=stopped` indefinitely until manual restart.
  *
  * What this does:

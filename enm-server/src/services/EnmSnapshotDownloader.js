@@ -57,7 +57,7 @@ const { enmDataDir } = require('./DataDir');
 //
 // v0.5.199 — MAINCHAIN ONLY.
 //
-// EVM chains (esc/eid/pg) were removed after the pc2new cycle-13
+// EVM chains (esc/eid/pg) were removed after the cycle-13
 // lockup (2026-05-23). The upstream EVM snapshot tarballs at
 // node-data.elastos.io/<esc|eid|pg>/...-data-latest.tgz embed the
 // snapshot creator's data/<chain>/nodekey — the 64-byte secp256k1
@@ -66,7 +66,7 @@ const { enmDataDir } = require('./DataDir');
 // DUPLICATE node ID (originally that of 18.190.98.27); the EVM
 // network rejects the duplicate → 0 peers → F1/F2 auto-heal
 // cascade → eventual panic/exit (eid: nil-pointer in
-// eth/downloader.synchronise). Diagnosed on pc2new 2026-05-23 and
+// eth/downloader.synchronise). Diagnosed on a test node 2026-05-23 and
 // recorded in ENM_QA_CATALOG.md under "CYCLE-13 RE-FINALIZATION".
 //
 // The ELA mainchain snapshot does NOT contain a node-identity

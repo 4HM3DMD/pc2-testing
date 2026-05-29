@@ -44,7 +44,7 @@
  *   - We only manage UFW. firewalld / nftables / raw iptables are out
  *     of scope. If the operator's host uses one of those, they'll see
  *     F18 fire as before and follow the alert's remediation copy.
- *   - We run as root (PC2 boots as root; verified on srv832310). If
+ *   - We run as root (PC2 boots as root; verified on a test node). If
  *     somehow we're not root, the `ufw allow` exec fails and we
  *     surface the error in the report — caller (chain start) treats
  *     it as warn-not-fail since ela can still run; the operator just

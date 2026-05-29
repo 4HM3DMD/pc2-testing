@@ -500,7 +500,7 @@
                     // v0.5.199 — explicit EVM-cold-sync disclosure. The Card 5
                     // checkbox controls the mainchain snapshot only; the
                     // upstream EVM snapshots embed a duplicate nodekey that
-                    // collides on the peer mesh (pc2new cycle-13 lockup,
+                    // collides on the peer mesh (the cycle-13 lockup,
                     // 2026-05-23) so they are disabled by design.
                     snapshot_evm_note: 'Mainchain only. EVM sidechains (esc, eid, pg) always '
                                    + 'sync from peers — the official EVM snapshots embed an '

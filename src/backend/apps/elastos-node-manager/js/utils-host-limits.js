@@ -20,7 +20,7 @@
  *   - Returns { cpuCapCores, memoryCapGb, isConstrained } shape.
  *   - isConstrained = true iff (cpuCapCores < 4 OR memoryCapGb < 8).
  *     These are the empirical thresholds for "comfortable Council node"
- *     based on pc2new sizing.
+ *     based on test-node sizing.
  *   - Returns null if backend doesn't expose the endpoint (older bundle).
  *
  * Backend endpoint (TO BUILD — separate PR):

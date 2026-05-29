@@ -2554,7 +2554,7 @@ async function runCouncilInstall(args) {
 
         // ---- STEP — mainchain snapshot download (v0.5.199 mainchain-only) ----
         // Was multi-chain pre-v0.5.199; collapsed to mainchain after the
-        // pc2new cycle-13 nodekey-contamination lockup (2026-05-23). EVM
+        // the cycle-13 nodekey-contamination lockup (2026-05-23). EVM
         // chains (esc/eid/pg) now cold-sync from peers — slower (3-7 days
         // each, in the background) but no shared-identity failure mode.
         // SSE topic kept as 'download-snapshots-parallel' for frontend

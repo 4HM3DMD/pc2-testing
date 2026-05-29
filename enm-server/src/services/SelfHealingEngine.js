@@ -907,7 +907,7 @@ class SelfHealingEngine {
             // was auto-resolved (or expired) and the rule fires again
             // before the underlying condition has had time to actually
             // change. Without this, F4 in beta.3.55+ created 30+
-            // proposals in 26 min on srv832310 (fast-tick rate).
+            // proposals in 26 min on a test node (fast-tick rate).
             //
             // beta.3.61 — bumped 30min → 90min. With the previous 30min
             // value, a permanently-stuck chain still got an F4 proposal
@@ -915,7 +915,7 @@ class SelfHealingEngine {
             // rate-limit had already passed (since previous proposal at
             // T-1hr) → next F4 detection fires a new proposal. Operator
             // saw 476 auto_resolved + 12 expired F4 proposals over 24h
-            // on srv832310 with this pattern (every :29:37 sharp).
+            // on a test node with this pattern (every :29:37 sharp).
             // 90min > 60min TTL → the window always overlaps an
             // already-expired proposal, blocking the re-fire.
             const PROPOSAL_RATE_LIMIT_MS = 90 * 60_000;
@@ -1029,7 +1029,7 @@ class SelfHealingEngine {
     /**
      * beta.3.82 — Wave C item ⑤ — stuck-chain watchdog.
      *
-     * Background: the 23:56:42 srv832310 incident showed F1 can silently
+     * Background: the 23:56:42 test-node incident showed F1 can silently
      * stop firing on a dead chain when an OWNER_CONFIRMS escalation
      * proposal already exists for the same rule on that chain (the
      * "escalationOpen" guard in _applyAutomatedSafe returns early to

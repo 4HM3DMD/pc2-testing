@@ -147,9 +147,9 @@ const ESC_FROZEN_ACCOUNTS = Object.freeze([
 // these seeds again, so attacking them can't take down the running network.
 //
 // CONTENT (extracted from the live chain binaries via `strings <bin> | grep enode`
-// on pc2new — the authoritative source since the chain repos aren't all public):
+// on a test node — the authoritative source since the chain repos aren't all public):
 //   esc: 9 foundation :20630 enodes (Elastos.ELA.SideChain.ESC v0.2.7.1) —
-//        AWS hosts across regions; empirically alive (pc2new peers off them OOTB).
+//        AWS hosts across regions; empirically alive (the test node peers off them OOTB).
 //   eid: 11 foundation :20640 enodes (Elastos.ELA.SideChain.EID v0.2.4) —
 //        same AWS host pool; have been flaky/dead at times, but harmless to ship
 //        (geth tries them via discv4 and moves on; cache + the same-operator-
