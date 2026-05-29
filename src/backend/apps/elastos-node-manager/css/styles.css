@@ -923,6 +923,16 @@ body[data-app-size="compact"] .enm-app .enm-main { padding: var(--sp-2); }
     gap: var(--sp-4);
     padding-bottom: var(--sp-4); /* breathing room below last card */
 }
+/* v0.5.242 — the dashboard pane is a flex column; its children default to
+   flex-shrink:1, so when the stacked cards are taller than the pane (common
+   on a drilled-in EVM chain — hero + Mining&rewards + system-status — and at
+   narrow widths where text wraps taller) flexbox SHRINKS the cards to fit
+   instead of letting the pane's overflow:auto scroll. .enm-section-card has
+   overflow:hidden, so the shrunk card CLIPS its content (the EVM account row +
+   footer vanished until the operator enlarged the window, which gave the pane
+   enough height that no shrink was needed). flex-shrink:0 makes every card keep
+   its natural height so the pane scrolls. The flex column (for `gap`) stays. */
+#enm-pane-dashboard > * { flex-shrink: 0; }
 
 /* ---- Chain card (hero) ---------------------------------------- */
 .enm-chain-card {
@@ -7425,7 +7435,6 @@ body[data-app-size="compact"] .enm-app .enm-filter-chip {
 .enm-app .enm-overview-dot,
 .enm-app .enm-overview-spark,
 .enm-app .enm-overview-uptime,
-.enm-app .enm-overview-actions,
 .enm-app .enm-overview-open {
     flex: 0 0 auto;
 }
@@ -7869,57 +7878,12 @@ body[data-app-size="compact"] .enm-app .enm-usage-card-value,
     color: var(--error);
     background: color-mix(in srgb, var(--error) 16%, transparent);
 }
-/* v0.5.186 (P2.2) — compact quick actions. Always visible (discoverable on
-   touch), muted by default, colorize on hover/focus per action. Buttons
-   intercept the row click in JS so acting never also navigates. Properties
-   follow the project's button rule: inline-flex, centered, line-height 1,
-   font-family inherit. */
-.enm-app .enm-overview-actions {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 4px;
-}
-.enm-app .enm-overview-action {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 26px;
-    height: 26px;
-    padding: 0;
-    font-size: 12px;
-    line-height: 1;
-    font-family: inherit;
-    border: 1px solid var(--border-color, var(--border-subtle));
-    border-radius: 6px;
-    /* v0.5.238 — was bg-page + text-tertiary, which made the buttons read as
-       blank dark squares against the dark card. Lift to an elevated surface +
-       secondary glyph so they clearly look like tappable controls. */
-    background: var(--bg-elevated);
-    color: var(--text-secondary);
-    cursor: pointer;
-    transition: color 120ms, border-color 120ms, background-color 120ms, opacity 120ms;
-}
-.enm-app .enm-overview-action:hover,
-.enm-app .enm-overview-action:focus-visible {
-    outline: none;
-    border-color: currentColor;
-}
-.enm-app .enm-overview-action:focus-visible {
-    box-shadow: 0 0 0 2px rgba(80, 160, 240, 0.4);
-}
-.enm-app .enm-overview-action.is-start:hover,
-.enm-app .enm-overview-action.is-start:focus-visible { color: var(--success); }
-.enm-app .enm-overview-action.is-stop:hover,
-.enm-app .enm-overview-action.is-stop:focus-visible { color: var(--error); }
-.enm-app .enm-overview-action.is-restart:hover,
-.enm-app .enm-overview-action.is-restart:focus-visible { color: var(--accent); }
-.enm-app .enm-overview-action.is-busy {
-    opacity: 0.5;
-    cursor: default;
-    animation: enm-overview-pulse 1.4s ease-in-out infinite;
-}
-.enm-app .enm-overview-action[disabled] { cursor: default; }
+/* v0.5.242 — the legacy .enm-overview-actions / .enm-overview-action
+   icon-button rules (26×26 squares from the pre-v0.5.239 flat-row design)
+   were removed here. The overview's per-chain actions are now solely the
+   labelled .enm-ovx-act buttons (defined above); they no longer carry the
+   .enm-overview-action class, which closes the dual-class footgun whose
+   leaked width:26px caused the v0.5.241 Restart/Stop overlap. */
 .enm-app .enm-overview-uptime {
     font-size: 12px;
     color: var(--text-tertiary);
@@ -8374,13 +8338,10 @@ body[data-app-size="narrow"]  .enm-app .enm-evm-shared-mining-grid {
 .enm-app .enm-ovx-health-r { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 /* labelled action buttons */
 .enm-app .enm-ovx-act {
-    /* v0.5.241 — width:auto is load-bearing: these buttons ALSO carry the
-       legacy .enm-overview-action class (the click-delegation hook), whose
-       icon-button rule sets width:26px. Without an explicit width here that
-       26px leaks in (same specificity, but .enm-overview-action is earlier in
-       source), clipping the label ("Restart"→"Rest") so it overflows and
-       overlaps the next button. The <430px @media gave them flex-basis 50%,
-       which masked the bug at narrow widths only. */
+    /* width:auto kept explicit (it's the inline-flex default). v0.5.241 added
+       it to defeat a width:26px that leaked from the legacy .enm-overview-action
+       class these buttons used to also carry; v0.5.242 removed that dual-class
+       entirely, so this is now just belt-and-suspenders. */
     display: inline-flex; align-items: center; justify-content: center; gap: 6px; width: auto; height: 32px; padding: 0 13px;
     border-radius: 8px; border: 1px solid var(--border); background: var(--bg-elevated); color: var(--text-secondary);
     font-size: 12px; font-weight: 600; font-family: inherit; cursor: pointer; line-height: 1; white-space: nowrap;

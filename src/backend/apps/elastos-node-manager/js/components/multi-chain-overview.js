@@ -642,7 +642,13 @@
             Array.prototype.forEach.call(rowEls, function (row) {
                 row.addEventListener('click', function (ev) {
                     var t = ev.target;
-                    var actionBtn = t && t.closest ? t.closest('.enm-overview-action') : null;
+                    // v0.5.242 — match the labelled action button by its own
+                    // class. (Was '.enm-overview-action', the legacy icon-button
+                    // class that's now removed — see the dual-class cleanup.)
+                    // Bulk Start/Restart-all buttons also use .enm-ovx-act but
+                    // live in the health header, never inside a .enm-overview-row,
+                    // so this row handler never sees them.
+                    var actionBtn = t && t.closest ? t.closest('.enm-ovx-act') : null;
                     if (actionBtn) {
                         ev.stopPropagation();
                         self._onAction(actionBtn.dataset.action, actionBtn.dataset.chainId, actionBtn);
@@ -1146,7 +1152,7 @@
         var cid = escapeAttr(c.chainId);
         function btn(action, glyph, key, fallback, cls) {
             var label = tFb(key, fallback);
-            return '<button type="button" class="enm-overview-action enm-ovx-act ' + cls + '"'
+            return '<button type="button" class="enm-ovx-act ' + cls + '"'
                 + ' data-action="' + action + '" data-chain-id="' + cid + '">'
                 + '<span class="enm-ovx-ico" aria-hidden="true">' + glyph + '</span>'
                 + escapeHtml(label) + '</button>';
