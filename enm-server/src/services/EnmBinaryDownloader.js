@@ -438,6 +438,18 @@ class EnmBinaryDownloader {
             cliPath: s.cliPath,
             version,
         });
+
+        // v0.5.249 — the installed binary just changed. Drop the per-chain
+        // update scanner's cached result and force its next poll, so the
+        // overview's "Update available" badge clears immediately instead of
+        // lingering up to the scanner's 6h TTL (the reported "shows an update
+        // while already on the latest" right after updating). Best-effort +
+        // late require so a load cycle or a missing scanner can't fail an
+        // otherwise-successful install — the badge self-corrects on the next
+        // 6h refresh regardless.
+        try {
+            require('./EnmChainUpdateScanner').getInstance().invalidate(chainId);
+        } catch (_) { /* non-fatal */ }
     }
 
     _emit(chainId, phase, message, extra) {

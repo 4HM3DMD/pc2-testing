@@ -4748,7 +4748,16 @@
         this.api.get('/chains/mainchain', { skipCache: true })
             .then(function (envelope) {
                 if (self._destroyed) { return; }
-                var state = envelope && envelope.data;
+                // v0.5.249 — api.get() already unwraps the `{success,result}`
+                // envelope and returns `result` directly, so the chain object
+                // is `envelope` itself — `envelope.data` was always undefined,
+                // making `alive` false for EVERY chain and showing the
+                // "chain isn't running, nothing to restart" copy even while the
+                // mainchain was up. Use the same defensive unwrap every other
+                // caller in this file uses.
+                var state = (envelope && envelope.result)
+                    || (envelope && envelope.data)
+                    || envelope || {};
                 // Coarse states that mean "process alive". Anything
                 // else means "nothing to restart".
                 // v0.5.210 — accept 'synced' as alive too (v0.5.203 unified

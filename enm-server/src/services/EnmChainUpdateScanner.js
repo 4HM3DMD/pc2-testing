@@ -138,6 +138,28 @@ class EnmChainUpdateScanner {
     }
 
     /**
+     * v0.5.249 — drop a chain's cached result and force the NEXT ensureFresh()
+     * to re-poll immediately, instead of waiting out the remaining 6h TTL.
+     *
+     * Call this the moment a binary install/update changes the installed
+     * version. Without it, the cache keeps the pre-update entry — whose
+     * `installed` is the OLD version — so `updateAvailable` stays `true` and
+     * the overview shows "Update available" even though the operator just
+     * moved to the latest. (The reported "sometimes shows an update while I'm
+     * already on the latest": the window between updating and the next 6h
+     * refresh.) Resetting `_lastAttemptAt` is what actually un-gates the
+     * re-poll — deleting the entry alone isn't enough when other chains keep
+     * `_cache.size > 0`.
+     *
+     * @param {string} [chainId] — specific chain, or all chains when omitted.
+     */
+    invalidate(chainId) {
+        if (chainId) { this._cache.delete(chainId); }
+        else { this._cache.clear(); }
+        this._lastAttemptAt = 0;
+    }
+
+    /**
      * Fire-and-forget. Kicks a full refresh when the cache is stale and no
      * refresh is already in flight; otherwise an instant no-op. Safe to call
      * every tick — it self-throttles to one attempt per TTL_MS.
