@@ -1280,6 +1280,12 @@
             // settings inventory audit. Same wording, just routed through
             // the i18n layer.
             nav_label_config:               'Configuration',
+            // v0.5.245 — nav-rail group subheaders (BL-2). Visual grouping
+            // only; the sections themselves are unchanged.
+            nav_group_node:                 'Node',
+            nav_group_network:              'Network & sidechains',
+            nav_group_maintenance:          'Maintenance',
+            nav_group_danger:               'Danger zone',
             rpc_user_tooltip:               'Letters and numbers only (no spaces or symbols).',
             rpc_password_placeholder_set:   '(leave blank to keep current)',
             rpc_white_add_placeholder:      'add IP or CIDR…',

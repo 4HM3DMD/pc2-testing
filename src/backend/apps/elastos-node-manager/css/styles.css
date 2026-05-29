@@ -1781,6 +1781,18 @@ body[data-app-size="compact"] .enm-sys-cell:last-child,
     font-weight: var(--fw-semibold);
     padding: var(--sp-2) var(--sp-3);
 }
+/* v0.5.245 (BL-2) — group subheaders inside the wide nav rail. Lighter than
+   the rail title; spacing (not a heavy border) separates each group so the
+   rail reads as a short outline. Decorative (aria-hidden in JS). */
+.enm-settings-nav-group {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-tertiary);
+    font-weight: var(--fw-semibold);
+    padding: 0 var(--sp-3) 4px;
+    margin-top: var(--sp-4);
+}
 .enm-settings-nav-item {
     display: flex;
     align-items: center;

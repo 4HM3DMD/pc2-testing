@@ -296,36 +296,46 @@
         //   Advanced ← (warning banner) + log level / memory / archive
         //              (always visible per operator option (2b), with
         //              "don't change unless you know why" banner).
+        // v0.5.245 (BL-2) — sections are grouped under nav-rail subheaders.
+        // Same 9 sections, just ordered into 4 task-oriented groups so the
+        // rail reads as a short outline instead of a flat list. `group` marks
+        // the subheader each item falls under; consecutive same-group items
+        // share one header. (Default active section stays keyed — 'network' —
+        // so this reorder doesn't change where Settings opens.)
         var nav = [
-            { key: 'access',   glyph: '⇆', label: t('settings.heading_access'),   build: this._buildAccessSection },
-            // beta.3.43 — Identity tab. Sits between Access and
-            // Security since it's identity-related but contains
-            // destructive ops; placing it adjacent to Security so the
-            // operator's attention is already on "this is sensitive"
-            // when they land on it.
-            { key: 'identity', glyph: '◉', label: t('settings.heading_identity'), build: this._buildIdentitySection },
-            { key: 'security', glyph: '◈', label: t('settings.heading_security'), build: this._buildSecuritySection },
-            { key: 'network',  glyph: '⇄', label: t('settings.heading_network'),  build: this._buildNetworkSection },
-            // beta.3.19 — Alerts (Phase 2). Drives when the dashboard
-            // health detectors fire. Writes cfg.global.notifications.
-            // thresholds.* via PUT /config/notifications.
-            { key: 'alerts',   glyph: '⚑', label: t('settings.heading_alerts'),   build: this._buildAlertsSection },
-            { key: 'storage',  glyph: '◳', label: t('settings.heading_storage'),  build: this._buildStorageSection },
-            { key: 'advanced', glyph: '⚙', label: t('settings.heading_advanced'), build: this._buildAdvancedSection },
-            // v0.5.228 — EVM chains (shared). Single surface for editing
-            // settings that apply across all three EVM sidechains
-            // (reward address, mining, sync mode). Operator directive
-            // 2026-05-27 ("the multi EVM shared settings for all services
-            // isn't there either"). Per-chain overrides still live in
-            // each chain's dashboard card.
-            { key: 'evm',      glyph: '◧', label: t('settings.heading_evm_shared'), build: this._buildEvmSharedSection },
-            // beta.3.33 — Danger Zone. Update / chain-resync / uninstall
-            // / nuke. Distinct red-accented styling (.enm-section-danger)
-            // and no Save/Revert pattern — each card is independently
-            // action-driven with a typed-confirmation gate.
-            { key: 'danger',   glyph: '⚠', label: t('settings.heading_danger'),   build: this._buildDangerSection },
+            { key: 'identity', glyph: '◉', group: t('settings.nav_group_node'),        label: t('settings.heading_identity'), build: this._buildIdentitySection },
+            { key: 'security', glyph: '◈', group: t('settings.nav_group_node'),        label: t('settings.heading_security'), build: this._buildSecuritySection },
+            { key: 'network',  glyph: '⇄', group: t('settings.nav_group_network'),     label: t('settings.heading_network'),  build: this._buildNetworkSection },
+            { key: 'access',   glyph: '⇆', group: t('settings.nav_group_network'),     label: t('settings.heading_access'),   build: this._buildAccessSection },
+            // v0.5.228 — EVM chains (shared): reward address, mining, sync mode
+            // across all three EVM sidechains. Grouped with Network as the
+            // chain-facing config area; per-chain overrides live on each
+            // chain's dashboard card.
+            { key: 'evm',      glyph: '◧', group: t('settings.nav_group_network'),     label: t('settings.heading_evm_shared'), build: this._buildEvmSharedSection },
+            // beta.3.19 — Alerts: when the dashboard health detectors fire.
+            { key: 'alerts',   glyph: '⚑', group: t('settings.nav_group_maintenance'), label: t('settings.heading_alerts'),   build: this._buildAlertsSection },
+            { key: 'storage',  glyph: '◳', group: t('settings.nav_group_maintenance'), label: t('settings.heading_storage'),  build: this._buildStorageSection },
+            { key: 'advanced', glyph: '⚙', group: t('settings.nav_group_maintenance'), label: t('settings.heading_advanced'), build: this._buildAdvancedSection },
+            // beta.3.33 — Danger Zone. Update / chain-resync / uninstall /
+            // nuke. Red-accented; each card is action-driven with a typed
+            // confirmation gate.
+            { key: 'danger',   glyph: '⚠', group: t('settings.nav_group_danger'),     label: t('settings.heading_danger'),   build: this._buildDangerSection },
         ];
+        var lastNavGroup = null;
         nav.forEach(function (item) {
+            // v0.5.245 (BL-2) — emit a group subheader into the wide rail when
+            // the group changes. Decorative (aria-hidden): the rail is a
+            // tablist and each section card carries its own accessible
+            // heading, so the visual grouping is for sighted users; AT still
+            // navigates the role=tab buttons directly.
+            if (item.group && item.group !== lastNavGroup) {
+                var grp = document.createElement('div');
+                grp.className = 'enm-settings-nav-group';
+                grp.setAttribute('aria-hidden', 'true');
+                grp.textContent = item.group;
+                self._navEl.appendChild(grp);
+                lastNavGroup = item.group;
+            }
             // Nav item (wide rail).
             var navBtn = document.createElement('button');
             navBtn.type = 'button';

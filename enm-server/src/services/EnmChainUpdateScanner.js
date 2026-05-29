@@ -82,8 +82,13 @@ function parseLatest(html, name) {
     let best = null;
     while ((m = re.exec(html)) !== null) {
         const ver = m[1];
-        // Skip non-version dirs (e.g. an unversioned "elastos-esc-latest").
-        if (!/^v?\d/.test(ver)) { continue; }
+        // Strict: optional "v" then a dotted-numeric version only (X.Y[.Z[.W]]).
+        // The mirror also carries commit-hash builds (e.g.
+        // "elastos-ela-9dc17ff") and suffixed tags ("v0.9.8-hotfix"); a loose
+        // /^v?\d/ accepted "9dc17ff", and parseInt("9dc17ff") === 9 made it
+        // outrank v0.9.9.5 → a bogus "update available". Require clean dotted
+        // numerals so only real release dirs are considered.
+        if (!/^v?\d+(\.\d+)+$/.test(ver)) { continue; }
         if (best === null || compareVersion(ver, best) > 0) { best = ver; }
     }
     return best;
