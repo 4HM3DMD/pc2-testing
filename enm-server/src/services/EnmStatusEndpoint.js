@@ -117,6 +117,10 @@ class EnmStatusEndpoint {
         this._server = null;
         // Policy snapshot, refreshed by reload(): never read config per-request.
         this._policy = { enabled: false, council: false, whiteIPList: ['127.0.0.1'], user: null, password: null };
+        // Components we've kicked a one-shot version smoke-test for, so a cold
+        // version cache (e.g. right after a server restart) fills in within a
+        // poll or two without re-spawning `--version` on every request.
+        this._warmed = new Set();
     }
 
     /**
@@ -270,6 +274,14 @@ class EnmStatusEndpoint {
                 const s = ChainState.snapshot(c.chainId);
                 version = (s && s.binaryVersion) ? s.binaryVersion : null;
             } catch (_) { version = null; }
+            // Cold cache (e.g. just after a server restart) ⇒ kick a one-shot
+            // smoke-test so the next poll has the version. snapshotVerified is
+            // itself cached, and _warmed stops us re-spawning for components
+            // that have no resolvable --version (oracle scripts).
+            if (!version && !this._warmed.has(c.chainId)) {
+                this._warmed.add(c.chainId);
+                Promise.resolve().then(() => ChainState.snapshotVerified(c.chainId)).catch(() => { /* best-effort */ });
+            }
             return {
                 id: c.chainId,
                 name: DISPLAY_NAME[c.chainId] || c.displayName || c.chainId,
