@@ -75,6 +75,8 @@ const { ENM_LOG_PREFIX } = require('./EnmConstants');
 const ConfigStore = require('./ConfigStore');
 const ProcessMetrics = require('./ProcessMetrics');
 const CoarseStateDerive = require('./CoarseStateDerive');
+// v0.5.244 — per-chain binary update detection (download.elastos.io mirror).
+const ChainUpdateScanner = require('./EnmChainUpdateScanner');
 
 // v0.5.208 — tick interval set to 2s. v0.5.203 dropped 5s → 1s per the
 // "refresh should be immediate" directive, but on a CPU-saturated box
@@ -258,6 +260,12 @@ class CouncilOverviewService {
             cfg = { chains: {} };
         }
         const chainsCfg = (cfg && cfg.chains) || {};
+        // v0.5.244 — fire-and-forget kick of the per-chain update scanner. It
+        // self-throttles to one refresh per 6h and does its HTTP/spawn work
+        // off-tick; buildChainEntry only reads its synchronous cache, so the
+        // overview snapshot stays cheap (no new RPC/spawn on the tick path).
+        try { ChainUpdateScanner.getInstance({ logger: this.log }).ensureFresh(); }
+        catch (_) { /* update badge is best-effort; never block the overview */ }
         let proc = null;
         try { proc = this.registry.getProcessService(); }
         catch (_) { proc = null; }
@@ -545,6 +553,16 @@ function buildChainEntry(args) {
         peers,
         lastHeightAdvanceMs,
         processMetrics,
+        // v0.5.244 — per-chain "update available" flag for the overview badge +
+        // Update action button. Synchronous cache read (EnmChainUpdateScanner,
+        // refreshed off-tick); false when no entry yet, the chain isn't on the
+        // download mirror (oracles/arbiter), or the binary is current.
+        updateAvailable: (function () {
+            try {
+                const u = ChainUpdateScanner.getInstance().getCached(cId);
+                return !!(u && u.updateAvailable);
+            } catch (_) { return false; }
+        }()),
     };
 }
 

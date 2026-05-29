@@ -41,9 +41,12 @@
  * missing sparkline holder is silently skipped (overview still useful
  * without sparklines on chains that haven't reported height yet).
  *
- * ACCESSIBILITY: each row is role="button" + tabindex="0" with an
- * aria-label of "Open <chain> dashboard". Enter/Space triggers route
- * just like a click. Section headers use h3.
+ * ACCESSIBILITY (v0.5.244): chain cards are NOT role=button (they hold
+ * native action buttons; nesting interactive content is an anti-pattern).
+ * Mouse users route by clicking the card body; keyboard / screen-reader
+ * users route via each card's native "Manage ›" button. Oracle lines, which
+ * have no inner buttons, are role="button" + tabindex="0" with an aria-label
+ * of "Open <chain> dashboard" and an Enter/Space keydown handler.
  */
 
 (function (root) {
@@ -631,13 +634,15 @@
             this._lastHtml = joined;
             this._root.innerHTML = joined;
 
-            // Wire row clicks → chain-selector dispatch. A click on a quick-action
+            // Wire row clicks → chain-change dispatch. A click on a quick-action
             // button runs the action instead of routing; a click anywhere else on
-            // the row (including the explicit open button, which bubbles here)
-            // routes. v0.5.187 a11y — the row is no longer role="button"/tabindex,
-            // so there's no row keydown handler: the open button + action buttons
-            // are native <button>s and handle Enter/Space themselves (their click
-            // bubbles to this handler).
+            // the row routes. The card itself is NOT role=button (it contains
+            // native <button>s; nesting interactive content is an a11y
+            // anti-pattern) — keyboard users route via the per-card "Manage ›"
+            // button (native, handles Enter/Space itself; its click bubbles
+            // here). Oracle lines ARE role=button (no inner buttons) and get a
+            // keydown handler below. (v0.5.244 — pre-v0.5.244 EVM/oracle cards
+            // were mouse-only and unreachable by keyboard.)
             var rowEls = this._root.querySelectorAll('.enm-overview-row');
             Array.prototype.forEach.call(rowEls, function (row) {
                 row.addEventListener('click', function (ev) {
@@ -674,6 +679,19 @@
                         return;
                     }
                     self._routeToChain(row.dataset.chainId);
+                });
+            });
+            // v0.5.244 a11y — oracle lines are role=button divs (focusable), so
+            // wire Enter/Space to route the same way a click does. (Native
+            // buttons elsewhere handle their own keyboard activation.)
+            var oracleEls = this._root.querySelectorAll('.enm-ovx-oracle');
+            Array.prototype.forEach.call(oracleEls, function (o) {
+                o.addEventListener('keydown', function (ev) {
+                    if (ev.key === 'Enter' || ev.key === ' ' || ev.key === 'Spacebar') {
+                        ev.preventDefault();
+                        ev.stopPropagation();
+                        self._routeToChain(o.dataset.chainId);
+                    }
                 });
             });
             // v0.5.239 — bulk Start all / Restart all in the health headline.
@@ -765,7 +783,7 @@
         // footer). Layout is now a vertical card: header (dot+name+state chip
         // +optional update badge) → meta (block/height) → metrics (peers+RAM)
         // → optional folded oracle line → labelled action footer.
-        void uptimeHtml; void ariaLabel;
+        void uptimeHtml;
 
         // Oracle: a compact one-liner folded into its parent EVM card. NOT an
         // .enm-overview-row, but it carries its own data-chain-id and routes to
@@ -779,7 +797,8 @@
             var rel = c.parentChainId
                 ? escapeHtml(tFb('overview_pane.relays_for', 'Relays for {parent}', { parent: chainNameFor(c.parentChainId, null) }))
                 : '';
-            return '<div class="enm-ovx-oracle" data-chain-id="' + chainIdAttr + '">'
+            return '<div class="enm-ovx-oracle" data-chain-id="' + chainIdAttr + '"'
+                + ' role="button" tabindex="0" aria-label="' + escapeAttr(ariaLabel) + '">'
                 + '<span class="enm-overview-dot ' + stateClass + '" aria-hidden="true"></span>'
                 + '<span class="enm-ovx-oracle-name">' + escapeHtml(displayName) + '</span>'
                 + '<span' + stateChipAttrs + '>' + escapeHtml(stateLabel) + '</span>'
@@ -1170,11 +1189,15 @@
         if (c.updateAvailable) {
             inner += btn('update', '↑', 'chain_actions.update', 'Update', 'is-update');
         }
-        var manage = (variant === 'hero')
-            ? '<span class="enm-ovx-spacer"></span>'
-              + '<button type="button" class="enm-ovx-manage" data-chain-id="' + cid + '">'
-              + escapeHtml(tFb('overview_pane.manage', 'Manage')) + ' ›</button>'
-            : '';
+        // v0.5.244 a11y — every routable chain card gets a keyboard-reachable
+        // "Manage ›" control (was hero-only). The card body still routes on
+        // click for mouse users, but keyboard / screen-reader users previously
+        // had no way into an EVM or arbiter dashboard (the card isn't a button
+        // — that would nest the action buttons inside a button). Oracle lines
+        // get their own role=button + tabindex in _rowHtml instead.
+        var manage = '<span class="enm-ovx-spacer"></span>'
+            + '<button type="button" class="enm-ovx-manage" data-chain-id="' + cid + '">'
+            + escapeHtml(tFb('overview_pane.manage', 'Manage')) + ' ›</button>';
         if (!inner && !manage) { return ''; }
         return '<div class="enm-ovx-foot">' + inner + manage + '</div>';
     };
