@@ -570,6 +570,15 @@ class HealthChecker {
                 evmForkDetected,
                 evmRecoveryStall,
                 evmSpvReady,
+                // v0.5.248 (validator-readiness audit P1-2) — the EVM adapter's
+                // last miner/follower decision {source, shouldMine, setupRole}.
+                // Lets F29 flag a Council node that fell back to FOLLOWER because
+                // it couldn't READ its producer status (mainchain RPC down /
+                // creds undecryptable) — the "silently stops earning" hazard —
+                // vs being genuinely off-duty.
+                minerDecision: isEvm
+                    ? (((this.getAdapter(chainId) || {})._lastRoleDecision) || null)
+                    : null,
             };
             this._enrichOracleSnap(snap, chainCfg);
             this._enrichArbiterSnap(snap);
@@ -578,7 +587,7 @@ class HealthChecker {
                 d.ruleId === 'F3' || d.ruleId === 'F4' || d.ruleId === 'F9'
                 || d.ruleId === 'F10' || d.ruleId === 'F16' || d.ruleId === 'F18'
                 || d.ruleId === 'F22' || d.ruleId === 'F24' || d.ruleId === 'F23'
-                || d.ruleId === 'F26' || d.ruleId === 'F27');
+                || d.ruleId === 'F26' || d.ruleId === 'F27' || d.ruleId === 'F29');
             if (dets.length > 0) {
                 await this.engine.apply(chainId, dets, chainCfg);
             }

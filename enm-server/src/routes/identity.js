@@ -286,6 +286,24 @@ function build(deps) {
                     });
                     return res.status(400).json(errorBody(r.error));
                 }
+                // v0.5.248 (validator-readiness audit P1-9) — importing a
+                // producer keystore is intent to SIGN, so ensure the mainchain
+                // runs with the DPoS arbiter enabled. Closes the edge where a
+                // node first set up keyless (enableArbiter=false) then imported
+                // a key later would hold a key but never sign. Best-effort: a
+                // failure here must not fail the import the operator committed.
+                try {
+                    await ConfigStore.update((cfg) => {
+                        if (cfg.chains && cfg.chains[CHAIN_ID] && cfg.chains[CHAIN_ID].dpos) {
+                            cfg.chains[CHAIN_ID].dpos.enableArbiter = true;
+                        }
+                        return cfg;
+                    });
+                } catch (cfgErr) {
+                    extensionHandle.log.warn(
+                        `${ENM_LOG_PREFIX} POST /identity/import: enableArbiter set failed (non-fatal): ${cfgErr.message}`,
+                    );
+                }
                 await _audit(getDb, extensionHandle.log, {
                     walletAddress: wallet,
                     decision: 'executed',

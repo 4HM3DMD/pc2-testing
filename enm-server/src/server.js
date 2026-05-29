@@ -510,6 +510,13 @@ async function main() {
         log('error', `audit cleanup init failed: ${err.message}`);
     }
 
+    // v0.5.248 (validator-readiness audit P1) — fire-and-forget systemd
+    // stop-timeout sanity check. READ-ONLY: it only WARNS if geth (ESC/EID/PG)
+    // could be SIGKILLed mid-flush on `systemctl stop/restart` because the
+    // controlling unit's TimeoutStopSec is too short — the corruption path that
+    // forces a destructive resync (F26). Non-awaited so it never delays listen().
+    assertSystemdStopTimeout().catch(() => { /* fail-soft: never block boot */ });
+
     // --- listen ------------------------------------------------------------
     app.listen(PORT, () => {
         log('info', `enm-server listening on :${PORT}`);
@@ -664,6 +671,93 @@ async function main() {
 function log(level, msg) {
     const fn = console[level] || console.log;
     fn.call(console, `${ENM_LOG_PREFIX} ${msg}`);
+}
+
+// v0.5.248 (validator-readiness audit P1) — boot-time systemd stop-timeout
+// assertion. ENM runs as a child of pc2-node under systemd. When the operator
+// runs `systemctl stop/restart`, systemd SIGTERMs the unit and waits
+// TimeoutStopSec before escalating to SIGKILL. That SIGTERM has to propagate
+// pc2-node → enm-server → the geth children (ESC/EID/PG) AND leave geth enough
+// time to flush in-memory state to chaindata. The systemd default
+// (DefaultTimeoutStopSec, usually 90 s) is too short on a busy box: geth gets
+// SIGKILLed mid-flush, leaving corrupt/minority-fork chaindata that then forces
+// a destructive resync (F26). The deploy script sets TimeoutStopSec=300, but if
+// an operator installed before that landed, or hand-edited the unit, this warns
+// them. READ-ONLY + fail-soft: ENM can't change another unit's config, so it
+// only surfaces the exact remediation; it never blocks boot.
+const SAFE_STOP_TIMEOUT_SEC = 300;
+
+/**
+ * Parse a systemd time span (the human form `systemctl show` prints for USec
+ * properties, e.g. "5min", "1min 30s", "90s", "infinity") into seconds.
+ * Returns Infinity for "infinity", null if nothing parseable.
+ */
+function parseSystemdTimespan(str) {
+    if (!str) { return null; }
+    const t = String(str).trim();
+    if (t === 'infinity') { return Infinity; }
+    const unitToSec = { us: 1e-6, ms: 1e-3, s: 1, min: 60, h: 3600, d: 86400, w: 604800 };
+    // Longer tokens (ms, min) precede shorter (s) so they win the alternation.
+    const re = /(\d+(?:\.\d+)?)\s*(us|ms|min|s|h|d|w)/g;
+    let m; let total = 0; let matched = false;
+    while ((m = re.exec(t)) !== null) {
+        matched = true;
+        total += parseFloat(m[1]) * (unitToSec[m[2]] || 0);
+    }
+    return matched ? total : null;
+}
+
+/**
+ * Best-effort detection of the systemd unit that owns this process by reading
+ * /proc/self/cgroup. cgroup v2 is a single line ".../<unit>.service"; cgroup v1
+ * has several lines but the systemd-managed one ends in ".service". Returns the
+ * leaf (deepest) ".service" token, or null when not under systemd / not Linux.
+ */
+function detectSystemdUnit() {
+    try {
+        const raw = fs.readFileSync('/proc/self/cgroup', 'utf8');
+        const matches = raw.match(/[\w@.\-\\]+\.service/g);
+        if (matches && matches.length > 0) {
+            return matches[matches.length - 1];
+        }
+    } catch (_) { /* not Linux / no cgroup → null */ }
+    return null;
+}
+
+/**
+ * Warn (never throw, never block) if the controlling systemd unit's
+ * TimeoutStopSec is below SAFE_STOP_TIMEOUT_SEC. Only runs under systemd
+ * (INVOCATION_ID present). `systemctl show` is an unprivileged read.
+ */
+async function assertSystemdStopTimeout() {
+    if (!process.env.INVOCATION_ID) { return; }   // not launched by systemd
+    const unit = detectSystemdUnit();
+    if (!unit) { return; }
+    const { execFile } = require('node:child_process');
+    const out = await new Promise((resolve) => {
+        try {
+            execFile(
+                'systemctl', ['show', unit, '-p', 'TimeoutStopUSec', '--value'],
+                { timeout: 3000 },
+                (err, stdout) => resolve(err ? null : String(stdout || '').trim()),
+            );
+        } catch (_) { resolve(null); }
+    });
+    if (!out) { return; }
+    const sec = parseSystemdTimespan(out);
+    if (sec === null) {
+        log('debug', `could not parse systemd TimeoutStopSec for ${unit} ("${out}") — skipping stop-timeout check`);
+        return;
+    }
+    if (sec === Infinity || sec >= SAFE_STOP_TIMEOUT_SEC) {
+        log('info', `systemd ${unit} TimeoutStopSec=${out} (≥${SAFE_STOP_TIMEOUT_SEC}s) — geth shutdown has enough flush time.`);
+        return;
+    }
+    log('warn',
+        `systemd ${unit} TimeoutStopSec=${out} (~${Math.round(sec)}s) is BELOW the recommended ${SAFE_STOP_TIMEOUT_SEC}s. `
+        + 'On `systemctl stop/restart`, geth (ESC/EID/PG) can be SIGKILLed mid-flush before it finishes writing '
+        + 'chaindata → minority-fork corruption that forces a destructive resync (F26). '
+        + `Recommended: \`systemctl edit ${unit}\` → add a [Service] line \`TimeoutStopSec=300\`, then \`systemctl daemon-reload\`.`);
 }
 
 /**

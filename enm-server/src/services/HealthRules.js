@@ -537,9 +537,16 @@ function detectF11(snap) {
  * CRITICAL_NOTIFY at >1300 (~10% slack from MAX_INACTIVE_ROUNDS=1440 before
  * permanent penalty).
  *
- * Action: NEVER_AUTOMATIC. ActivateProducer requires the operator's owner
- * key, which Node Manager intentionally does not hold (Rev 6 RNG findings).
- * The summary points the operator at ela-cli.
+ * Action: NEVER_AUTOMATIC (operator-initiated; not auto-fired). v0.5.248 fix
+ * (validator-readiness audit P1-1): ActivateProducer is NODE-KEY signed
+ * (Elastos.ELA/core/transaction/activateproducertransaction.go:208-227) — it
+ * uses the keystore Node Manager already holds, so ENM CAN and DOES submit it
+ * via the in-app Activate control (POST /chains/:id/bpos/activate,
+ * EnmBposService). The summary points the operator THERE, not at ela-cli. It
+ * stays NEVER_AUTOMATIC because WHEN to reactivate is the operator's call —
+ * not because ENM is unable to. (The prior copy wrongly said "owner key …
+ * Node Manager cannot do this for you", steering validators to ela-cli at the
+ * exact moment they're losing their slot.)
  */
 function detectF12(snap) {
     if (!snap || !snap.bpos || !snap.bpos.producer) return null;
@@ -567,12 +574,12 @@ function detectF12(snap) {
         ruleId: 'F12',
         tier: HEALING_TIERS.NEVER_AUTOMATIC,
         severity: isCritical ? 'CRITICAL' : 'WARNING',
-        summaryAction: `Producer Inactive — run ActivateProducer (${inactiveRounds}/${MAX_INACTIVE_ROUNDS} rounds)`,
+        summaryAction: `Producer Inactive — Activate from the Main chain card (${inactiveRounds}/${MAX_INACTIVE_ROUNDS} rounds)`,
         summaryReason:
             `Your producer is in Inactive state. ${isCritical ? 'Critical: ' : ''}`
             + `${inactiveRounds} rounds elapsed (${MAX_INACTIVE_ROUNDS} = forced inactive). `
-            + 'Sign and submit an ActivateProducer transaction via ela-cli within the '
-            + '6-block window — Node Manager cannot do this for you.',
+            + 'Reactivate now from the Main chain dashboard card — Node Manager signs the '
+            + 'ActivateProducer transaction with your node key (no ela-cli needed).',
         payload: {
             action: 'bpos-activate-producer',
             chainId: snap.chainId,
@@ -1145,8 +1152,9 @@ function detectF27(snap) {
  * State decision table (mirrors Elastos.ELA/cr/state/keyframe.go:24-42):
  *   Elected     → no fire (steady state, healthy)
  *   Inactive    → WARN if impeachmentVotes==0, CRITICAL if > 0 (close to
- *                 impeachment threshold). Recoverable via Essentials →
- *                 Activate CR member.
+ *                 impeachment threshold). Recoverable IN-APP (Validator card
+ *                 → Reactivate Council node; node-key-signed ActivateProducer,
+ *                 activateproducertransaction.go:113/212 — no owner key).
  *   Impeached   → CRITICAL (impeachment threshold reached; seat lost for
  *                 the rest of this term)
  *   Returned    → CRITICAL (operator voluntarily withdrew; deposit
@@ -1155,10 +1163,15 @@ function detectF27(snap) {
  *                 only post-term)
  *   Illegal     → CRITICAL (caught misbehaving — deposit forfeited)
  *
- * Tier: NEVER_AUTOMATIC. ENM cannot recover any of these states for the
- * operator: Activate / RecoverFromInactive require the operator's owner
- * key (which ENM intentionally never holds, Rev-6 RNG findings). The
- * summary points the operator at Essentials.
+ * Tier: NEVER_AUTOMATIC (alert-only — ENM never AUTO-submits an on-chain
+ * activation tx; activation is rate-limited on-chain to once per inactive
+ * window per ActivateDuration, so an auto-retry loop would be harmful). But
+ * the Inactive state IS recoverable on operator action: the Validator card's
+ * "Reactivate Council node" button submits a node-key-signed ActivateProducer
+ * (activateproducertransaction.go:113/212 — no owner key, just the keystore
+ * ENM already holds). The terminal states (Impeached/Returned/Terminated/
+ * Illegal) are not recoverable this term; for those the summary points the
+ * operator at Essentials.
  *
  * Hard-gated to mainchain (snap.chainId === 'mainchain') because CR
  * Committee membership is a Class-A-only concept; the rule runner would
@@ -1184,14 +1197,20 @@ function detectF28(snap) {
     let summaryAction;
     let summaryReason;
     if (state === 'inactive') {
-        summaryAction = 'CR Council member Inactive — Activate via Essentials';
+        // v0.5.248 (validator-readiness audit P1) — corrected. Reactivating an
+        // Inactive CR member is a NODE-KEY-signed ActivateProducer tx
+        // (activateproducertransaction.go:113/212), so ENM CAN do it with the
+        // keystore it already holds — no owner/deposit wallet, no Essentials.
+        // The old copy ("sign from the wallet that holds your deposit, via
+        // Essentials. ENM cannot do this for you") was wrong on both counts.
+        summaryAction = 'CR Council member Inactive — reactivate in Node Manager';
         summaryReason = 'Your CR Committee member record reads MemberState=Inactive '
             + '(the chain skipped your DPoS slot for too many consecutive rounds). '
-            + 'You can recover by signing an Activate transaction from the wallet '
-            + 'that holds your CR registration deposit, via Elastos Essentials. '
-            + 'ENM cannot do this for you.'
+            + 'Node Manager can recover this: open the Validator card and click '
+            + '“Reactivate Council node”. The activation is signed with this node’s '
+            + 'key (no wallet needed); the node must be running and fully synced.'
             + (impeachmentVotes > 0 ? ` Impeachment votes: ${cr.impeachmentVotes} — `
-                + 'address this before votes pass the impeachment threshold.' : '');
+                + 'reactivate before votes pass the impeachment threshold.' : '');
     } else if (state === 'impeached') {
         summaryAction = 'CR Council member Impeached — seat lost for this term';
         summaryReason = 'Your CR Committee member record reads MemberState=Impeached. '
@@ -1250,6 +1269,43 @@ function detectF28(snap) {
  * actually controls. The tier here MUST match what each detect
  * function returns; the description is operator-facing copy.
  */
+/**
+ * F29 — Council EVM sidechain silently FOLLOWING because producer status was
+ * UNREADABLE (validator-readiness audit P1-2). When detectProducerRole can't
+ * read the main-chain arbiter slate (mainchain RPC down / creds undecryptable /
+ * error), the adapter fail-safes to FOLLOWER (no --mine). On a Council node
+ * that is genuinely on-duty, that means it quietly stops producing EVM blocks
+ * and earning — with only a log line. This surfaces it. When the source IS a
+ * real read (getarbitersinfo / empty-slate), following is correct → stay silent.
+ *
+ * Tier: OWNER_CONFIRMS (a notice; recovery = fix mainchain RPC + restart the
+ * chain, never an auto-action).
+ */
+function detectF29(snap) {
+    if (!snap || !snap.minerDecision) return null;
+    const d = snap.minerDecision;
+    if (d.setupRole !== 'council') return null;          // BPoS sidechains follow by design
+    if (d.shouldMine !== false) return null;             // only when demoted to follower
+    const CANT_READ = ['no-mainchain-rpc', 'rpc-password-undecryptable', 'error', 'unavailable', 'no-node-pubkey'];
+    if (!CANT_READ.includes(d.source)) return null;      // genuine off-duty read → not this rule
+    const alive = !!(snap.processStatus && snap.processStatus.alive);
+    if (!alive) return null;                             // only meaningful while running
+
+    return {
+        ruleId: 'F29',
+        tier: HEALING_TIERS.OWNER_CONFIRMS,
+        severity: 'WARNING',
+        summaryAction: `${snap.chainId}: running as follower — couldn’t read producer status`,
+        summaryReason:
+            `${snap.chainId} started as a FOLLOWER (not producing) because Node Manager couldn’t read `
+            + `your on-chain producer status (${d.source}) — usually the Main chain RPC being unreachable `
+            + 'or its credentials undecryptable. If your node is on-duty it is NOT producing this '
+            + `sidechain’s blocks or earning. Fix Main chain RPC, then restart ${snap.chainId} so it `
+            + 're-checks the arbiter slate and resumes producing.',
+        payload: { action: 'evm-follower-degraded', chainId: snap.chainId, source: d.source },
+    };
+}
+
 const RULE_METADATA = Object.freeze({
     F1:  { tier: 'AUTOMATED_SAFE',  title: 'Auto-restart on crash',
            description: 'If the chain process exits unexpectedly (non-zero or SIGKILL) and the operator didn’t manually stop it, restart it.' },
@@ -1323,7 +1379,15 @@ const RULE_METADATA = Object.freeze({
            description: 'On an EVM sidechain (ESC/EID/PG) that is stuck for >20 min with peers but a PBFT recovery-stall log signature ("wait for recoved states" / "can not find active peer"), surface a critical alert. This is a quorum / peer problem, not a data fork — an auto-resync cannot fix it, so F26 yields to this alert and the operator restores peers/bootnodes instead.' },
     // v0.5.230 — Class A (mainchain) — alert-only. CR Council MemberState drift.
     F28: { tier: 'NEVER_AUTOMATIC', title: 'CR Council member state degraded',
-           description: 'Parallel to F12 for BPoS producers. Fires when this node\'s CR Committee MemberState is anything other than \'Elected\' — typically Inactive (skipped slots for too many consecutive rounds), Impeached, Returned, Terminated, or Illegal. Recovery for Inactive is the Activate flow in Elastos Essentials; other states are terminal-for-the-term and need the operator to investigate via Essentials. ENM cannot recover this for the operator (no owner key).' },
+           description: 'Parallel to F12 for BPoS producers. Fires when this node\'s CR Committee MemberState is anything other than \'Elected\' — typically Inactive (skipped slots for too many consecutive rounds), Impeached, Returned, Terminated, or Illegal. Inactive is recoverable in-app: the Validator card\'s "Reactivate Council node" button submits a node-key-signed ActivateProducer (no owner key needed). The other states are terminal for the current term and need the operator to investigate via Essentials. Alert-only — ENM never auto-submits the activation (it is rate-limited on-chain), so recovery is always an explicit operator click.' },
+    // v0.5.248 (validator-readiness audit P1-2) — Class B-only, Council-only,
+    // alert-only. EVM sidechain silently fell back to FOLLOWER because the
+    // adapter couldn't read on-chain producer status (mainchain RPC down /
+    // creds undecryptable / error). On an on-duty Council node that means it
+    // quietly stops producing this sidechain's blocks. Surfaces it so the
+    // operator fixes mainchain RPC + restarts; never auto-acts.
+    F29: { tier: 'OWNER_CONFIRMS', title: 'EVM sidechain following (producer status unreadable)',
+           description: 'On a Council node, an EVM sidechain (ESC/EID/PG) started as a FOLLOWER (not producing blocks) because Node Manager could not read your on-chain producer status — usually the Main chain RPC being unreachable or its credentials undecryptable. If your node is on-duty it is NOT producing this sidechain\'s blocks or earning. Recovery is operator-driven: fix Main chain RPC, then restart the sidechain so it re-checks the arbiter slate. ENM never auto-flips mining on (that would forge blocks an off-duty node has no right to).' },
 });
 
 // beta.3.22 — every rule is enabled by default. The operator-facing
@@ -1361,6 +1425,7 @@ const DEFAULT_ENABLED = Object.freeze({
     F26: true,  // v0.5.184 — Class B wedged-fork auto-resync (rate-limited)
     F27: true,  // v0.5.185 — Class B PBFT recovery-stall alert (alert-only)
     F28: true,  // v0.5.230 — Class A CR Council MemberState degraded (alert-only)
+    F29: true,  // v0.5.248 — Class B Council EVM silently following (alert-only)
 });
 
 // Global rule overrides (apply to all chains). Pre-3.87 this was the only
@@ -1495,6 +1560,9 @@ function runAll(snap) {
         ['F23', detectF23],
         // v0.5.230 — Class A CR Council MemberState degraded (F12 sibling).
         ['F28', detectF28],
+        // v0.5.248 (validator-readiness P1-2) — Class B Council EVM silently
+        // following because producer status was unreadable (alert-only).
+        ['F29', detectF29],
     ];
 
     // beta.3.87 — Wave M1.3 — DPoS-only rules. F11 (rotation stuck),
@@ -1523,7 +1591,10 @@ function runAll(snap) {
     // or oracles (Class C) etc., the rule is silently skipped.
     // v0.5.184/185 — F26 (wedged-fork auto-resync) + F27 (recovery-stall alert)
     // are EVM-sidechain-only.
-    const CLASS_B_ONLY_RULES = new Set(['F25', 'F26', 'F27']);
+    // v0.5.248 — F29 (Council EVM silently following, producer status unreadable)
+    // is also EVM-sidechain-only; the detector additionally self-gates on
+    // setupRole==='council' via snap.minerDecision.
+    const CLASS_B_ONLY_RULES = new Set(['F25', 'F26', 'F27', 'F29']);
     // beta.0.3.5 (Wave M4.5) — Class C-only rules. F24 fires only for
     // oracles (esc-oracle/eid-oracle/pg-oracle) where the parent-
     // chain abstraction exists.
@@ -1592,6 +1663,7 @@ module.exports = {
     detectF26,  // v0.5.184 — Class B wedged-fork auto-resync
     detectF27,  // v0.5.185 (P1-A) — Class B PBFT recovery-stall alert
     detectF28,  // v0.5.230 — Class A CR Council MemberState degraded
+    detectF29,  // v0.5.248 — Class B Council EVM silently following
     EVM_FORK_STALL_GRACE_MS,
     SPV_CAUGHTUP_MAX_DELTA,  // v0.5.185 (P0-B)
     PEER_ZERO_GRACE_MS,

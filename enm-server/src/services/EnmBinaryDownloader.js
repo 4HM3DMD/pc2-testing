@@ -286,7 +286,14 @@ class EnmBinaryDownloader {
             let m;
             while ((m = re.exec(html))) found.add(m[1]);
         }
-        return Array.from(found);
+        // v0.5.248 (validator-readiness audit P1-6) — the capture above
+        // tolerates -rc/-hotfix/commit-hash suffixes so the index parses, but
+        // the INSTALLER must never SELECT one (it would silently push a
+        // pre-release/untested build onto a validator). Keep only clean
+        // dotted-numeric releases (vX.Y[.Z[.W]]), matching EnmChainUpdateScanner.
+        // If nothing clean matched, caller falls back to the pinned version.
+        const STRICT_VERSION = /^v[0-9]+(?:\.[0-9]+)+$/;
+        return Array.from(found).filter((v) => STRICT_VERSION.test(v));
     }
 
     /**
@@ -349,49 +356,78 @@ class EnmBinaryDownloader {
             this._emit(chainId, PHASES.DOWNLOADING, '', { got, total });
         });
 
-        // 3. Extract
+        // 3. Extract into a STAGING dir, smoke-test there, THEN atomically
+        //    swap into the live bin dir (validator-readiness audit P1-5).
+        //    Pre-v0.5.248 the tar extracted directly over the live binary, so
+        //    a crash / SIGKILL / disk-full mid-extract — or a failed smoke
+        //    test — could leave a half-written binary that won't start.
+        //    node.sh avoids this by staging then `cp`. We stage → smoke →
+        //    rename, and keep the previous binary as <id>.bak for one-step
+        //    rollback. (The update route already requires the chain be stopped,
+        //    so the live binary file is never open during the rename.)
         s.phase = PHASES.EXTRACTING;
         this._emit(chainId, PHASES.EXTRACTING, 'Extracting...');
-        const targetDir = path.join(enmDataDir(), 'bin', chainId);
-        await fsp.mkdir(targetDir, { recursive: true });
-        await EnmBinaryDownloader._extractTar(tarball, targetDir);
+        const binRoot = path.join(enmDataDir(), 'bin');
+        const liveDir = path.join(binRoot, chainId);
+        const stagingDir = path.join(binRoot, `${chainId}.staging`);
+        const bakDir = path.join(binRoot, `${chainId}.bak`);
+        await fsp.mkdir(binRoot, { recursive: true });
+        await fsp.rm(stagingDir, { recursive: true, force: true }); // clear any prior aborted stage
+        await fsp.mkdir(stagingDir, { recursive: true });
+        await EnmBinaryDownloader._extractTar(tarball, stagingDir);
 
-        // The tarball contains a top-level directory like elastos-ela/.
-        // Find the binary inside, regardless of nesting.
-        const binaryPath = await EnmBinaryDownloader._locateInTree(targetDir, info.binary);
-        if (!binaryPath) {
-            // 0.5.88 — tag with err.code so chains.js + setup.js route
-            // layers can surface this specific message to operators
-            // instead of the static 'Try again' fallback. Operator-
-            // meaningful: tells them the upstream release tarball is
-            // malformed → file a bug rather than retry.
+        // Locate + chmod the binary IN STAGING — the live dir is untouched
+        // until the swap below, so a malformed tarball can't brick the chain.
+        const stagedBinary = await EnmBinaryDownloader._locateInTree(stagingDir, info.binary);
+        if (!stagedBinary) {
+            await fsp.rm(stagingDir, { recursive: true, force: true });
+            // 0.5.88 — err.code lets chains.js/setup.js surface a specific
+            // "upstream tarball malformed → file a bug" message.
             const e = new Error(`Binary "${info.binary}" not found inside extracted tarball.`);
             e.code = 'BINARY_MISSING';
             throw e;
         }
-        await fsp.chmod(binaryPath, 0o755);
-        s.binaryPath = binaryPath;
-
+        await fsp.chmod(stagedBinary, 0o755);
         if (info.cli) {
-            const cliPath = await EnmBinaryDownloader._locateInTree(targetDir, info.cli);
-            if (cliPath) {
-                await fsp.chmod(cliPath, 0o755);
-                s.cliPath = cliPath;
-            }
+            const stagedCli = await EnmBinaryDownloader._locateInTree(stagingDir, info.cli);
+            if (stagedCli) { await fsp.chmod(stagedCli, 0o755); }
         }
 
-        // 4. Smoke test
+        // 4. Smoke test the STAGED binary BEFORE swapping the live one.
         s.phase = PHASES.VERIFYING;
         this._emit(chainId, PHASES.VERIFYING, 'Verifying binary...');
-        const versionOut = await EnmBinaryDownloader._smokeTest(binaryPath);
+        const versionOut = await EnmBinaryDownloader._smokeTest(stagedBinary);
         if (!versionOut.ok) {
-            // 0.5.88 — see BINARY_MISSING above. SMOKE_TEST_FAILED means
-            // the binary downloaded but won't run on this host (libc
-            // mismatch / corrupt extraction / wrong OS in tarball). The
-            // operator needs the underlying error to debug.
+            await fsp.rm(stagingDir, { recursive: true, force: true }); // live binary never touched
             const e = new Error(`Binary smoke test failed: ${versionOut.error}`);
             e.code = 'SMOKE_TEST_FAILED';
             throw e;
+        }
+
+        // 5. Atomic swap (same-fs renames): live → .bak, staging → live.
+        //    On any failure, restore the previous binary so the chain can run.
+        await fsp.rm(bakDir, { recursive: true, force: true }); // drop the prior backup
+        let liveExisted = true;
+        try { await fsp.access(liveDir); } catch (_) { liveExisted = false; }
+        try {
+            if (liveExisted) { await fsp.rename(liveDir, bakDir); }
+            await fsp.rename(stagingDir, liveDir);
+        } catch (swapErr) {
+            let liveOk = true;
+            try { await fsp.access(liveDir); } catch (_) { liveOk = false; }
+            if (!liveOk && liveExisted) {
+                try { await fsp.rename(bakDir, liveDir); } catch (_2) { /* nothing more we can do */ }
+            }
+            await fsp.rm(stagingDir, { recursive: true, force: true });
+            throw swapErr;
+        }
+
+        // Re-locate the binary in the now-live dir for the status payload.
+        const binaryPath = await EnmBinaryDownloader._locateInTree(liveDir, info.binary);
+        s.binaryPath = binaryPath;
+        if (info.cli) {
+            const cliPath = await EnmBinaryDownloader._locateInTree(liveDir, info.cli);
+            if (cliPath) { s.cliPath = cliPath; }
         }
 
         s.phase = PHASES.DONE;

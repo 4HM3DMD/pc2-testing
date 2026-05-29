@@ -1699,6 +1699,15 @@
             activate_btn:               'Activate supernode',
             activate_ok_title:          'Activation submitted',
             activate_ok_body:           'Wait a block or two for chain confirmation.',
+            // v0.5.248 (validator-readiness audit) — these three keys are
+            // referenced by _activate() (busy label + the two error-toast
+            // titles) but were never defined, so the live activate flow
+            // rendered '[bpos_card.activate_btn_active]' etc. as literal
+            // bracketed placeholders. Added here; shared by the BPoS and the
+            // Council reactivation paths (both call BposCard._activate).
+            activate_btn_active:        'Activating…',
+            activate_fail_title:        'Activation failed',
+            activate_conflict_title:    'Cannot activate yet',
 
             // Deep-link guide modal copy (variant D's "View registration
             // guide" button). Until the Essentials deep-link integration
@@ -1730,7 +1739,20 @@
             head_title_elected:    'CR Council member — On-duty',
             head_sub_elected:      'Your node is in the on-chain CR Committee arbiter slate. EVM sidechain mining + mainchain BPoS signing activate automatically when your slot rotates in.',
             head_title_inactive:   'CR Council member — Inactive',
-            head_sub_inactive:     'You are a CR Committee member but on-chain MemberState is Inactive (the chain skipped your slot for too many consecutive rounds). Recover via Essentials → Activate.',
+            // v0.5.248 (validator-readiness audit P1) — corrected. The old
+            // copy told operators to "Recover via Essentials → Activate",
+            // implying ENM couldn't do it. But ela's ActivateProducer tx
+            // reactivates an Inactive CR member and is signed by the NODE
+            // public key (activateproducertransaction.go:113/212) — exactly
+            // the keystore.dat ENM already manages. So ENM can reactivate
+            // in-app, no wallet/owner-key needed. Button wired below.
+            head_sub_inactive:     'You are a CR Committee member but on-chain MemberState is Inactive (the chain skipped your slot for too many consecutive rounds). Node Manager can reactivate this for you — it signs the activation with your node key.',
+            // Council reactivation CTA (mirrors bpos_card.activate_* but with
+            // Council-specific copy). The button reuses BposCard._activate(),
+            // which POSTs /chains/mainchain/bpos/activate and shows the shared
+            // bpos_card.activate_ok_* / activate_fail_* toasts.
+            activate_btn:          'Reactivate Council node',
+            activate_explainer:    'Submits an on-chain activation signed with this node’s key (no wallet needed). Your node must be running and fully synced.',
             head_title_impeached:  'CR Council member — Impeached',
             head_sub_impeached:    'Your CR Committee membership has been impeached, terminated, returned, or flagged illegal on-chain. The current term seat is lost; check Essentials for the specific reason and recovery options.',
             head_title_next_term:  'CR Council member — Next term',

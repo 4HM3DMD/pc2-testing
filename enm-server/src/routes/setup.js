@@ -3209,6 +3209,33 @@ async function runCouncilPreflight(args) {
         severity: 'required',
     });
 
+    // v0.5.248 (validator-readiness audit P1) — clock-skew check. The
+    // general /setup/preflight already runs this, but the Council install
+    // preflight (Card D.5) did NOT, so a Council operator could install
+    // onto a host whose clock is outside ela's ~4.2 s DPoS block-validation
+    // tolerance and start missing blocks / earning penalties the moment it
+    // goes on-duty. Recommended-severity (fail-soft): a >2 s skew warns but
+    // doesn't hard-block (it's correctable post-install via NTP), and an
+    // unreachable time probe is skipped rather than failed so the wizard
+    // never wedges offline. Reuses the same probe + 5 s outer timeout as
+    // /setup/preflight, so the worst-case added latency is bounded.
+    const clockSkew = await runClockSkewCheck(extensionHandle);
+    let clockMsg;
+    if (clockSkew.skipped) {
+        clockMsg = `couldn’t verify (${clockSkew.reason || 'network unreachable'}) — check host NTP (systemd-timesyncd) if you suspect clock drift`;
+    } else if (clockSkew.ok) {
+        clockMsg = `${clockSkew.skewMs >= 0 ? '+' : ''}${clockSkew.skewMs} ms (within ±${clockSkew.maxSkewMs} ms)`;
+    } else {
+        clockMsg = `clock off by ${clockSkew.absSkewMs} ms — exceeds ±${clockSkew.maxSkewMs} ms. ela’s DPoS block validation tolerates only ~4.2 s; fix NTP (systemd-timesyncd) before this node goes on-duty.`;
+    }
+    checks.push({
+        id: 'clock-skew',
+        label: `Clock within ±${clockSkew.maxSkewMs} ms of network time`,
+        ok: clockSkew.ok,
+        message: clockMsg,
+        severity: 'recommended',
+    });
+
     // 4-6. HEAD probes for the three upstream services we depend on.
     async function headProbe(url, timeoutMs) {
         return new Promise((resolve) => {

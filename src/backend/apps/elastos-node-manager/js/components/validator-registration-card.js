@@ -548,7 +548,7 @@
         };
         var FALLBACK_SUBS = {
             'elected':   'Your node is in the on-chain CR Committee arbiter slate. EVM sidechain mining + mainchain BPoS signing activate automatically when your slot rotates in.',
-            'inactive':  'You are a CR Committee member but on-chain MemberState is Inactive (the chain skipped your slot for too many consecutive rounds). Recover via Essentials → Activate.',
+            'inactive':  'You are a CR Committee member but on-chain MemberState is Inactive (the chain skipped your slot for too many consecutive rounds). Node Manager can reactivate this for you — it signs the activation with your node key.',
             'impeached': 'Your CR Committee membership has been impeached, terminated, returned, or flagged illegal on-chain. The current term seat is lost; check Essentials for the specific reason and recovery options.',
             'next-term': 'You won the next CR Committee election. Your node will enter the arbiter slate when the next term begins.',
             'unclaimed': 'ENM detects a Council install but your node\'s public key is not currently bound to any CR Committee seat on-chain. If you intend to be a Council member, claim your node via Elastos Essentials (CRCouncilMemberClaimNode TX).',
@@ -593,6 +593,35 @@
                 + '</div>';
         }
 
+        // v0.5.248 (validator-readiness audit P1) — in-app reactivation CTA
+        // for an Inactive CR Council member. ela's ActivateProducer tx
+        // reactivates an Inactive CR member and is NODE-KEY signed
+        // (activateproducertransaction.go:113/212), so ENM can submit it with
+        // the keystore it already holds — no wallet / owner key. ONLY the
+        // 'inactive' sub-state is recoverable in-app: Impeached/Returned/
+        // Terminated are terminal for the term and Illegal is height-gated
+        // on-chain, so those keep pointing operators to Essentials. The button
+        // reuses _activate() → POST /chains/mainchain/bpos/activate.
+        var ctaCard = '';
+        if (subState === 'inactive') {
+            var activateLabel = t('council_card.activate_btn');
+            if (!activateLabel || activateLabel.indexOf('[') === 0) { activateLabel = 'Reactivate Council node'; }
+            var activateExplain = t('council_card.activate_explainer');
+            if (!activateExplain || activateExplain.indexOf('[') === 0) {
+                activateExplain = 'Submits an on-chain activation signed with this node’s key (no wallet needed). Your node must be running and fully synced.';
+            }
+            ctaCard = ''
+                + '<div class="enm-bpos-cta-card">'
+                +   '<div style="font-size:12px;color:var(--text-tertiary);margin-bottom:10px;line-height:1.45;">'
+                +     escapeHtml(activateExplain)
+                +   '</div>'
+                +   '<button type="button" class="enm-btn enm-btn-primary enm-bpos-activate" '
+                +     'id="enm-council-activate">'
+                +     escapeHtml(activateLabel)
+                +   '</button>'
+                + '</div>';
+        }
+
         this.root.innerHTML = ''
             + '<div class="enm-bpos-head enm-bpos-head-' + subMeta.headBg + '">'
             +   '<div class="enm-bpos-head-icon" aria-hidden="true">'
@@ -615,9 +644,23 @@
             +   '</span>'
             + '</div>'
             + infoRows
+            + ctaCard
             + '<span id="enm-bpos-pubkey" class="enm-sr-only" aria-hidden="true">'
             +   escapeHtml(t('common.loading'))
             + '</span>';
+
+        // v0.5.248 — wire the reactivation button (inactive sub-state only).
+        // Reuses _activate(), which enmRunOnce-wraps the click (double-click
+        // safe), POSTs the activate route, toasts the result, and fast-polls
+        // so the card re-renders to 'elected' once the chain confirms.
+        if (subState === 'inactive') {
+            var councilActivateBtn = this.root.querySelector('#enm-council-activate');
+            if (councilActivateBtn) {
+                councilActivateBtn.addEventListener('click', function () {
+                    self._activate(councilActivateBtn);
+                });
+            }
+        }
     };
 
     /**

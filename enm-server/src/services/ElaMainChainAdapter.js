@@ -79,12 +79,20 @@ class ElaMainChainAdapter extends ChainAdapter {
             Configuration: {
                 ActiveNet: cfg.activeNet || 'mainnet',
                 NodePort: cfg.ports.nodePort,
+                // v0.5.248 (validator-readiness audit P1-3) — the Info/REST/WS
+                // servers are kept OFF, matching node.sh (which omits these
+                // *Start flags entirely → ela defaults them false). They bind
+                // 0.0.0.0 with NO auth (the REST server exposes `restart` +
+                // `sendrawtransaction`), and ENM never calls them — its health
+                // poll uses only the authed JSON-RPC port. Leaving them on was
+                // gratuitous attack surface on a firewall-less host. Ports kept
+                // (inert while *Start=false) so a future opt-in needs only the flag.
                 HttpInfoPort: cfg.ports.httpInfo,
-                HttpInfoStart: true,
+                HttpInfoStart: false,
                 HttpRestPort: cfg.ports.httpRest,
-                HttpRestStart: true,
+                HttpRestStart: false,
                 HttpWsPort: cfg.ports.httpWs,
-                HttpWsStart: true,
+                HttpWsStart: false,
                 HttpJsonPort: cfg.ports.rpc,
                 EnableRPC: true,
                 PrintLevel: this._mapLogLevel(cfg.logLevel),

@@ -623,8 +623,16 @@ class EvmSidechainAdapter extends ChainAdapter {
         // Fast sync is removed. An explicit 'archive' override is still honored
         // (full + retain all historical state); any other value — including a
         // legacy stored 'fast' — is coerced to 'full'.
-        const syncMode = (cfg.sync && cfg.sync.mode === 'archive') ? 'archive' : 'full';
-        args.push('--syncmode', syncMode);
+        // v0.5.248 (validator-readiness audit P1-10) — archive = FULL sync that
+        // RETAINS all historical state. In this geth fork that is
+        // `--syncmode full --gcmode archive`, NOT `--syncmode archive` (not a
+        // valid syncmode — it would silently fail to produce an archive node).
+        // Default + any legacy stored 'fast' coerce to plain full.
+        if (cfg.sync && cfg.sync.mode === 'archive') {
+            args.push('--syncmode', 'full', '--gcmode', 'archive');
+        } else {
+            args.push('--syncmode', 'full');
+        }
         // Miner — enabled for council validators (the sidechain produces
         // blocks). Values:
         //   miner.enabled         → enable mining at all
@@ -904,6 +912,18 @@ class EvmSidechainAdapter extends ChainAdapter {
 
             const wasMiner = !!(cfg.miner && cfg.miner.enabled);
             if (cfg.miner) { cfg.miner.enabled = shouldMine; }
+            // v0.5.248 (validator-readiness audit P1-2) — record WHY we chose
+            // miner/follower so HealthChecker (detectF29) can alert when a
+            // Council node fell back to FOLLOWER because it couldn't READ its
+            // producer status (mainchain RPC down / creds undecryptable) rather
+            // than because it's genuinely off-duty — the "silently stops
+            // earning" hazard. source∈{getarbitersinfo,empty-slate}=real read.
+            this._lastRoleDecision = {
+                source: role.source,
+                shouldMine,
+                setupRole,
+                at: Date.now(),
+            };
             // v0.5.235 — syncmode is NO LONGER role-dependent. EVM chains
             // always full-sync (buildSpawnArgs hardcodes it). Producer status
             // controls ONLY --mine (miner.enabled), never the sync mode. The
@@ -934,6 +954,14 @@ class EvmSidechainAdapter extends ChainAdapter {
             if (cfg.miner) { cfg.miner.enabled = false; }
             if (!cfg.sync) { cfg.sync = {}; }
             if (cfg.sync.mode === 'fast' || !cfg.sync.mode) { cfg.sync.mode = 'full'; }
+            // v0.5.248 (audit P1-2) — detection threw: this is a can't-read
+            // demotion to follower, the exact silent-earning-loss case F29 warns on.
+            this._lastRoleDecision = {
+                source: 'error',
+                shouldMine: false,
+                setupRole: (typeof setupRole !== 'undefined') ? setupRole : null,
+                at: Date.now(),
+            };
             if (_roleLog) {
                 _roleLog.warn(
                     `${ENM_LOG_PREFIX} ${this.chainId}: producer-role detection failed `
