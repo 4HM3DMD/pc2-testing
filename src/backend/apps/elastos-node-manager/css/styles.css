@@ -8374,7 +8374,14 @@ body[data-app-size="narrow"]  .enm-app .enm-evm-shared-mining-grid {
 .enm-app .enm-ovx-health-r { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 /* labelled action buttons */
 .enm-app .enm-ovx-act {
-    display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 13px;
+    /* v0.5.241 — width:auto is load-bearing: these buttons ALSO carry the
+       legacy .enm-overview-action class (the click-delegation hook), whose
+       icon-button rule sets width:26px. Without an explicit width here that
+       26px leaks in (same specificity, but .enm-overview-action is earlier in
+       source), clipping the label ("Restart"→"Rest") so it overflows and
+       overlaps the next button. The <430px @media gave them flex-basis 50%,
+       which masked the bug at narrow widths only. */
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px; width: auto; height: 32px; padding: 0 13px;
     border-radius: 8px; border: 1px solid var(--border); background: var(--bg-elevated); color: var(--text-secondary);
     font-size: 12px; font-weight: 600; font-family: inherit; cursor: pointer; line-height: 1; white-space: nowrap;
     transition: color .12s, border-color .12s, background-color .12s, opacity .12s;
