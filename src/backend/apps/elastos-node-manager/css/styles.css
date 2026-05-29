@@ -7353,12 +7353,6 @@ body[data-app-size="compact"] .enm-app .enm-filter-chip {
 .enm-app .enm-identity-dot.state-synced { background: var(--success); }
 .enm-app .enm-identity-dot.state-syncing { background: var(--warning, #c08a00); }
 .enm-app .enm-identity-dot.state-unconfigured { background: var(--text-tertiary); opacity: 0.5; }
-.enm-app .enm-identity-hint {
-    margin-top: var(--sp-2, 8px);
-    font-size: 12px;
-    line-height: 1.45;
-    color: var(--text-tertiary);
-}
 .enm-app .enm-identity-keys {
     margin-top: var(--sp-2, 8px);
     display: flex;

@@ -832,7 +832,6 @@
                 not_council:        'Not a Council member',
                 council_unbound:    'Not bound to a seat',
                 bpos_unregistered:  'Not registered',
-                bpos_hint:          'A Council node still registers as a BPoS producer separately (in Essentials) to earn staking rewards.',
                 key_label:          'Key',
                 addr_label:         'Address',
             },

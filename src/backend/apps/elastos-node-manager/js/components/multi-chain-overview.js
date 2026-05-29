@@ -1571,8 +1571,9 @@
      * (name + state) and BPoS producer status (name + state), side by side,
      * plus the mining key + address. Truthful — reflects ENM's node key, so a
      * node that isn't bound to a Council seat reads "Not a Council member" and
-     * an unregistered producer reads "Not registered" (with a hint that a
-     * Council node still registers BPoS separately to earn staking rewards).
+     * an unregistered producer reads "Not registered". (CRC and BPoS are
+     * independent roles; a Council member earns automatically as a CRC arbiter
+     * and does NOT register as a BPoS producer — so no hint is shown here.)
      * Sourced from /system/identity (this._lastIdentity); returns '' until that
      * resolves so the card never flashes an empty state.
      * @private
@@ -1621,16 +1622,16 @@
             bposText = tFb('overview_pane.identity.bpos_unregistered', 'Not registered');
         }
 
-        // Hint: a Council node still registers BPoS separately (node.sh shows
-        // CRC + BPoS as independent roles). Only when BPoS is absent on a
-        // Council install / member.
-        var hint = '';
-        if ((!prod || !prod.state) && (setupRole === 'council' || (cr && cr.isCrMember))) {
-            hint = '<div class="enm-identity-hint">'
-                + escapeHtml(tFb('overview_pane.identity.bpos_hint',
-                    'A Council node still registers as a BPoS producer separately (in Essentials) to earn staking rewards.'))
-                + '</div>';
-        }
+        // v0.5.243 — removed the BPoS hint. It claimed a Council node "still
+        // registers as a BPoS producer separately to earn staking rewards",
+        // which is wrong: an elected CR member is auto-promoted to a CRC
+        // arbiter and earns the per-block CRC reward automatically (Elastos.ELA
+        // dpos/state/arbitrators.go — CRC-type arbiters with MemberState ==
+        // MemberElected are paid without any RegisterProducer). node.sh keeps
+        // CRC and BPoS as independent roles (register_crc vs register_bpos);
+        // the only shared step is `activate`, an inactivity-recovery tx, not an
+        // onboarding requirement. The DAO Council pill already states the real
+        // status, so no explanatory text is added in its place.
 
         // Mining key + address.
         var keyLine = '';
@@ -1660,7 +1661,6 @@
             +   pill(tFb('overview_pane.identity.council_label', 'DAO Council'), councilDot, councilText)
             +   pill(tFb('overview_pane.identity.bpos_label', 'BPoS'), bposDot, bposText)
             + '</div>'
-            + hint
             + keyLine
             + '</section>';
     };
