@@ -103,6 +103,14 @@ const SELF_DATA_DIR_DEFAULT = '/var/lib/pc2/data/extensions/elastos-node-manager
 const PC2_SQLITE_PATH = '/var/lib/pc2/data/pc2-node.sqlite';
 const INSTALLED_APPS_DIR = '/var/lib/pc2/data/installed-apps/elastos-node-manager';
 const APP_NAME = 'elastos-node-manager';
+const BACKUPS_DIR = '/var/lib/pc2/data/backups/elastos-node-manager';
+
+// v0.5.250 — reset-everything boot guard. The reset script drops this marker
+// (under PC2_DATA_DIR, OUTSIDE the wiped data dir) before it kills ENM, and
+// clears it the instant the data dir is renamed aside. The respawned ENM
+// blocks on it at boot (server.js) so it can't re-create config.json mid-wipe.
+// MIRRORED in src/server.js — change both together.
+const RESET_MARKER_FILE = '.enm-reset-in-progress';
 
 // In-process lock — only one destructive action at a time.
 let _busy = null; // { action, startedAtMs }
@@ -775,6 +783,56 @@ function _buildTeardownScript(opts) {
         `  echo "[${label} $(date -u +%FT%TZ)] killing ENM"\n`
         + `  pkill -9 -f 'elastos-node-manager.*server.js' || true\n`
         + `  echo "[${label} $(date -u +%FT%TZ)] done"\n`;
+    // v0.5.250 — reset-everything gets a dedicated, race-free sequence.
+    // The pre-fix path (killChildren → rm -rf data → killSelf, with ENM
+    // killed LAST) left ENM alive during a multi-GB `rm -rf` of the data
+    // dir. Its 5 s health tick kept firing F1, restarting the just-killed
+    // chains and re-persisting config.json (setup.completed=true) MID-WIPE —
+    // so the respawned ENM read that surviving config and showed the
+    // dashboard instead of the wizard ("RESET EVERYTHING did nothing"). New
+    // flow: (1) drop the reset marker the respawned ENM blocks on
+    // (server.js), (2) kill ENM FIRST so nothing can re-persist config,
+    // (3) kill the chain + oracle children, (4) INSTANT-rename the data dir
+    // (+ backups) out of the live path so config.json vanishes immediately
+    // (no long window), clear the marker, then reclaim the renamed dirs.
+    if (label === 'reset-everything') {
+        const esc = _shellEscape;
+        const resetMarker = path.join(DataDir.pc2DataDir(), RESET_MARKER_FILE);
+        const wipeSuffix = Date.now();
+        const dataWipe = `${dataDir}.wiping.${wipeSuffix}`;
+        const bkWipe = `${BACKUPS_DIR}.wiping.${wipeSuffix}`;
+        const stamp = '$(date -u +%FT%TZ)';
+        return (
+            `(\n`
+            + `  sleep 2\n`
+            + `  echo "[reset-everything ${stamp}] writing reset marker"\n`
+            + `  touch '${esc(resetMarker)}' || true\n`
+            // CRITICAL: pkill -f on these patterns would ALSO match THIS script's
+            // own `bash -c "<script>"` process (its command line contains the
+            // literal patterns + the data-dir path) and SIGKILL the reset
+            // mid-flight before the wipe runs. So match by pgrep but kill only
+            // PIDs whose process name is NOT `bash` — that protects this script
+            // (and its subshell, both comm=`bash`) while still killing ENM
+            // (comm=`node`), the chains (`ela`/`esc`/`eid`/`pg`/geth/arbiter),
+            // and the oracles (comm=`node`). Robust without relying on $BASHPID.
+            + `  killpat() { for p in $(pgrep -f "$1" 2>/dev/null); do c=$(cat "/proc/$p/comm" 2>/dev/null); [ "$c" != "bash" ] && kill -9 "$p" 2>/dev/null || true; done; }\n`
+            + `  echo "[reset-everything ${stamp}] killing ENM FIRST (so it cannot re-persist config mid-wipe)"\n`
+            + `  killpat 'elastos-node-manager.*server.js'\n`
+            + `  echo "[reset-everything ${stamp}] killing chain + oracle children"\n`
+            + `  killpat '${esc(dataDir)}/bin'\n`
+            + `  killpat '${esc(dataDir)}/_oracle-scripts'\n`
+            + `  echo "[reset-everything ${stamp}] instant-wipe: renaming data dir aside"\n`
+            + `  if mv '${esc(dataDir)}' '${esc(dataWipe)}' 2>/dev/null; then echo "  moved data dir aside"; else echo "  mv failed — falling back to in-place rm -rf"; rm -rf '${esc(dataDir)}' || true; fi\n`
+            + `  if [ -d '${esc(BACKUPS_DIR)}' ]; then mv '${esc(BACKUPS_DIR)}' '${esc(bkWipe)}' 2>/dev/null || rm -rf '${esc(BACKUPS_DIR)}' || true; fi\n`
+            + `  echo "[reset-everything ${stamp}] clearing reset marker — live data gone; ENM may boot to the wizard now"\n`
+            + `  rm -f '${esc(resetMarker)}' || true\n`
+            + `  echo "[reset-everything ${stamp}] reclaiming space (ENM already proceeding)"\n`
+            + `  rm -rf '${esc(dataWipe)}' '${esc(bkWipe)}' 2>/dev/null || true\n`
+            + `  echo "[reset-everything ${stamp}] done"\n`
+            + `) > '${esc(logFile)}' 2>&1 &\n`
+            + `disown\n`
+        );
+    }
     return (
         `(\n`
         + `  sleep 2\n`

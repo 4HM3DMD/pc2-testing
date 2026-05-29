@@ -118,6 +118,16 @@ async function main() {
     // ENM_DATA_DIR is already mkdir'd by DataDir.enmDataDir() at module
     // load (line 95 above). Don't re-mkdir here.
 
+    // v0.5.250 — if a reset-everything wipe is mid-flight, hold boot until it
+    // finishes (the script renames the data dir aside, then clears the
+    // marker). Without this a fast pc2-node respawn could re-open enm.db /
+    // re-persist config.json before the wipe lands → ENM boots to the
+    // dashboard instead of the wizard. See EnmMaintenanceManager.
+    await _awaitResetComplete();
+    // The wipe renames ENM_DATA_DIR out of the way; recreate it (empty) so
+    // openDb has a parent directory to write enm.db into.
+    try { fs.mkdirSync(ENM_DATA_DIR, { recursive: true, mode: 0o700 }); } catch (_) { /* best effort */ }
+
     const dbPath = path.join(ENM_DATA_DIR, 'enm.db');
     const db = openDb(dbPath);
     log('info', `opening DB ${dbPath}`);
@@ -671,6 +681,38 @@ async function main() {
 function log(level, msg) {
     const fn = console[level] || console.log;
     fn.call(console, `${ENM_LOG_PREFIX} ${msg}`);
+}
+
+// v0.5.250 — reset-everything boot guard. Mirrors EnmMaintenanceManager's
+// RESET_MARKER_FILE (change both together). When a reset is mid-wipe, the
+// respawned ENM must NOT touch enm.db / config.json until the data dir has
+// been renamed aside — otherwise it re-materialises the old config and boots
+// to the dashboard instead of the setup wizard. Block (bounded) until the
+// marker clears; the reset script clears it the instant the rename lands, so
+// this normally returns within a second or two.
+const RESET_MARKER_FILE = '.enm-reset-in-progress';
+async function _awaitResetComplete() {
+    const { pc2DataDir } = require('./services/DataDir');
+    let markerPath;
+    try { markerPath = path.join(pc2DataDir(), RESET_MARKER_FILE); } catch (_) { return; }
+    let present = false;
+    try { present = fs.existsSync(markerPath); } catch (_) { return; }
+    if (!present) { return; }
+    log('warn', `reset-in-progress marker present — holding boot until the wipe finishes (${markerPath})`);
+    const startedAt = Date.now();
+    const MAX_WAIT_MS = 120_000;   // hard cap so a stale marker can't wedge boot forever
+    const POLL_MS = 250;
+    while (Date.now() - startedAt < MAX_WAIT_MS) {
+        await new Promise((r) => { const tmr = setTimeout(r, POLL_MS); if (tmr && tmr.unref) { tmr.unref(); } });
+        let still = true;
+        try { still = fs.existsSync(markerPath); } catch (_) { return; }
+        if (!still) {
+            log('info', `reset marker cleared after ${Math.round((Date.now() - startedAt) / 1000)}s — booting fresh`);
+            return;
+        }
+    }
+    log('warn', `reset marker still present after ${Math.round(MAX_WAIT_MS / 1000)}s — clearing stale marker and booting anyway`);
+    try { fs.unlinkSync(markerPath); } catch (_) { /* best effort */ }
 }
 
 // v0.5.248 (validator-readiness audit P1) — boot-time systemd stop-timeout
