@@ -54,8 +54,11 @@ class ConfigPreconditionError extends Error {}
  * @param {object} extensionHandle
  * @returns {import('express').Router}
  */
-function build(extensionHandle) {
+function build(extensionHandle, opts) {
     const router = express.Router();
+    // v0.5.246 — lazy resolver for the fleet-monitoring status endpoint (built
+    // post-boot in server.js). Used to reload it after an Access save.
+    const getStatusEndpoint = (opts && opts.getStatusEndpoint) || (() => null);
 
     // GET /config — full config minus secrets.
     router.get('/', limit('read'), async (req, res) => {
@@ -232,16 +235,26 @@ function build(extensionHandle) {
         // check — hoisted above the atomic write so a rejected request never
         // touches the config file.
         if (Array.isArray(body.whiteIPList)) {
-            const BROAD_CIDRS = ['0.0.0.0/0', '::/0'];
-            const broad = body.whiteIPList.filter(
-                (entry) => typeof entry === 'string'
-                    && BROAD_CIDRS.includes(entry.trim()),
-            );
-            if (broad.length) {
+            // v0.5.246 — reject not just 0.0.0.0/0 // ::/0 but any prefix broader
+            // than /24 (IPv4) or /64 (IPv6): those grant access to whole ISP
+            // blocks rather than a known host. The whitelist now also gates the
+            // externally-reachable monitor endpoint, so over-broad ranges are
+            // doubly unsafe. Gated here (not the schema) for a clear 400.
+            const tooBroad = body.whiteIPList.find((entry) => {
+                if (typeof entry !== 'string') { return false; }
+                const e = entry.trim();
+                if (e === '0.0.0.0/0' || e === '::/0') { return true; }
+                const slash = e.indexOf('/');
+                if (slash === -1) { return false; }            // bare IP is fine
+                const bits = Number(e.slice(slash + 1));
+                if (!Number.isInteger(bits)) { return false; } // Joi validated shape already
+                const isV6 = e.indexOf(':') !== -1;
+                return isV6 ? (bits < 64) : (bits < 24);
+            });
+            if (tooBroad) {
                 return res.status(400).json(errorBody(
-                    `Whitelist entry "${broad[0]}" is too broad — it allows `
-                    + 'every host on the internet. List the specific IPs or '
-                    + 'subnets that need RPC access instead.',
+                    `Whitelist entry "${tooBroad.trim()}" is too broad — list specific `
+                    + 'IPs, or subnets no wider than /24 (IPv4) or /64 (IPv6).',
                 ));
             }
         }
@@ -377,6 +390,19 @@ function build(extensionHandle) {
                     }
                 }
             }
+
+            // v0.5.246 — refresh the fleet-monitoring status endpoint so an
+            // Access change (enable / whitelist / creds) takes effect live: it
+            // re-reads the policy and (un)binds its listener + reconciles its
+            // UFW per-source rules. Fire-and-forget — never block or fail the
+            // save the operator already committed. (The sidechain monitor view
+            // applies immediately; only ela's own RPC still needs a restart.)
+            try {
+                const se = getStatusEndpoint();
+                if (se && typeof se.reload === 'function') {
+                    Promise.resolve(se.reload()).catch(() => { /* non-fatal */ });
+                }
+            } catch (_) { /* non-fatal */ }
 
             // P1 (v0.5.183) — surface restart requirement for RPC-setting
             // changes (rpcEnabled / whiteIPList). Omitted entirely otherwise

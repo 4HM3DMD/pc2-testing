@@ -244,7 +244,11 @@ async function main() {
     // v0.5.168 (Phase 2) — SPV Module aggregate + per-sidechain detail.
     api.use('/spv', spvRouter.build(extensionHandle));
     api.use('/logs',   logsRouter.build({ extensionHandle }));
-    api.use('/config', configRouter.build(extensionHandle));
+    // v0.5.246 — the monitor status endpoint is built post-boot (it reads the
+    // overview service); the config route resolves it lazily to reload it after
+    // an Access save (whitelist/creds/enable change → (un)bind + UFW sync).
+    let _statusEndpoint = null;
+    api.use('/config', configRouter.build(extensionHandle, { getStatusEndpoint: () => _statusEndpoint }));
     api.use('/updates', updatesRouter.build(extensionHandle));
     // 0.2.0-beta.3.8 — pull the hub into a local so post-boot wiring
     // (AuditLog → SSE bridge below) can publish without re-fetching.
@@ -346,6 +350,23 @@ async function main() {
         log('info', 'council-overview service started (tick=5s + exit-hook)');
     } catch (err) {
         log('error', `council-overview init failed: ${err.message}`);
+    }
+
+    // v0.5.246 — fleet-monitoring status endpoint. Externally-bound, read-only
+    // whole-node roll-up (every chain + service, version, active/sync) gated by
+    // the RPC-access policy (IP whitelist + Basic-Auth). Built after the
+    // overview service (it reads getCachedSnapshot); binds ONLY while RPC
+    // access is enabled in a Council install (default off ⇒ no open port).
+    try {
+        const { EnmStatusEndpoint } = require('./services/EnmStatusEndpoint');
+        _statusEndpoint = new EnmStatusEndpoint({
+            extensionHandle,
+            getOverviewService: () => _overviewService,
+        });
+        await _statusEndpoint.start();
+        log('info', 'monitor status endpoint wired (binds when RPC access enabled + Council)');
+    } catch (err) {
+        log('error', `status endpoint init failed: ${err.message}`);
     }
 
     // beta.3.51 — autoStart loop. Schema's `global.autoStart.onBoot` (default
@@ -557,6 +578,7 @@ async function main() {
                     // Stop the periodic timers so they don't keep the loop alive.
                     try { if (storageMaintenanceHandle) { storageMaintenanceHandle.stop(); } } catch (_) {}
                     try { if (peerCacheHandle) { peerCacheHandle.stop(); } } catch (_) {}
+                    try { if (_statusEndpoint) { _statusEndpoint.stop(); } } catch (_) {}
                     // v0.5.229c — app.listen() socket + the audit-sweep
                     // setInterval keep the event loop alive forever. The
                     // normal-drain path also leaks these but tolerates a
@@ -607,6 +629,11 @@ async function main() {
                 if (peerCacheHandle) { peerCacheHandle.stop(); }
             } catch (err) {
                 log('warn', `${signal}: peer-cache stop failed (non-fatal): ${err.message}`);
+            }
+            try {
+                if (_statusEndpoint) { _statusEndpoint.stop(); }
+            } catch (err) {
+                log('warn', `${signal}: status-endpoint stop failed (non-fatal): ${err.message}`);
             }
             // Don't process.exit() — let the natural exit path run so any
             // pending writes complete. The Node process exits when the

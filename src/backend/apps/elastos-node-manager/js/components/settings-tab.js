@@ -3011,6 +3011,27 @@
             setDirty: sec.setDirty,
         };
 
+        // Row 0 — master enable (v0.5.246). RPC and the read-only fleet-
+        // monitoring endpoint stay loopback-only until this is on. Wires the
+        // formerly-dead toggle; without it neither external RPC nor the monitor
+        // can ever be opened from the UI.
+        this._access.enabled = makeToggleRow({
+            initial: false,
+            getLabel: function (on) {
+                return on
+                    ? { title: 'On · external access enabled',
+                        sub: 'Whitelisted IPs (below) with the RPC credentials can reach the node.' }
+                    : { title: 'Off · loopback only (default)',
+                        sub: 'RPC and the monitoring endpoint are not reachable from the network.' };
+            },
+            onChange: function () { if (self._access && self._access.setDirty) { self._access.setDirty(true); } },
+        });
+        sec.body.appendChild(makeFormRow({
+            label: 'External access',
+            help: 'Master switch. When on, the node’s JSON-RPC and a read-only whole-node monitoring endpoint become reachable from the Allowed IPs below and require the RPC credentials. Off keeps everything loopback-only.',
+            control: this._access.enabled.el,
+        }));
+
         // Row 1 — IP whitelist (chip input with locked loopback). This
         // is the one knob the operator told us actually mattered, so
         // it's the first thing in the first section.
@@ -3054,6 +3075,16 @@
             help: 'Stored encrypted on disk. Leave blank to keep the current one; type a new value to rotate.',
             control: this._access.rpcPasswordField.el,
         }));
+
+        // Fleet-monitoring note (v0.5.246). The same whitelist + RPC
+        // credentials also gate a read-only whole-node status feed (every chain
+        // + service, version, active/sync). Text + URL host filled by
+        // _fillCreds once the LAN URLs are known.
+        var monNote = document.createElement('p');
+        monNote.style.cssText = 'margin-top:10px; font-size:12px; line-height:1.5; color: var(--text-tertiary);';
+        monNote.textContent = 'Monitoring: when enabled, a read-only whole-node status feed (every chain & service, version, active/sync) is served at :20920/status, reachable from the Allowed IPs using the RPC user/password above.';
+        this._access.monitorNote = monNote;
+        sec.body.appendChild(monNote);
 
         sec.statusEl.id = 'enm-access-status';
 
@@ -4187,6 +4218,22 @@
             && (!this._access.rpcUser.value || this._access.rpcUser.value === 'ela')) {
             this._access.rpcUser.value = d.user;
         }
+        // v0.5.246 — reflect the saved master-enable state + fill the monitor
+        // URL host from the LAN URLs the creds endpoint already returns.
+        if (this._access.enabled && typeof this._access.enabled.setValue === 'function') {
+            this._access.enabled.setValue(!!d.enabled);
+        }
+        if (this._access.monitorNote) {
+            var host = 'your node’s IP';
+            if (Array.isArray(d.lanUrls) && d.lanUrls.length) {
+                var hm = /^https?:\/\/([^:/]+)/.exec(String(d.lanUrls[0]));
+                if (hm) { host = hm[1]; }
+            }
+            this._access.monitorNote.textContent =
+                'Monitoring: when enabled, a read-only whole-node status feed — every chain & service, '
+                + 'version, and active/sync — is served at http://' + host + ':20920/status, reachable from '
+                + 'the Allowed IPs using the RPC user/password above. Point your fleet monitor there.';
+        }
     };
 
     /** @private */
@@ -4264,6 +4311,12 @@
             rpcUser: rpcUser,
             whiteIPList: this._access.whiteIp.getValue(),
         };
+        // v0.5.246 — master enable. Without rpcEnabled the backend keeps RPC
+        // loopback-only and the monitor endpoint never binds. Enabling requires
+        // a password (backend precondition); the catch below surfaces that.
+        if (this._access.enabled && typeof this._access.enabled.getValue === 'function') {
+            body.rpcEnabled = this._access.enabled.getValue();
+        }
         // RPC password is only sent if the operator typed something so
         // they can edit other Access knobs without re-typing it
         // (carried over from alpha.28 _saveAdvanced behavior).

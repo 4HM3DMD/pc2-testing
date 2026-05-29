@@ -387,10 +387,93 @@ async function removeRule(port, opts) {
     };
 }
 
+/**
+ * Reconcile per-SOURCE-IP allow rules for one TCP port to exactly `ipList`.
+ * Adds `ufw allow from <ip> to any port <port> proto tcp` for each desired IP
+ * not already present, and deletes any per-source rule on that port that's no
+ * longer desired (so removing an IP from the whitelist closes its hole, and an
+ * empty list tears the port's per-source rules down entirely). Loopback IPs are
+ * never firewalled (dropped from the desired set). Only acts when UFW is
+ * active; no-ops otherwise (the caller's in-process gate is the primary
+ * control, so this is defense-in-depth).
+ *
+ * This is for ENM-DEDICATED ports (e.g. the monitor status port): it deletes
+ * non-desired per-source rules on the port, which is safe precisely because no
+ * one hand-builds rules for an ENM-owned port. (Contrast removeRule, which only
+ * touches the allow-all-source form so it won't clobber operator ACLs.)
+ *
+ * @param {number} port
+ * @param {string[]} ipList  desired source IPs/CIDRs (127.0.0.1 ignored)
+ * @param {object} [opts] { comment, logger }
+ * @returns {Promise<{tool:'ufw'|null, active:boolean, added:string[], removed:string[], errors:Array, skipped:boolean, reason?:string}>}
+ */
+async function reconcileSourceRules(port, ipList, opts) {
+    const logger = (opts && opts.logger) || { info() {}, warn() {}, error() {} };
+    const comment = (opts && opts.comment) || 'ENM policy';
+    const p = parseInt(port, 10);
+    if (!Number.isInteger(p) || p <= 0 || p >= 65536) {
+        return { tool: null, active: false, added: [], removed: [], errors: [], skipped: true, reason: 'invalid port' };
+    }
+    const desired = Array.isArray(ipList)
+        ? Array.from(new Set(ipList.map((s) => String(s).trim())
+            .filter((ip) => ip && ip !== '127.0.0.1' && ip !== '::1')))
+        : [];
+    const state = await detect();
+    if (!state.tool) {
+        return { tool: null, active: false, added: [], removed: [], errors: [], skipped: true, reason: 'ufw not installed / not detectable' };
+    }
+    if (!state.active) {
+        return { tool: 'ufw', active: false, added: [], removed: [], errors: [], skipped: true, reason: 'ufw installed but inactive' };
+    }
+    // Parse current per-source rules for this port: "<p>/tcp [(v6)] ALLOW IN <src>"
+    const probe = await execCapture('ufw', ['status'], DEFAULT_TIMEOUT_MS);
+    const current = new Set();
+    const srcRe = new RegExp('^' + p + '/tcp(?:\\s*\\(v6\\))?\\s+ALLOW IN\\s+(\\S+)', 'i');
+    (probe.stdout || '').split(/\r?\n/).forEach((line) => {
+        const m = srcRe.exec(line.trim());
+        if (!m) { return; }
+        const src = m[1];
+        if (src && src.toLowerCase() !== 'anywhere') { current.add(src); }
+    });
+    const added = [];
+    const removed = [];
+    const errors = [];
+    for (const ip of desired) {
+        if (current.has(ip)) { continue; }
+        const r = await execCapture('ufw',
+            ['allow', 'from', ip, 'to', 'any', 'port', String(p), 'proto', 'tcp', 'comment', `${comment} (port ${p})`],
+            DEFAULT_TIMEOUT_MS);
+        if (r.code === 0) {
+            added.push(ip);
+            logger.info(`${ENM_LOG_PREFIX} ufw allow from ${ip} to any port ${p}/tcp added (${comment})`);
+        } else {
+            const msg = (r.stderr || r.stdout || `exit ${r.code}`).trim().split('\n')[0];
+            errors.push({ ip, message: msg });
+            logger.warn(`${ENM_LOG_PREFIX} ufw allow from ${ip} port ${p}/tcp failed: ${msg}`);
+        }
+    }
+    for (const src of current) {
+        if (desired.includes(src)) { continue; }
+        const r = await execCapture('ufw',
+            ['delete', 'allow', 'from', src, 'to', 'any', 'port', String(p), 'proto', 'tcp'],
+            DEFAULT_TIMEOUT_MS);
+        if (r.code === 0) {
+            removed.push(src);
+            logger.info(`${ENM_LOG_PREFIX} ufw delete allow from ${src} port ${p}/tcp ok`);
+        } else {
+            const msg = (r.stderr || r.stdout || `exit ${r.code}`).trim().split('\n')[0];
+            errors.push({ ip: src, message: msg });
+            logger.warn(`${ENM_LOG_PREFIX} ufw delete allow from ${src} port ${p}/tcp failed: ${msg}`);
+        }
+    }
+    return { tool: 'ufw', active: true, added, removed, errors, skipped: false };
+}
+
 module.exports = {
     detect,
     ensureAllowed,
     removeRule,
+    reconcileSourceRules,
     DEFAULT_TIMEOUT_MS,
     // exported for tests
     _execCapture: execCapture,
