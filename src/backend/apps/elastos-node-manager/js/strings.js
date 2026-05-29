@@ -836,6 +836,19 @@
                 key_label:          'Key',
                 addr_label:         'Address',
             },
+            // v0.5.239 overview redesign — health headline (one-line node
+            // verdict), bulk actions, the hero "Manage" link, and the per-row
+            // "Update available" badge. (Added to strings.js in v0.5.240 — the
+            // redesign shipped reading these via tFb fallbacks; this makes them
+            // localizable. {n} = count of services needing attention.)
+            health_healthy:        'All services healthy',
+            health_attention_one:  '1 service needs attention',
+            health_attention_many: '{n} services need attention',
+            health_syncing:        'Syncing',
+            bulk_start:            'Start all',
+            bulk_restart:          'Restart all',
+            manage:                'Manage',
+            update_available:      'Update available',
             // v0.5.186 (Council Node UX P2.1) — control-center row meta line.
             // {n} = thousands-separated block height; {parent} = parent
             // EVM chain name an Oracle relays for.
@@ -998,6 +1011,9 @@
             stop:       'Stop',
             restart:    'Restart',
             configure:  'Configure',
+            // v0.5.240 — overview EVM/mainchain "Update" action button label
+            // (added in v0.5.240; the v0.5.239 redesign used a tFb fallback).
+            update:     'Update',
             // alpha.28.1 batch 46 — dropped confirm_stop, confirm_restart,
             // cooldown. Round-7 i18n audit acbcec6b verified zero JS
             // callers. The chain-card uses a click-and-busy pattern

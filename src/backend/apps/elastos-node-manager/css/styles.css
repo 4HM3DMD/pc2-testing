@@ -8426,16 +8426,14 @@ body[data-app-size="narrow"]  .enm-app .enm-evm-shared-mining-grid {
     background: linear-gradient(120deg, var(--accent-soft), var(--bg-surface) 62%); padding: 20px 22px;
 }
 .enm-app .enm-ovx-hero .enm-overview-name { font-size: 19px; font-weight: 650; }
-/* collapsed oracle line folded into its EVM card */
+/* oracle line folded into its EVM card — routes to the oracle dashboard on click (v0.5.240) */
 .enm-app .enm-ovx-oracle {
     display: flex; align-items: center; gap: 8px; margin-top: 14px; padding-top: 12px;
     border-top: 1px solid var(--border-subtle); flex-wrap: wrap; cursor: pointer;
 }
 .enm-app .enm-ovx-oracle-name { font-size: 12px; color: var(--text-secondary); font-weight: 500; }
 .enm-app .enm-ovx-oracle-rel { font-size: 11px; color: var(--text-tertiary); }
-.enm-app .enm-ovx-oracle.collapsed .enm-ovx-oracle-rel { display: none; }
-.enm-app .enm-ovx-caret { margin-left: auto; color: var(--text-tertiary); font-size: 12px; transition: transform .12s; }
-.enm-app .enm-ovx-oracle:not(.collapsed) .enm-ovx-caret { transform: rotate(90deg); }
+.enm-app .enm-ovx-caret { margin-left: auto; color: var(--text-tertiary); font-size: 12px; }
 /* EVM card is the visible card → the inner li goes "naked" (no card-in-card) */
 .enm-app .enm-overview-evm-card {
     background: var(--bg-surface); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px;

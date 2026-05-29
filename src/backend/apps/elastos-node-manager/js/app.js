@@ -522,6 +522,20 @@
             if (tabId === 'settings') { self._mountSettingsTabLazy(); }
             else if (tabId === 'logs')  { self._mountLogViewerLazy(); }
             else if (tabId === 'audit') { self._mountAuditTabLazy(); }
+            // v0.5.240 audit fix — pause the overview pane's 3s /system/usage
+            // poll + council:overview SSE while the operator is on another tab,
+            // resume on return. enmUseVisibilityPause only covers browser-tab
+            // visibility (document.hidden), not an in-app tab switch, so
+            // without this the overview kept fetching + re-rendering into a
+            // hidden pane. Only relevant for the Council overview (BPoS /
+            // drilled-in dashboards have no _overviewPane → this no-ops).
+            if (self._overviewMode && self._overviewPane) {
+                if (tabId === 'dashboard') {
+                    if (typeof self._overviewPane.resume === 'function') { self._overviewPane.resume(); }
+                } else if (typeof self._overviewPane.pause === 'function') {
+                    self._overviewPane.pause();
+                }
+            }
         }
 
         tabBtns.forEach(function (btn) {
@@ -1434,8 +1448,17 @@
                 // Defensive: the component script hasn't parsed yet (first
                 // paint race). It's a deferred <script> in index.html, so this
                 // only shows for a frame before the operator can navigate here.
-                pane.innerHTML = '<div class="enm-pane-stub" role="status" aria-live="polite">'
-                    + '<h2>SPV Module</h2><p>Loading…</p></div>';
+                // v0.5.240 audit fix — APPEND the stub rather than
+                // pane.innerHTML=…, which would wipe the "← Back to overview"
+                // button we already appended above (Council drill-in into SPV
+                // before the script parsed would otherwise dead-end with no way
+                // back to the overview).
+                var spvStub = document.createElement('div');
+                spvStub.className = 'enm-pane-stub';
+                spvStub.setAttribute('role', 'status');
+                spvStub.setAttribute('aria-live', 'polite');
+                spvStub.innerHTML = '<h2>SPV Module</h2><p>Loading…</p>';
+                pane.appendChild(spvStub);
             }
             return;
         }
@@ -1543,7 +1566,9 @@
                 sse: this.services.sse,
                 notifications: this.services.notifications,
                 announcer: this.services.announcer,
-                heightSeries: this.services.heightSeries || null,
+                // v0.5.240 — heightSeries dropped: the overview no longer
+                // renders sparklines (chain-card on the detail page still does,
+                // so common.heightSeries above is unchanged).
             });
             this._overviewPane.mount(pane);
             return;

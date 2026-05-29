@@ -184,15 +184,22 @@
         this.sse = opts.sse || null;
         this.notifications = opts.notifications || null;
         this.announcer = opts.announcer || null;
-        this.heightSeries = opts.heightSeries || null;
         this._parent = null;
         this._root = null;
         this._unsubSse = null;
         this._lastSnap = null;
         this._lastHtml = null;   // v0.5.191 — last rendered markup, for render dedup
-        this._sparklines = {};   // chainId → EnmSparkline instance
-        this._sparkUnsubs = {};  // chainId → unsubscribe fn from heightSeries
+        // v0.5.239 — sparklines removed from the overview (height plot was
+        // visual noise; per-chain trend lives on the detail page). The
+        // heightSeries/_sparklines/_sparkUnsubs machinery was fully dead and
+        // dropped in v0.5.240.
         this._destroyed = false;
+        // v0.5.240 audit fix — paused while the operator is on another in-app
+        // tab (Logs / Settings / Activity). enmUseVisibilityPause only pauses
+        // on browser-tab visibility (document.hidden), not an in-app tab
+        // switch, so without an explicit pause the 3s /system/usage poll + the
+        // council:overview SSE kept running + re-rendering into a hidden pane.
+        this._paused = false;
         // P2.2 — a single in-flight quick action (start/stop/restart) across
         // the whole pane. While set, SSE re-render is suppressed so the
         // pending button isn't wiped by a wholesale innerHTML rebuild.
@@ -247,11 +254,42 @@
             this._unsubSse = null;
         }
         this._stopUsagePoll();
-        this._teardownSparklines();
         if (this._root && this._root.parentNode) {
             this._root.parentNode.removeChild(this._root);
         }
         this._root = null;
+    };
+
+    /**
+     * v0.5.240 audit fix — suspend the live machinery while the operator is on
+     * a different in-app tab. Unsubscribes the council:overview SSE and stops
+     * the /system/usage poll, but keeps the DOM + last snapshot so switching
+     * back shows the prior state instantly (resume() then re-fetches fresh).
+     * Idempotent; no-op once destroyed.
+     * @public
+     */
+    EnmMultiChainOverviewPane.prototype.pause = function () {
+        if (this._destroyed || this._paused) { return; }
+        this._paused = true;
+        if (this._unsubSse) {
+            try { this._unsubSse(); } catch (_) { /* idempotent */ }
+            this._unsubSse = null;
+        }
+        this._stopUsagePoll();
+    };
+
+    /**
+     * v0.5.240 audit fix — inverse of pause(). Re-subscribes the SSE, restarts
+     * the usage poll, and re-fetches a fresh snapshot so the operator returning
+     * to the Dashboard tab sees current state. No-op unless currently paused.
+     * @public
+     */
+    EnmMultiChainOverviewPane.prototype.resume = function () {
+        if (this._destroyed || !this._paused) { return; }
+        this._paused = false;
+        this._subscribe();
+        this._startUsagePoll();
+        this._fetchInitial();
     };
 
     /**
@@ -362,11 +400,11 @@
             self._renderError((err && err.message) || 'Network error');
         });
         // v0.5.229d (P3 audit fix) — also fetch /system/identity to know
-        // the operator's CR Council role. Stashed on the instance and
-        // read by _summaryLineV2 to prepend a role-aware prefix to the
-        // existing "X synced · Y total" status line. Best-effort — if
-        // /system/identity fails, _summaryLineV2 silently falls back to
-        // the pre-229d format.
+        // the operator's DAO Council / BPoS role. Stashed on the instance
+        // (this._lastIdentity) and read by _identityCardHtml to render the
+        // "This node" card (DAO Council + BPoS pills). Best-effort — if
+        // /system/identity fails, _lastIdentity stays null and the card
+        // simply doesn't render (never a faked/empty-state flash).
         this.api.get('/system/identity').then(function (env) {
             if (self._destroyed) { return; }
             var d = (env && env.result) || (env && env.data) || env || {};
@@ -617,12 +655,16 @@
                         self._routeToChain(manageBtn.dataset.chainId || row.dataset.chainId);
                         return;
                     }
-                    // v0.5.239 — clicking the folded oracle line toggles its
-                    // detail (expand "relays for…") instead of routing.
+                    // v0.5.240 audit fix — clicking the nested oracle line
+                    // routes into the oracle's own dashboard (it carries its
+                    // own data-chain-id). It used to merely toggle a "relays
+                    // for…" reveal, which left the oracle detail page
+                    // unreachable from the overview. stopPropagation so the
+                    // parent EVM card doesn't also route to itself.
                     var oracleEl = t && t.closest ? t.closest('.enm-ovx-oracle') : null;
                     if (oracleEl) {
                         ev.stopPropagation();
-                        oracleEl.classList.toggle('collapsed');
+                        self._routeToChain(oracleEl.dataset.chainId || row.dataset.chainId);
                         return;
                     }
                     self._routeToChain(row.dataset.chainId);
@@ -674,12 +716,10 @@
             }
         }
 
-        // Sparklines — only re-mount the diff. Tear down any chain that
-        // disappeared from the snapshot or stopped being alive; mount
-        // any newly-alive chain.
         // v0.5.239 — sparklines removed from the overview (the green-triangle
         // height plot was visual noise; per-chain trend lives on the detail
-        // page). _reconcileSparklines is no longer called here.
+        // page). The reconcile/teardown sparkline machinery was fully dead and
+        // dropped in v0.5.240.
     };
 
     /** @private — v0.5.186 (Council Node UX P2.1) — control-center row: name +
@@ -721,14 +761,19 @@
         // → optional folded oracle line → labelled action footer.
         void uptimeHtml; void ariaLabel;
 
-        // Oracle: a compact, collapsible one-liner folded into its parent EVM
-        // card. NOT an .enm-overview-row (so the card click handler doesn't
-        // treat it as a routable chain — clicking it toggles its detail).
+        // Oracle: a compact one-liner folded into its parent EVM card. NOT an
+        // .enm-overview-row, but it carries its own data-chain-id and routes to
+        // the oracle's own dashboard on click — the card click handler has a
+        // dedicated .enm-ovx-oracle branch for it (mirrors how the sibling EVM
+        // card routes on a body click). v0.5.240 audit fix — it used to be
+        // 'collapsed' + click-to-toggle, which left the oracle's own detail
+        // page completely unreachable from the overview. The "Relays for …"
+        // line now always shows and the › caret means "open".
         if (variant === 'oracle-nested') {
             var rel = c.parentChainId
                 ? escapeHtml(tFb('overview_pane.relays_for', 'Relays for {parent}', { parent: chainNameFor(c.parentChainId, null) }))
                 : '';
-            return '<div class="enm-ovx-oracle collapsed" data-chain-id="' + chainIdAttr + '">'
+            return '<div class="enm-ovx-oracle" data-chain-id="' + chainIdAttr + '">'
                 + '<span class="enm-overview-dot ' + stateClass + '" aria-hidden="true"></span>'
                 + '<span class="enm-ovx-oracle-name">' + escapeHtml(displayName) + '</span>'
                 + '<span' + stateChipAttrs + '>' + escapeHtml(stateLabel) + '</span>'
@@ -1251,63 +1296,6 @@
         });
     };
 
-    /** @private — the class-specific operational detail line. Truthful: only
-     * renders what the snapshot actually carries. */
-    EnmMultiChainOverviewPane.prototype._metaHtml = function (c) {
-        var klass = c.chainClass;
-        // Class C (oracle) — what EVM sidechain it relays for.
-        if (klass === 'C') {
-            if (c.parentChainId) {
-                return '<span class="enm-overview-relays">'
-                    + escapeHtml(tFb('overview_pane.relays_for', 'Relays for {parent}',
-                        { parent: chainNameFor(c.parentChainId, null) }))
-                    + '</span>';
-            }
-            return '';
-        }
-        // Class A / B — block height + sync badge (real, from SyncTracker enrichment).
-        if (klass === 'A' || klass === 'B') {
-            // v0.5.191 — isFinite guard: a NaN/Infinity height (typeof 'number')
-            // would otherwise reach formatNumber and render "Block NaN". Treat
-            // it as not-yet-known and fall through to "height pending…".
-            if (typeof c.height === 'number' && isFinite(c.height)) {
-                return '<span class="enm-overview-height">'
-                    + escapeHtml(tFb('overview_pane.block', 'Block {n}', { n: formatNumber(c.height) }))
-                    + '</span>'
-                    + this._syncBadgeHtml(c);
-            }
-            if (c.alive) {
-                // alive but RPC hasn't reported height yet — honest, not a guess.
-                return '<span class="enm-overview-meta-muted">'
-                    + escapeHtml(tFb('overview_pane.height_pending', 'height pending…'))
-                    + '</span>';
-            }
-            return '';
-        }
-        // Class D (arbiter) / E / unknown — the state chip already carries status;
-        // no chain height exists for these services in the overview snapshot.
-        return '';
-    };
-
-    /** @private — sync-state badge from the real enriched syncState; empty when
-     * we have no network reference (we never fake "synced"). */
-    EnmMultiChainOverviewPane.prototype._syncBadgeHtml = function (c) {
-        if (c.syncState === 'synced') {
-            return '<span class="enm-sync-badge synced">'
-                + escapeHtml(tFb('overview_pane.synced', 'Synced')) + '</span>';
-        }
-        if (c.syncState === 'stalled') {
-            return '<span class="enm-sync-badge stalled">'
-                + escapeHtml(tFb('overview_pane.stalled', 'Stalled')) + '</span>';
-        }
-        if (c.syncState === 'syncing') {
-            var pct = (typeof c.syncPercent === 'number') ? (' ' + Math.floor(c.syncPercent) + '%') : '';
-            return '<span class="enm-sync-badge syncing">'
-                + escapeHtml(tFb('overview_pane.syncing', 'Syncing') + pct) + '</span>';
-        }
-        return '';
-    };
-
     /**
      * v0.5.203 — render the four usage cards (Chains / CPU / Memory / Disk).
      * Called both inline from _render (with the freshest available usage
@@ -1451,8 +1439,13 @@
             var st = normalizeStateV2(c.state);
             if (st === 'synced') { synced += 1; }
             else if (st === 'syncing' || st === 'starting') { starting += 1; }
-            else if (st === 'stopped' || st === 'stalled') { attention.push(c); }
-            // 'disabled' is intentionally off — not counted as a problem.
+            else if (st === 'disabled') { /* intentionally off — not a problem. */ }
+            // v0.5.240 audit fix — every other state (stopped, stalled, error,
+            // recovering, unconfigured, loading, …) is something the operator
+            // must see. The old code only bucketed stopped/stalled, so an
+            // errored or unconfigured chain silently fell through to the
+            // "All services healthy" verdict.
+            else { attention.push(c); }
         });
         var dotClass, verdict, detail;
         if (attention.length > 0) {
@@ -1471,7 +1464,10 @@
         } else {
             dotClass = 'ok';
             verdict = tFb('overview_pane.health_healthy', 'All services healthy');
-            detail = '· ' + total + ' synced';
+            // v0.5.240 audit fix — report the real synced count, not total.
+            // The healthy branch is reached when nothing needs attention and
+            // nothing is starting, so any non-synced remainder is disabled.
+            detail = '· ' + synced + ' synced';
         }
         var anyStopped = chains.some(function (c) { return c.state === 'stopped'; });
         var bulk = '';
@@ -1494,19 +1490,59 @@
     };
 
     /**
-     * v0.5.239 — bulk Start all / Restart all from the health headline. POSTs
-     * per chain (start → stopped chains; restart → alive chains), then
-     * re-fetches. Frontend-orchestrated; no bulk backend endpoint needed.
+     * v0.5.239 — bulk Start all / Restart all from the health headline.
+     * Computes targets (start → stopped chains; restart → alive chains);
+     * Restart all confirms first (v0.5.240 audit fix — it's disruptive),
+     * Start all runs immediately. The actual POSTs + busy/pending state live
+     * in _runBulk. Frontend-orchestrated; no bulk backend endpoint needed.
      * @private
      */
     EnmMultiChainOverviewPane.prototype._onBulk = function (kind, btn) {
-        if (this._pendingAction) { return; }
+        if (this._pendingAction) { return; }  // one action at a time, pane-wide
         var self = this;
         var chains = (this._lastSnap && Array.isArray(this._lastSnap.chains)) ? this._lastSnap.chains : [];
         var targets = chains.filter(function (c) {
             return (kind === 'start') ? (c.state === 'stopped') : !!c.alive;
         }).map(function (c) { return c.chainId; });
         if (targets.length === 0) { return; }
+        // v0.5.240 audit fix — "Restart all" is disruptive (it stops then
+        // restarts every running chain at once), so it gets the same confirm
+        // gate the per-chain restart uses. "Start all" is non-destructive and
+        // runs immediately.
+        if (kind === 'restart') {
+            if (typeof root.enmDestructiveModal !== 'function') {
+                var fb = 'Restart all ' + targets.length + ' running chains now?';
+                if (typeof root.confirm === 'function' && !root.confirm(fb)) { return; }
+                this._runBulk(kind, btn, targets);
+                return;
+            }
+            root.enmDestructiveModal({
+                title:        'Restart all running chains?',
+                body:         'All ' + targets.length + ' running chains will stop, then start again automatically (typical pause: 20-60 seconds each). Sync resumes from the current block — no data is lost.',
+                cooldownSec:  1,
+                confirmLabel: 'Restart ' + targets.length + ' chains',
+                confirmKind:  'primary',
+                notifications: self.notifications,
+                onConfirm: function () {
+                    self._runBulk(kind, btn, targets);
+                    return Promise.resolve();
+                },
+            });
+            return;
+        }
+        this._runBulk(kind, btn, targets);
+    };
+
+    /**
+     * @private — shared POST runner for bulk Start all / Restart all. Sets the
+     * pane-wide pending guard so SSE + other actions pause while the batch is
+     * in flight, fires the per-chain POSTs in parallel, then clears the guard
+     * and re-fetches. v0.5.240 audit fix (was inlined in _onBulk, which checked
+     * _pendingAction but never set it).
+     */
+    EnmMultiChainOverviewPane.prototype._runBulk = function (kind, btn, targets) {
+        var self = this;
+        this._pendingAction = { bulk: kind };
         if (self.notifications && typeof self.notifications.info === 'function') {
             self.notifications.info(
                 (kind === 'start' ? 'Starting ' : 'Restarting ') + targets.length + ' chains…', '');
@@ -1515,6 +1551,7 @@
         Promise.all(targets.map(function (cid) {
             return self.api.post('/chains/' + cid + '/' + kind).catch(function () { return null; });
         })).then(function () {
+            self._pendingAction = null;
             if (self._destroyed) { return; }
             if (btn) { btn.disabled = false; btn.classList.remove('is-busy'); }
             self._fetchInitial();
@@ -1622,143 +1659,12 @@
             + '</section>';
     };
 
-    EnmMultiChainOverviewPane.prototype._summaryLineV2 = function (snap) {
-        var totals = (snap && snap.totals) || { total: 0 };
-        if (!totals.total) {
-            return tFb('overview_pane.summary_no_chains', 'No chains yet.');
-        }
-        var chains = (snap && Array.isArray(snap.chains)) ? snap.chains : [];
-        var by = { synced: 0, syncing: 0, starting: 0, stalled: 0, stopped: 0, disabled: 0, unconfigured: 0 };
-        chains.forEach(function (c) {
-            var st = normalizeStateV2(c.state);
-            if (by[st] != null) { by[st] += 1; }
-        });
-        var bits = [];
-        // Show every non-zero bucket; always include synced + total even if 0.
-        ['synced', 'syncing', 'starting', 'stalled', 'stopped', 'disabled'].forEach(function (k) {
-            if (by[k] > 0 || k === 'synced') {
-                bits.push(by[k] + ' ' + stateLabelForV2(k).toLowerCase());
-            }
-        });
-        bits.push(totals.total + ' total');
-        var chainsLine = bits.join(' · ');
-
-        // v0.5.229d (P3 audit fix) — prepend a Council-aware role prefix
-        // when the operator went through the Council install path AND/OR
-        // is currently a CR Committee member. Pre-229d the summary line
-        // was BPoS-only chain stats; a Council operator had no overview-
-        // level signal that ENM was running a Council node.
-        var id = this._lastIdentity;
-        if (!id) { return chainsLine; }
-        var cr = id.crMember || null;
-        var setupRole = id.setupRole || 'unknown';
-        var rolePrefix = '';
-        if (cr && cr.isCrMember) {
-            rolePrefix = 'DAO Council · ' + (cr.state || 'Elected');
-            if (cr.nickname) { rolePrefix += ' (' + cr.nickname + ')'; }
-        } else if (setupRole === 'council') {
-            rolePrefix = 'DAO Council install · not currently bound';
-        } else if (id.producer && id.producer.state) {
-            rolePrefix = 'BPoS · ' + id.producer.state;
-        }
-        return rolePrefix ? (rolePrefix + ' — ' + chainsLine) : chainsLine;
-    };
-
-    /** @private */
-    EnmMultiChainOverviewPane.prototype._summaryLine = function (totals) {
-        if (!totals || !totals.total) {
-            return tFb('overview_pane.summary_no_chains', 'No chains yet.');
-        }
-        // Simple " · "-joined assembly. Per-locale grammar can override
-        // by providing a 'summary_running'/'summary_of_total'/etc string
-        // template in a later i18n pass; for M2.6 English-only it's
-        // fine to construct in place.
-        var bits = [];
-        bits.push(totals.running + ' running');
-        if (totals.stopped > 0) { bits.push(totals.stopped + ' stopped'); }
-        if (totals.disabled > 0) { bits.push(totals.disabled + ' disabled'); }
-        bits.push(totals.total + ' total');
-        return bits.join(' · ');
-    };
-
-    /** @private */
-    EnmMultiChainOverviewPane.prototype._reconcileSparklines = function (chains) {
-        if (!this.heightSeries || typeof this.heightSeries.subscribe !== 'function') { return; }
-        if (!root.EnmSparkline) { return; }
-        var self = this;
-        // Set of chainIds that should have a sparkline right now.
-        // 0.5.9 audit Session 9 — also include 'starting' state. A chain
-        // that just spawned via Card 6's start-chains step may have
-        // alive=false for the first ~5 sec of the boot window; pre-0.5.9
-        // its sparkline holder stayed empty even though height events
-        // would arrive moments later. Including 'starting' gives the
-        // sparkline mount time to be ready when the first height-series
-        // event lands.
-        var wanted = {};
-        chains.forEach(function (c) {
-            if (c.alive || c.state === 'starting') { wanted[c.chainId] = true; }
-        });
-        // Drop any sparkline that's no longer wanted (chain stopped or removed).
-        Object.keys(this._sparklines).forEach(function (cId) {
-            if (!wanted[cId]) { self._teardownSparkline(cId); }
-        });
-        // Mount any sparkline that's now wanted but not yet mounted.
-        Object.keys(wanted).forEach(function (cId) {
-            if (self._sparklines[cId]) { return; }
-            var holder = self._root.querySelector(
-                '.enm-overview-spark[data-chain-id="' + cssEscape(cId) + '"]',
-            );
-            if (!holder) { return; }
-            var sp = new root.EnmSparkline({
-                color: 'var(--success)',
-            });
-            sp.mount(holder);
-            self._sparklines[cId] = sp;
-            try {
-                self._sparkUnsubs[cId] = self.heightSeries.subscribe(cId, function (series) {
-                    if (self._destroyed) { return; }
-                    if (!self._sparklines[cId]) { return; }
-                    self._sparklines[cId].setSeries(series);
-                });
-            } catch (err) {
-                // Per-chain subscribe failure shouldn't kill the row;
-                // the sparkline stays as an empty SVG.
-                if (typeof console !== 'undefined') {
-                    console.warn(
-                        'EnmMultiChainOverviewPane: heightSeries.subscribe('
-                        + cId + ') failed:',
-                        err && err.message,
-                    );
-                }
-            }
-        });
-    };
-
-    /** @private */
-    EnmMultiChainOverviewPane.prototype._teardownSparkline = function (cId) {
-        if (this._sparkUnsubs[cId]) {
-            try { this._sparkUnsubs[cId](); } catch (_) { /* idempotent */ }
-            delete this._sparkUnsubs[cId];
-        }
-        if (this._sparklines[cId]) {
-            try { this._sparklines[cId].destroy(); } catch (_) { /* idempotent */ }
-            delete this._sparklines[cId];
-        }
-    };
-
-    /** @private */
-    EnmMultiChainOverviewPane.prototype._teardownSparklines = function () {
-        var self = this;
-        Object.keys(this._sparklines).forEach(function (cId) { self._teardownSparkline(cId); });
-        this._sparklines = {};
-        this._sparkUnsubs = {};
-    };
-
     /**
-     * Persist the new selection + dispatch the chain-change event that
-     * PaneRouter listens for. We don't directly hold a reference to the
-     * ChainSelector instance (it's owned by app.js); the supported
-     * integration path is "write localStorage + dispatch on document".
+     * Drill into a chain's dashboard by dispatching the enm:chain-change event
+     * that PaneRouter (app.js) listens for. v0.5.237 removed the chain-selector
+     * dropdown, so this event is now the only routing path — nothing is
+     * persisted (drill-in is session-only; a reload lands a Council node back
+     * on the overview). Also announces the switch for screen readers.
      *
      * @private
      * @param {string} chainId
@@ -1822,13 +1728,6 @@
 
     function escapeAttr(s) {
         return escapeHtml(String(s));
-    }
-
-    function cssEscape(s) {
-        if (root.CSS && typeof root.CSS.escape === 'function') {
-            return root.CSS.escape(s);
-        }
-        return String(s).replace(/[^\w-]/g, '\\$&');
     }
 
     root.EnmMultiChainOverviewPane = EnmMultiChainOverviewPane;
